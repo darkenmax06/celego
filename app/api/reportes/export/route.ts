@@ -1,0 +1,531 @@
+import { NextRequest, NextResponse } from "next/server";
+import { CardStatus, Prisma, RedactionStatus, RedactionType } from "@prisma/client";
+import ExcelJS from "exceljs";
+import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
+import { requireApiSession } from "@/lib/api-session";
+import { formatDateEs } from "@/lib/date";
+import { fromCents } from "@/lib/money";
+import { prisma } from "@/lib/prisma";
+import { exportRowsToCsv, exportRowsToPdf, exportRowsToXlsx } from "@/lib/reports/export";
+import { normalizeText } from "@/lib/utils";
+
+function fileHeaders(filename: string, contentType: string) {
+  return {
+    "Content-Type": contentType,
+    "Content-Disposition": `attachment; filename=\"${filename}\"`,
+  };
+}
+
+function utcDateKey(value: Date) {
+  const year = value.getUTCFullYear();
+  const month = String(value.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(value.getUTCDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function resolveCentsPerCard(
+  count: number,
+  baseCents: number,
+  ranges: Array<{ minQty: number; maxQty: number | null; centsPerCard: number }>,
+) {
+  const match = ranges.find(
+    (range) => count >= range.minQty && (range.maxQty == null || count <= range.maxQty),
+  );
+  return match?.centsPerCard ?? baseCents;
+}
+
+function parseFxRate(raw: string | null) {
+  if (!raw) return 1;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) return 1;
+  return parsed;
+}
+
+type RedactionExportRows = {
+  retornadas: Array<{
+    no: number;
+    numeroTc: string;
+    nombre: string;
+    cedula: string;
+    fecha: string;
+    comentario: string;
+  }>;
+  entregadas: Array<{
+    no: number;
+    numeroTc: string;
+    nombre: string;
+    cedula: string;
+    fecha: string;
+    estatus: string;
+  }>;
+  zona: string;
+  fecha: string;
+};
+
+async function buildRedactionExportRows(request: NextRequest): Promise<RedactionExportRows> {
+  const redactionIdsRaw = request.nextUrl.searchParams.get("redactionIds");
+  const redactionIds = redactionIdsRaw
+    ? redactionIdsRaw
+        .split(",")
+        .map((value) => value.trim())
+        .filter(Boolean)
+    : [];
+  const zona = request.nextUrl.searchParams.get("zona");
+  const date = request.nextUrl.searchParams.get("date");
+
+  const where: Record<string, unknown> = {};
+  where.status = RedactionStatus.APROBADA;
+  if (redactionIds.length) {
+    where.id = { in: redactionIds };
+  } else {
+    if (zona && zona !== "ALL") where.zona = { equals: zona, mode: "insensitive" };
+    if (date) {
+      const start = new Date(date);
+      start.setHours(start.getHours() - 12);
+      const end = new Date(start);
+      end.setDate(end.getDate() + 2);
+      where.fecha = { gte: start, lt: end };
+    }
+  }
+
+  const redactions = await prisma.redaction.findMany({
+    where,
+    include: {
+      items: {
+        include: {
+          card: {
+            include: { customer: true },
+          },
+        },
+      },
+    },
+    orderBy: [{ fecha: "asc" }, { createdAt: "asc" }],
+    take: 500,
+  });
+
+  const filteredByDate = date
+    ? redactions.filter((red) => {
+        return utcDateKey(red.fecha) === date;
+      })
+    : redactions;
+
+  const filteredRedactions = zona && zona !== "ALL"
+    ? filteredByDate.filter((red) => normalizeText(red.zona) === normalizeText(zona))
+    : filteredByDate;
+
+  const source = filteredRedactions.length ? filteredRedactions : redactions;
+
+  const retornadas = source
+    .filter((red) => red.tipo === RedactionType.RETORNO)
+    .flatMap((red) => red.items.map((item) => ({ red, item })))
+    .map(({ red, item }, index) => ({
+      no: index + 1,
+      numeroTc: item.card.tc,
+      nombre: item.card.customer.nombre,
+      cedula: item.card.customer.cedula,
+      fecha: formatDateEs(item.card.dispatchDate ?? red.fecha),
+      comentario: item.comentario ?? "",
+    }));
+
+  const entregadas = source
+    .filter((red) => red.tipo === RedactionType.ENTREGA)
+    .flatMap((red) => red.items.map((item) => ({ red, item })))
+    .map(({ red, item }, index) => ({
+      no: index + 1,
+      numeroTc: item.card.tc,
+      nombre: item.card.customer.nombre,
+      cedula: item.card.customer.cedula,
+      fecha: formatDateEs(item.card.dispatchDate ?? red.fecha),
+      estatus: "ENTREGADA",
+    }));
+
+  return {
+    retornadas,
+    entregadas,
+    zona: zona && zona !== "ALL" ? zona : source[0]?.zona ?? "TODAS",
+    fecha: date ?? formatDateEs(source[0]?.fecha ?? new Date()),
+  };
+}
+
+async function exportRedactionToXlsx(rows: RedactionExportRows) {
+  const workbook = new ExcelJS.Workbook();
+  const baseColumns = [
+    { header: "NO", key: "no", width: 8 },
+    { header: "NUMERO TC", key: "numeroTc", width: 24 },
+    { header: "NOMBRE", key: "nombre", width: 40 },
+    { header: "CEDULA", key: "cedula", width: 18 },
+    { header: "FECHA", key: "fecha", width: 14 },
+  ] as const;
+
+  const retornadas = workbook.addWorksheet("RETORNADAS");
+  retornadas.addRow(["TARJETAS RETORNADAS"]);
+  retornadas.addRow(["", "FECHA:", rows.fecha, "", "ZONA:", rows.zona]);
+  retornadas.columns = [
+    ...baseColumns.map((column) => ({ key: column.key, width: column.width })),
+    { key: "comentario", width: 30 },
+  ];
+  retornadas.getRow(3).values = ["NO", "NUMERO TC", "NOMBRE", "CEDULA", "FECHA", "COMENTARIO"];
+  for (const row of rows.retornadas) {
+    retornadas.addRow(row);
+  }
+
+  const entregadas = workbook.addWorksheet("ENTREGADAS");
+  entregadas.addRow(["TARJETAS ENTREGADAS"]);
+  entregadas.addRow(["", "FECHA:", rows.fecha, "ZONA:", rows.zona, ""]);
+  entregadas.columns = [
+    ...baseColumns.map((column) => ({ key: column.key, width: column.width })),
+    { key: "estatus", width: 18 },
+  ];
+  entregadas.getRow(3).values = ["NO", "NUMERO TC", "NOMBRE", "CEDULA", "FECHA", "ESTATUS"];
+  for (const row of rows.entregadas) {
+    entregadas.addRow(row);
+  }
+
+  [retornadas, entregadas].forEach((sheet) => {
+    sheet.getRow(1).font = { bold: true };
+    sheet.getRow(3).font = { bold: true };
+  });
+
+  return workbook.xlsx.writeBuffer();
+}
+
+async function exportRedactionToPdf(rows: RedactionExportRows) {
+  const pdf = await PDFDocument.create();
+  const regular = await pdf.embedFont(StandardFonts.Helvetica);
+  const bold = await pdf.embedFont(StandardFonts.HelveticaBold);
+
+  const drawPage = (input: {
+    title: string;
+    headers: string[];
+    dataRows: string[][];
+  }) => {
+    const page = pdf.addPage([612, 792]);
+    page.drawText(input.title, {
+      x: 40,
+      y: 760,
+      size: 18,
+      font: bold,
+      color: rgb(0.06, 0.12, 0.24),
+    });
+    page.drawText(`Fecha: ${rows.fecha}`, { x: 40, y: 740, size: 10, font: regular });
+    page.drawText(`Zona: ${rows.zona}`, { x: 210, y: 740, size: 10, font: regular });
+
+    let y = 710;
+    page.drawText(input.title, {
+      x: 40,
+      y,
+      size: 12,
+      font: bold,
+      color: rgb(0.1, 0.15, 0.25),
+    });
+    y -= 16;
+
+    const cols = [40, 72, 170, 318, 408, 488];
+    input.headers.forEach((header, idx) => {
+      page.drawText(header, {
+        x: cols[idx] ?? 40 + idx * 90,
+        y,
+        size: 8,
+        font: bold,
+        color: rgb(0.35, 0.35, 0.35),
+      });
+    });
+    y -= 10;
+
+    if (!input.dataRows.length) {
+      page.drawText("Sin registros para esta redaccion.", {
+        x: 40,
+        y,
+        size: 9,
+        font: regular,
+        color: rgb(0.35, 0.35, 0.35),
+      });
+      return;
+    }
+
+    for (const row of input.dataRows.slice(0, 52)) {
+      row.forEach((cell, idx) => {
+        page.drawText((cell ?? "").slice(0, idx === 2 ? 26 : 20), {
+          x: cols[idx] ?? 40 + idx * 90,
+          y,
+          size: 8,
+          font: regular,
+          color: rgb(0.2, 0.2, 0.2),
+        });
+      });
+      y -= 11;
+      if (y < 60) break;
+    }
+  };
+
+  const retornosRows = rows.retornadas.map((row) => [
+    String(row.no),
+    row.numeroTc,
+    row.nombre,
+    row.cedula,
+    row.fecha,
+    row.comentario || "-",
+  ]);
+  const entregasRows = rows.entregadas.map((row) => [
+    String(row.no),
+    row.numeroTc,
+    row.nombre,
+    row.cedula,
+    row.fecha,
+    row.estatus,
+  ]);
+
+  drawPage({
+    title: "TARJETAS RETORNADAS",
+    headers: ["NO", "TC", "NOMBRE", "CEDULA", "FECHA", "COMENTARIO"],
+    dataRows: retornosRows,
+  });
+
+  drawPage({
+    title: "TARJETAS ENTREGADAS",
+    headers: ["NO", "TC", "NOMBRE", "CEDULA", "FECHA", "ESTATUS"],
+    dataRows: entregasRows,
+  });
+
+  return pdf.save();
+}
+
+export async function GET(request: NextRequest) {
+  const auth = await requireApiSession(["ADMIN", "OPERADOR", "FACTURACION"]);
+  if ("error" in auth) return auth.error;
+
+  const type = request.nextUrl.searchParams.get("type") ?? "tarjetas";
+  const format = (request.nextUrl.searchParams.get("format") ?? "xlsx").toLowerCase();
+
+  let rows: Record<string, unknown>[] = [];
+  let title = "Reporte";
+
+  if (type === "tarjetas") {
+    title = "Reporte de tarjetas";
+    const status = request.nextUrl.searchParams.get("status");
+    const zone = request.nextUrl.searchParams.get("zona");
+    const from = request.nextUrl.searchParams.get("from");
+    const to = request.nextUrl.searchParams.get("to");
+    const dispatchRange =
+      from || to
+        ? {
+            ...(from ? { gte: new Date(from) } : {}),
+            ...(to
+              ? (() => {
+                  const end = new Date(to);
+                  end.setHours(23, 59, 59, 999);
+                  return { lte: end };
+                })()
+              : {}),
+          }
+        : null;
+
+    const cards = await prisma.card.findMany({
+      where: {
+        ...(status && status !== "ALL" ? { status: status as CardStatus } : {}),
+        ...(zone && zone !== "ALL" ? { zona: zone } : {}),
+        ...(dispatchRange ? { dispatchDate: dispatchRange } : {}),
+      },
+      include: { customer: true, currentMessenger: true },
+      take: 5000,
+      orderBy: { updatedAt: "desc" },
+    });
+
+    rows = cards.map((card) => ({
+      numeroTarjeta: card.tc,
+      cliente: card.customer.nombre,
+      cedula: card.customer.cedula,
+      zona: card.zona,
+      provincia: card.provincia,
+      remota: card.isRemote ? "SI" : "NO",
+      estado: card.status,
+      urgente: card.urgent ? "SI" : "NO",
+      mensajero: card.currentMessenger?.nombre ?? "",
+      fechaDespacho: formatDateEs(card.dispatchDate),
+      slaVence: formatDateEs(card.slaDueDate),
+      comentarioRetorno: card.returnReason ?? "",
+    }));
+  } else if (type === "contactos") {
+    title = "Reporte de contactos";
+    const provincia = request.nextUrl.searchParams.get("provincia");
+    const where: Prisma.ContactLogWhereInput = {
+      ...(provincia && provincia !== "ALL"
+        ? { card: { provincia } }
+        : {}),
+    };
+
+    const contacts = await prisma.contactLog.findMany({
+      where,
+      include: {
+        card: { include: { customer: true } },
+        user: true,
+      },
+      orderBy: { createdAt: "desc" },
+      take: 5000,
+    });
+
+    rows = contacts.map((contact) => ({
+      fecha: formatDateEs(contact.createdAt),
+      cliente: contact.card.customer.nombre,
+      cedula: contact.card.customer.cedula,
+      tc: contact.card.tc,
+      provincia: contact.card.provincia,
+      zona: contact.card.zona,
+      telefonosUsados: contact.telefonosUsados ?? "",
+      comentario: contact.comentario ?? "",
+      contactado: contact.contactado ? "SI" : "NO",
+      operador: contact.user?.name ?? "",
+    }));
+  } else if (type === "facturacion") {
+    title = "Reporte de facturacion";
+    const from = request.nextUrl.searchParams.get("from");
+    const to = request.nextUrl.searchParams.get("to");
+    const zone = request.nextUrl.searchParams.get("zona");
+    const fxRate = parseFxRate(request.nextUrl.searchParams.get("fxRate"));
+    const dispatchDate =
+      from || to
+        ? {
+            ...(from ? { gte: new Date(from) } : {}),
+            ...(to
+              ? (() => {
+                  const end = new Date(to);
+                  end.setHours(23, 59, 59, 999);
+                  return { lte: end };
+                })()
+              : {}),
+          }
+        : undefined;
+
+    const [cards, tariffs] = await Promise.all([
+      prisma.card.findMany({
+      where: {
+        status: { in: [CardStatus.ENTREGADA, CardStatus.ENTREGA_DIGITAL] },
+        ...(zone && zone !== "ALL" ? { zona: zone } : {}),
+        ...(dispatchDate ? { dispatchDate } : {}),
+      },
+      select: { zona: true, isRemote: true },
+      take: 5000,
+      orderBy: { dispatchDate: "desc" },
+      }),
+      prisma.zoneTariff.findMany({ include: { ranges: true } }),
+    ]);
+
+    const grouped = new Map<string, number>();
+    cards.forEach((card) => {
+      grouped.set(card.zona, (grouped.get(card.zona) ?? 0) + 1);
+    });
+
+    const tariffMap = new Map(tariffs.map((tariff) => [tariff.zona, tariff]));
+
+    rows = Array.from(grouped.entries()).map(([zona, count]) => {
+      const tariff = tariffMap.get(zona);
+      const centsPerCard = resolveCentsPerCard(
+        count,
+        tariff?.baseCents ?? 0,
+        tariff?.ranges ?? [],
+      );
+      const totalUsdCents = centsPerCard * count;
+      const totalDopCents = Math.round(totalUsdCents * fxRate);
+      return {
+        zona,
+        entregas: count,
+        tasaDolar: fxRate.toFixed(4),
+        tarifaPorTarjetaUSD: fromCents(centsPerCard),
+        totalUSD: fromCents(totalUsdCents),
+        totalDOP: fromCents(totalDopCents),
+      };
+    });
+
+    const remoteCount = cards.filter((card) => card.isRemote).length;
+    if (remoteCount > 0) {
+      const remoteTariff = tariffMap.get("REMOTA");
+      const remoteSurchargeCents = resolveCentsPerCard(
+        remoteCount,
+        remoteTariff?.baseCents ?? 0,
+        remoteTariff?.ranges ?? [],
+      );
+      const totalUsdCents = remoteSurchargeCents * remoteCount;
+      const totalDopCents = Math.round(totalUsdCents * fxRate);
+      rows.push({
+        zona: "REMOTA",
+        entregas: remoteCount,
+        tasaDolar: fxRate.toFixed(4),
+        tarifaPorTarjetaUSD: fromCents(remoteSurchargeCents),
+        totalUSD: fromCents(totalUsdCents),
+        totalDOP: fromCents(totalDopCents),
+      });
+    }
+  } else if (type === "redaccion") {
+    title = "Entregas y retornos";
+    const redactionRows = await buildRedactionExportRows(request);
+
+    if (!redactionRows.retornadas.length && !redactionRows.entregadas.length) {
+      return NextResponse.json(
+        { error: "No hay datos de redaccion para los filtros seleccionados" },
+        { status: 404 },
+      );
+    }
+
+    if (format === "xlsx") {
+      const xlsx = await exportRedactionToXlsx(redactionRows);
+      return new NextResponse(Buffer.from(xlsx), {
+        headers: fileHeaders(
+          `redaccion-${new Date().toISOString().slice(0, 10)}.xlsx`,
+          "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        ),
+      });
+    }
+
+    if (format === "pdf") {
+      const pdfBytes = await exportRedactionToPdf(redactionRows);
+      return new NextResponse(Buffer.from(pdfBytes), {
+        headers: fileHeaders(
+          `redaccion-${new Date().toISOString().slice(0, 10)}.pdf`,
+          "application/pdf",
+        ),
+      });
+    }
+
+    rows = [
+      ...redactionRows.retornadas.map((row) => ({
+        tipo: "RETORNADA",
+        no: row.no,
+        numeroTc: row.numeroTc,
+        nombre: row.nombre,
+        cedula: row.cedula,
+        fecha: row.fecha,
+        comentario: row.comentario,
+      })),
+      ...redactionRows.entregadas.map((row) => ({
+        tipo: "ENTREGADA",
+        no: row.no,
+        numeroTc: row.numeroTc,
+        nombre: row.nombre,
+        cedula: row.cedula,
+        fecha: row.fecha,
+        comentario: row.estatus,
+      })),
+    ];
+  } else {
+    return NextResponse.json({ error: "Tipo de reporte no soportado" }, { status: 400 });
+  }
+
+  if (format === "csv") {
+    const csv = exportRowsToCsv(rows);
+    return new NextResponse(csv, {
+      headers: fileHeaders(`${type}.csv`, "text/csv; charset=utf-8"),
+    });
+  }
+
+  if (format === "pdf") {
+    const pdfBytes = await exportRowsToPdf(title, rows);
+    return new NextResponse(Buffer.from(pdfBytes), {
+      headers: fileHeaders(`${type}.pdf`, "application/pdf"),
+    });
+  }
+
+  const xlsx = await exportRowsToXlsx(rows, "Reporte");
+  return new NextResponse(Buffer.from(xlsx), {
+    headers: fileHeaders(`${type}.xlsx`, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
+  });
+}

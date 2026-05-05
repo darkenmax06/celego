@@ -1,0 +1,36 @@
+services:
+  db:
+    image: postgres:16
+    container_name: celego-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: celego
+      POSTGRES_PASSWORD: celego
+      POSTGRES_DB: celego
+    volumes:
+      - celego_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U celego -d celego"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: celego-app
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://celego:celego@db:5432/celego?schema=public
+      NEXTAUTH_URL: http://localhost:3800
+      NEXTAUTH_SECRET: change-this-in-production
+      NODE_ENV: production
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "3800:3000"
+
+volumes:
+  celego_pgdata:

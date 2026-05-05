@@ -1,0 +1,912 @@
+{
+  "records": [
+    {
+      "tc": "4921017885434643",
+      "nombre": "WALKIRIA RODRIGUEZ",
+      "cedula": "08500066587",
+      "zona": "HIGUEY",
+      "provincia": "HIGUEY",
+      "presinto": "54",
+      "tipoEntrega": "AUTOMATICAS ZONA ESTE",
+      "fechaDespacho": "04232026",
+      "contrato": "N",
+      "tipoEmision": "REPOSICION",
+      "suplidor": "MAIL BOXES INTERIOR ESTE",
+      "telefonos": [
+        "8095547895",
+        "8097573255"
+      ],
+      "direcciones": [
+        "CARLOS EMILIO CASTILLO NO 13 L",
+        "SAN RAFAEL DEL YUMA",
+        "SAN RAFAEL DEL YUMA",
+        "SAN RAFAEL DEL YUMA LA ALTAGRA"
+      ],
+      "refs": [
+        "REP_F"
+      ],
+      "status": "DESPACHADA"
+    },
+    {
+      "tc": "5188017811315176",
+      "nombre": "MARTIN CASTRO",
+      "cedula": "02800565679",
+      "zona": "HIGUEY",
+      "provincia": "HIGUEY",
+      "presinto": "25",
+      "tipoEntrega": "AUTOMATICAS ZONA ESTE",
+      "fechaDespacho": "04232026",
+      "contrato": "S",
+      "tipoEmision": "EMISION",
+      "suplidor": "MAIL BOXES INTERIOR ESTE",
+      "telefonos": [
+        "8095541985",
+        "8095541985",
+        "8095541985"
+      ],
+      "direcciones": [
+        "LAS CABALLERISAS NO 6",
+        "LLAMAR ANTES DE ENTREGAR",
+        "SAN PEDRO",
+        "REPUBLICA DOMINICANA",
+        "LA ALTAGRACIA",
+        "HIGUEY (MG)",
+        "PROXIMO A LA IGLESIA ASAMBLEA DE DIOS",
+        "8093587974 8 AM A 5 PM"
+      ],
+      "refs": [
+        "B Y L",
+        "PROPIETARIO",
+        "MARTIN CASTRO"
+      ],
+      "status": "DESPACHADA"
+    },
+    {
+      "tc": "4921017891591340",
+      "nombre": "RUBEN MORILLO",
+      "cedula": "02200176408",
+      "zona": "HIGUEY",
+      "provincia": "HIGUEY",
+      "presinto": "54",
+      "tipoEntrega": "AUTOMATICAS ZONA ESTE",
+      "fechaDespacho": "04232026",
+      "contrato": "S",
+      "tipoEmision": "EMISION",
+      "suplidor": "MAIL BOXES INTERIOR ESTE",
+      "telefonos": [
+        "8494501740",
+        "8494501740",
+        "8494501740",
+        "8494501740"
+      ],
+      "direcciones": [],
+      "refs": [],
+      "status": "DESPACHADA"
+    },
+    {
+      "tc": "4921017891465588",
+      "nombre": "AMARALAISY MARTINEZ",
+      "cedula": "02800577740",
+      "zona": "HIGUEY",
+      "provincia": "HIGUEY",
+      "presinto": "54",
+      "tipoEntrega": "AUTOMATICAS ZONA ESTE",
+      "fechaDespacho": "04232026",
+      "contrato": "N",
+      "tipoEmision": "REPOSICION",
+      "suplidor": "MAIL BOXES INTERIOR ESTE",
+      "telefonos": [
+        "8095511093",
+        "8095511093",
+        "8099732312"
+      ],
+      "direcciones": [
+        "CARR MACAO NO 78",
+        "LA OTRA BANDA",
+        "NA",
+        "LA OTRA BANDA",
+        "HIGUEY LA ALTAGRACIA"
+      ],
+      "refs": [
+        "REP_F"
+      ],
+      "status": "DESPACHADA"
+    },
+    {
+      "tc": "4966017891317618",
+      "nombre": "KATTY MARTINEZ",
+      "cedula": "40209773460",
+      "zona": "HIGUEY",
+      "provincia": "HIGUEY",
+      "presinto": "54",
+      "tipoEntrega": "AUTOMATICAS ZONA ESTE",
+      "fechaDespacho": "04232026",
+      "contrato": "N",
+      "tipoEmision": "REPOSICION",
+      "suplidor": "MAIL BOXES INTERIOR ESTE",
+      "telefonos": [
+        "8492869832",
+        "8094681723",
+        "8492869832"
+      ],
+      "direcciones": [
+        "CERCA DEL PARQUE",
+        "LA OTRA BANDA",
+        "NA",
+        "VILLA JUANA",
+        "HIGUEY LA ALTAGRACIA"
+      ],
+      "refs": [
+        "REP_F"
+      ],
+      "status": "DESPACHADA"
+    },
+    {
+      "tc": "5415017889900692",
+      "nombre": "NATANDERLYN FELIX",
+      "cedula": "40244276412",
+      "zona": "HIGUEY",
+      "provincia": "HIGUEY",
+      "presinto": "54",
+      "tipoEntrega": "AUTOMATICAS ZONA ESTE",
+      "fechaDespacho": "04232026",
+      "contrato": "S",
+      "tipoEmision": "EMISION",
+      "suplidor": "MAIL BOXES INTERIOR ESTE",
+      "telefonos": [
+        "8496329307",
+        "8097310099",
+        "8496329307",
+        "8496329307"
+      ],
+      "direcciones": [],
+      "refs": [],
+      "status": "DESPACHADA"
+    },
+    {
+      "tc": "4921017892134198",
+      "nombre": "VIOLETA LOPEZ",
+      "cedula": "40213938992",
+      "zona": "HIGUEY",
+      "provincia": "HIGUEY",
+      "presinto": "54",
+      "tipoEntrega": "AUTOMATICAS ZONA ESTE",
+      "fechaDespacho": "04232026",
+      "contrato": "S",
+      "tipoEmision": "EMISION",
+      "suplidor": "MAIL BOXES INTERIOR ESTE",
+      "telefonos": [
+        "8097296283",
+        "8097296283",
+        "8097296283"
+      ],
+      "direcciones": [],
+      "refs": [],
+      "status": "DESPACHADA"
+    },
+    {
+      "tc": "4921017892670649",
+      "nombre": "JOELY MOTA",
+      "cedula": "40238913459",
+      "zona": "HIGUEY",
+      "provincia": "HIGUEY",
+      "presinto": "54",
+      "tipoEntrega": "AUTOMATICAS ZONA ESTE",
+      "fechaDespacho": "04232026",
+      "contrato": "N",
+      "tipoEmision": "RENOVACION",
+      "suplidor": "MAIL BOXES INTERIOR ESTE",
+      "telefonos": [
+        "8092219898",
+        "8296780803"
+      ],
+      "direcciones": [
+        "CALLE CILITO DE CACERES",
+        "JUAN PABLO DUARTE",
+        "HIGUEY LA ALTAGRACIA",
+        "HIGUEY",
+        "HIGUEY LA ALTAGRACIA"
+      ],
+      "refs": [
+        "RF"
+      ],
+      "status": "DESPACHADA"
+    },
+    {
+      "tc": "4921017891528831",
+      "nombre": "JOENMY ZAPATA",
+      "cedula": "40210886913",
+      "zona": "HIGUEY",
+      "provincia": "HIGUEY",
+      "presinto": "54",
+      "tipoEntrega": "AUTOMATICAS ZONA ESTE",
+      "fechaDespacho": "04232026",
+      "contrato": "S",
+      "tipoEmision": "EMISION",
+      "suplidor": "MAIL BOXES INTERIOR ESTE",
+      "telefonos": [
+        "8493836722",
+        "8096865797",
+        "8493836722"
+      ],
+      "direcciones": [
+        "ROSELIA CEDENO NO 31",
+        "JUAN PABLO DUARTE",
+        "HIGUEY",
+        "HIGUEY HIGUEY LA ALTAGRACIA"
+      ],
+      "refs": [
+        "JOENMY ZAPATA"
+      ],
+      "status": "DESPACHADA"
+    },
+    {
+      "tc": "5415017890204923",
+      "nombre": "SAMANTHA MARTINEZ",
+      "cedula": "40211636606",
+      "zona": "HIGUEY",
+      "provincia": "HIGUEY",
+      "presinto": "54",
+      "tipoEntrega": "AUTOMATICAS ZONA ESTE",
+      "fechaDespacho": "04232026",
+      "contrato": "S",
+      "tipoEmision": "EMISION",
+      "suplidor": "MAIL BOXES INTERIOR ESTE",
+      "telefonos": [
+        "8294379409",
+        "8294379409",
+        "8294379409",
+        "8294379409"
+      ],
+      "direcciones": [],
+      "refs": [],
+      "status": "DESPACHADA"
+    },
+    {
+      "tc": "4921017736748758",
+      "nombre": "JOSE GARCIA",
+      "cedula": "02800863983",
+      "zona": "HIGUEY",
+      "provincia": "HIGUEY",
+      "presinto": "25",
+      "tipoEntrega": "AUTOMATICAS ZONA ESTE",
+      "fechaDespacho": "04232026",
+      "contrato": "S",
+      "tipoEmision": "EMISION",
+      "suplidor": "MAIL BOXES INTERIOR ESTE",
+      "telefonos": [
+        "8294652511",
+        "8294652511",
+        "8294652511"
+      ],
+      "direcciones": [
+        "NARCISO GONZALEZ",
+        "CASA NO 07",
+        "VILLA CERRO",
+        "REPUBLICA DOMINICANA",
+        "LA ALTAGRACIA",
+        "HIGUEY (MG)",
+        "FRENTE A FERRETRIA HERMANOS SANCHEZ",
+        "8294652511 HORA 8AM A 5PM"
+      ],
+      "refs": [
+        "NA",
+        "NA",
+        "JOSE GARCIA"
+      ],
+      "status": "DESPACHADA"
+    },
+    {
+      "tc": "4921017885943007",
+      "nombre": "GIRANDY MERCEDES PENA",
+      "cedula": "40210156747",
+      "zona": "HIGUEY",
+      "provincia": "HIGUEY",
+      "presinto": "25",
+      "tipoEntrega": "AUTOMATICAS ZONA ESTE",
+      "fechaDespacho": "04232026",
+      "contrato": "S",
+      "tipoEmision": "EMISION",
+      "suplidor": "MAIL BOXES INTERIOR ESTE",
+      "telefonos": [
+        "8493420691",
+        "8493420691",
+        "8493420691"
+      ],
+      "direcciones": [
+        "LUIS AMIAMA TIO",
+        "CENTRO DE LA CIUDAD",
+        "REPUBLICA DOMINICANA",
+        "SAN PEDRO DE MACORIS",
+        "SAN PEDRO DE MACORIS",
+        "NAVE NO 3 ULTIMA NAVE",
+        "8493420691"
+      ],
+      "refs": [
+        "BOITE MANUFACTURING",
+        "BVD"
+      ],
+      "status": "DESPACHADA"
+    },
+    {
+      "tc": "4921017798558831",
+      "nombre": "MARISOL JOSE",
+      "cedula": "02500396540",
+      "zona": "HIGUEY",
+      "provincia": "HIGUEY",
+      "presinto": "25",
+      "tipoEntrega": "AUTOMATICAS ZONA ESTE",
+      "fechaDespacho": "04232026",
+      "contrato": "S",
+      "tipoEmision": "EMISION",
+      "suplidor": "MAIL BOXES INTERIOR ESTE",
+      "telefonos": [
+        "8094965112",
+        "8094965112",
+        "8094965112",
+        "8094965112"
+      ],
+      "direcciones": [
+        "JUAN NEPOMUCENO SIERRA",
+        "NA",
+        "LOS MORALES",
+        "REPUBLICA DOMINICANA",
+        "LA ALTAGRACIA",
+        "HIGUEY (MG)",
+        "PROX A COLMADO MIRANDA",
+        "8094965112 DE 8AM A 5PM"
+      ],
+      "refs": [
+        "NA",
+        "NA",
+        "MARISOL JOSE"
+      ],
+      "status": "DESPACHADA"
+    },
+    {
+      "tc": "4921017807457420",
+      "nombre": "MARIANNY RONDON",
+      "cedula": "40219295835",
+      "zona": "HIGUEY",
+      "provincia": "HIGUEY",
+      "presinto": "25",
+      "tipoEntrega": "AUTOMATICAS ZONA ESTE",
+      "fechaDespacho": "04232026",
+      "contrato": "S",
+      "tipoEmision": "EMISION",
+      "suplidor": "MAIL BOXES INTERIOR ESTE",
+      "telefonos": [
+        "8493892835",
+        "8493892835",
+        "8493892835",
+        "8493892835"
+      ],
+      "direcciones": [
+        "CALLE JERUSALEN",
+        "CASA NO 4",
+        "LOS SOTOS",
+        "REPUBLICA DOMINICANA",
+        "HIGUEY",
+        "LA ALTAGRCIA",
+        "CERCA DE COLMADO GUERRERO",
+        "8293926465"
+      ],
+      "refs": [
+        "N/A",
+        "DISP LUNE VIER 8AM A 12PM",
+        "MARIANNY RONDON"
+      ],
+      "status": "DESPACHADA"
+    },
+    {
+      "tc": "4921017755326650",
+      "nombre": "MIGUELINA ALFONSECA",
+      "cedula": "02801121449",
+      "zona": "HIGUEY",
+      "provincia": "HIGUEY",
+      "presinto": "25",
+      "tipoEntrega": "AUTOMATICAS ZONA ESTE",
+      "fechaDespacho": "04232026",
+      "contrato": "N",
+      "tipoEmision": "REPOSICION",
+      "suplidor": "MAIL BOXES INTERIOR ESTE",
+      "telefonos": [
+        "8292032161",
+        "8292032161",
+        "0008292032161",
+        "0008292032161",
+        "9999999999999"
+      ],
+      "direcciones": [
+        "EMELIDA CENDANO  1 JUA 1",
+        "VILLA CERRO",
+        "REPUBLICA DOMINICANA",
+        "LA ALTAGRACIA",
+        "HIGUEY (MG)",
+        "8292032161"
+      ],
+      "refs": [
+        "COMANDO JUALKI",
+        "SS"
+      ],
+      "status": "DESPACHADA"
+    }
+  ],
+  "urgentes": [
+    {
+      "tc": "4921017796491529",
+      "nombre": "",
+      "cedula": "40237573312",
+      "fechaDesp": "46122",
+      "provincia": "PUNTA CANA",
+      "telefono": "8093914831",
+      "status": "RETORNADA",
+      "direccion": ""
+    },
+    {
+      "tc": "4921017822495001",
+      "nombre": "",
+      "cedula": "40219737786",
+      "fechaDesp": "46126",
+      "provincia": "HIGUEY",
+      "telefono": "8494788452",
+      "status": "RETORNADA",
+      "direccion": ""
+    },
+    {
+      "tc": "4921017808546882",
+      "nombre": "",
+      "cedula": "40208848008",
+      "fechaDesp": "46125",
+      "provincia": "HIGUEY",
+      "telefono": "8293468806",
+      "status": "EN PROCESO",
+      "direccion": ""
+    },
+    {
+      "tc": "5188017813899490",
+      "nombre": "",
+      "cedula": "40218835144",
+      "fechaDesp": "46126",
+      "provincia": "PUNTA CANA",
+      "telefono": "8294927782",
+      "status": "RETORNADA",
+      "direccion": ""
+    },
+    {
+      "tc": "4921017821898354",
+      "nombre": "",
+      "cedula": "40231609013",
+      "fechaDesp": "46126",
+      "provincia": "SAN PEDRO DE MACORIS",
+      "telefono": "8092712493",
+      "status": "RETORNADA",
+      "direccion": ""
+    },
+    {
+      "tc": "4966017831190729",
+      "nombre": "WANDALY MONEGRO",
+      "cedula": "40214799823",
+      "fechaDesp": "46127",
+      "provincia": "HIGUEY",
+      "telefono": "64",
+      "status": "",
+      "direccion": ""
+    },
+    {
+      "tc": "4921017819720940",
+      "nombre": "",
+      "cedula": "40219670169",
+      "fechaDesp": "46126",
+      "provincia": "SAN PEDRO DE MACORIS",
+      "telefono": "8093453172",
+      "status": "RETORNADA",
+      "direccion": ""
+    },
+    {
+      "tc": "4921017801557442",
+      "nombre": "",
+      "cedula": "40243868193",
+      "fechaDesp": "46126",
+      "provincia": "HIGUEY",
+      "telefono": "8295580472",
+      "status": "ENTREGA DIGITAL",
+      "direccion": ""
+    },
+    {
+      "tc": "4921017840570088",
+      "nombre": "CALEB BENITEZ",
+      "cedula": "40210918948",
+      "fechaDesp": "46128",
+      "provincia": "64",
+      "telefono": "",
+      "status": "",
+      "direccion": ""
+    },
+    {
+      "tc": "4921017840554746",
+      "nombre": "ERICK DIAZ",
+      "cedula": "40247596089",
+      "fechaDesp": "46129",
+      "provincia": "64",
+      "telefono": "",
+      "status": "",
+      "direccion": ""
+    },
+    {
+      "tc": "4966017801725508",
+      "nombre": "",
+      "cedula": "40233335815",
+      "fechaDesp": "46126",
+      "provincia": "PUNTA CANA",
+      "telefono": "8096152481",
+      "status": "ENTREGA DIGITAL",
+      "direccion": ""
+    },
+    {
+      "tc": "5415017753678415",
+      "nombre": "",
+      "cedula": "40234769277",
+      "fechaDesp": "46118",
+      "provincia": "HIGUEY",
+      "telefono": "8492702528",
+      "status": "RETORNADA",
+      "direccion": ""
+    },
+    {
+      "tc": "4741017828336512",
+      "nombre": "",
+      "cedula": "02800778637",
+      "fechaDesp": "46127",
+      "provincia": "HIGUEY",
+      "telefono": "8296974680",
+      "status": "ENTREGA DIGITAL",
+      "direccion": ""
+    },
+    {
+      "tc": "5427017667684837",
+      "nombre": "",
+      "cedula": "02801152345",
+      "fechaDesp": "46122",
+      "provincia": "HIGUEY",
+      "telefono": "8293897756",
+      "status": "ENTREGA DIGITAL",
+      "direccion": ""
+    }
+  ],
+  "retornos": [
+    {
+      "no": "1",
+      "tc": "4921017885434643",
+      "nombre": "WALKIRIA RODRIGUEZ",
+      "cedula": "08500066587",
+      "fecha": "46135",
+      "comentario": "FUERA DE RUTA"
+    },
+    {
+      "no": "2",
+      "tc": "5415017894103501",
+      "nombre": "SONEL JEAN",
+      "cedula": "08500119196",
+      "fecha": "46135",
+      "comentario": "FUERA DE RUTA"
+    },
+    {
+      "no": "3",
+      "tc": "4921017851686577",
+      "nombre": "CARLOS CARVAJAL",
+      "cedula": "40227564750",
+      "fecha": "46129",
+      "comentario": "NO LOCALIZADO"
+    },
+    {
+      "no": "4",
+      "tc": "5415017848759077",
+      "nombre": "CRISTIAN NAVARRO",
+      "cedula": "40221746833",
+      "fecha": "46129",
+      "comentario": "NO LOCALIZADO"
+    },
+    {
+      "no": "5",
+      "tc": "4921017845749009",
+      "nombre": "PATRICIA CONTRERAS",
+      "cedula": "40226788426",
+      "fecha": "46129",
+      "comentario": "NO LOCALIZADO"
+    },
+    {
+      "no": "6",
+      "tc": "4921017842059952",
+      "nombre": "SHAILYN JIMENEZ",
+      "cedula": "40211682204",
+      "fecha": "46129",
+      "comentario": "NO LOCALIZADO"
+    },
+    {
+      "no": "7",
+      "tc": "5188017849945567",
+      "nombre": "AVIER JOSEPH",
+      "cedula": "40219934268",
+      "fecha": "46129",
+      "comentario": "NO LOCALIZADO"
+    },
+    {
+      "no": "8",
+      "tc": "5415017839116809",
+      "nombre": "RUDDY DE LA CRUZ",
+      "cedula": "40227417223",
+      "fecha": "46129",
+      "comentario": "NO LOCALIZADO"
+    },
+    {
+      "no": "9",
+      "tc": "4741017854907920",
+      "nombre": "YURIANA MOTA",
+      "cedula": "02301426926",
+      "fecha": "46132",
+      "comentario": "ENVIAR A SUCURSAL JUMBO"
+    },
+    {
+      "no": "10",
+      "tc": "4921017852854177",
+      "nombre": "GARNEL CEDANO R",
+      "cedula": "40232468476",
+      "fecha": "46129",
+      "comentario": "NO LOCALIZADO"
+    },
+    {
+      "no": "11",
+      "tc": "4921017841460557",
+      "nombre": "ROSA ACEVEDO",
+      "cedula": "00110357118",
+      "fecha": "46129",
+      "comentario": "NO LOCALIZADO"
+    },
+    {
+      "no": "12",
+      "tc": "5188017754714677",
+      "nombre": "YUNEISI VIDAL",
+      "cedula": "02601462589",
+      "fecha": "46129",
+      "comentario": "NO LOCALIZADO"
+    },
+    {
+      "no": "13",
+      "tc": "5415017849199813",
+      "nombre": "YAMIRELY EUSEBIO",
+      "cedula": "40210926388",
+      "fecha": "46129",
+      "comentario": "NO LOCALIZADO"
+    },
+    {
+      "no": "14",
+      "tc": "4921017843029950",
+      "nombre": "FERNANDO SEGA S",
+      "cedula": "40226897326",
+      "fecha": "46128",
+      "comentario": "NO LOCALIZADO"
+    },
+    {
+      "no": "15",
+      "tc": "4921017836935060",
+      "nombre": "DUARTE ESTAGENTE",
+      "cedula": "40240486072",
+      "fecha": "46128",
+      "comentario": "NO LOCALIZADO"
+    },
+    {
+      "no": "16",
+      "tc": "4921017841712277",
+      "nombre": "TEMIS ABREU VIOLA",
+      "cedula": "40237328709",
+      "fecha": "46128",
+      "comentario": "NO LOCALIZADO"
+    }
+  ],
+  "lote": [
+    {
+      "tc": "4921017695271437",
+      "cedula": "02400186330",
+      "telefono": "8298309301",
+      "recibida": "",
+      "retornada": ""
+    },
+    {
+      "tc": "4921017745282518",
+      "cedula": "02300890247",
+      "telefono": "8095292483",
+      "recibida": "",
+      "retornada": ""
+    },
+    {
+      "tc": "4921017885681477",
+      "cedula": "02301196180",
+      "telefono": "8296821848",
+      "recibida": "",
+      "retornada": ""
+    },
+    {
+      "tc": "5415017883874575",
+      "cedula": "02301302218",
+      "telefono": "8298554334",
+      "recibida": "",
+      "retornada": ""
+    },
+    {
+      "tc": "4921017886594982",
+      "cedula": "02301280059",
+      "telefono": "8492612629",
+      "recibida": "",
+      "retornada": ""
+    },
+    {
+      "tc": "4921017886600316",
+      "cedula": "02300609597",
+      "telefono": "8092464560",
+      "recibida": "",
+      "retornada": ""
+    },
+    {
+      "tc": "4025017888757703",
+      "cedula": "40220191189",
+      "telefono": "8292287005",
+      "recibida": "106",
+      "retornada": ""
+    },
+    {
+      "tc": "5415017871585802",
+      "cedula": "40219946585",
+      "telefono": "8094166008",
+      "recibida": "",
+      "retornada": ""
+    },
+    {
+      "tc": "4921017874722142",
+      "cedula": "40225184635",
+      "telefono": "8294611289",
+      "recibida": "",
+      "retornada": ""
+    },
+    {
+      "tc": "4921017887100877",
+      "cedula": "40221539113",
+      "telefono": "8496334969",
+      "recibida": "",
+      "retornada": ""
+    },
+    {
+      "tc": "4921017886711013",
+      "cedula": "40246434571",
+      "telefono": "8296756608",
+      "recibida": "113",
+      "retornada": ""
+    },
+    {
+      "tc": "5188017884686590",
+      "cedula": "40223705688",
+      "telefono": "8092516439",
+      "recibida": "",
+      "retornada": ""
+    },
+    {
+      "tc": "5415017883795407",
+      "cedula": "02301298218",
+      "telefono": "8099178338",
+      "recibida": "",
+      "retornada": ""
+    },
+    {
+      "tc": "5415017879370061",
+      "cedula": "40211401134",
+      "telefono": "8295136761",
+      "recibida": "",
+      "retornada": ""
+    },
+    {
+      "tc": "4921017880422873",
+      "cedula": "40236253916",
+      "telefono": "8299692765",
+      "recibida": "",
+      "retornada": ""
+    },
+    {
+      "tc": "4921017874453777",
+      "cedula": "40211378738",
+      "telefono": "9999999999",
+      "recibida": "",
+      "retornada": ""
+    },
+    {
+      "tc": "5415017873104441",
+      "cedula": "40244549974",
+      "telefono": "8296683295",
+      "recibida": "",
+      "retornada": ""
+    },
+    {
+      "tc": "5400017879888074",
+      "cedula": "02301012353",
+      "telefono": "8093541431",
+      "recibida": "",
+      "retornada": ""
+    },
+    {
+      "tc": "4921017880493424",
+      "cedula": "09300662047",
+      "telefono": "",
+      "recibida": "",
+      "retornada": ""
+    },
+    {
+      "tc": "4921017881434590",
+      "cedula": "40221744861",
+      "telefono": "8295534017",
+      "recibida": "",
+      "retornada": ""
+    },
+    {
+      "tc": "4921017881888015",
+      "cedula": "40219851850",
+      "telefono": "",
+      "recibida": "",
+      "retornada": ""
+    },
+    {
+      "tc": "4921017876377727",
+      "cedula": "40211375239",
+      "telefono": "8492032422",
+      "recibida": "",
+      "retornada": ""
+    },
+    {
+      "tc": "5415017871441657",
+      "cedula": "02801001963",
+      "telefono": "8494679696",
+      "recibida": "",
+      "retornada": ""
+    },
+    {
+      "tc": "4921017881074805",
+      "cedula": "40211515537",
+      "telefono": "8299577188",
+      "recibida": "",
+      "retornada": ""
+    },
+    {
+      "tc": "4921017881787712",
+      "cedula": "02301633760",
+      "telefono": "8296804239",
+      "recibida": "",
+      "retornada": ""
+    },
+    {
+      "tc": "4921017881094252",
+      "cedula": "40244225609",
+      "telefono": "8092676330",
+      "recibida": "",
+      "retornada": ""
+    },
+    {
+      "tc": "4921017880417173",
+      "cedula": "02301499345",
+      "telefono": "",
+      "recibida": "",
+      "retornada": ""
+    },
+    {
+      "tc": "4173017871391183",
+      "cedula": "02300537921",
+      "telefono": "8092465909",
+      "recibida": "",
+      "retornada": ""
+    },
+    {
+      "tc": "___________________",
+      "cedula": "_____________",
+      "telefono": "",
+      "recibida": "",
+      "retornada": ""
+    }
+  ]
+}

@@ -1,0 +1,376 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  ADMIN
+  OPERADOR
+  FACTURACION
+  MENSAJERO
+}
+
+enum CardStatus {
+  DESPACHADA
+  ENVIADA_INTERIOR
+  EN_RUTA
+  ACUSE_RECIBIDO
+  DEVUELTA_TIENDA
+  ENTREGA_DIGITAL
+  ENTREGADA
+  RETORNADA
+}
+
+enum RouteStatus {
+  PENDIENTE
+  EN_PROCESO
+  COMPLETADA
+}
+
+enum RedactionType {
+  ENTREGA
+  RETORNO
+}
+
+enum RedactionStatus {
+  BORRADOR
+  APROBADA
+  ANULADA
+}
+
+enum MessengerServiceType {
+  NORMAL
+  REMOTA
+  RECOGIDA
+  MANDADO
+}
+
+enum SLAExtensionType {
+  CEDULA
+  REFERENCIA
+}
+
+model User {
+  id                         String            @id @default(cuid())
+  name                       String
+  email                      String            @unique
+  passwordHash               String
+  role                       UserRole          @default(OPERADOR)
+  active                     Boolean           @default(true)
+  createdAt                  DateTime          @default(now())
+  updatedAt                  DateTime          @updatedAt
+  cardStatusLogs             CardStatusLog[]
+  contactLogs                ContactLog[]
+  approvedRedactions         Redaction[]       @relation("RedactionApprovedBy")
+  createdRoutes              Route[]           @relation("RouteCreatedBy")
+  generatedMessengerReports  MessengerReport[] @relation("MessengerReportGeneratedBy")
+  updatedSlaConfigs          SLAConfig[]       @relation("SlaConfigUpdatedBy")
+  auditLogs                  AuditLog[]
+}
+
+model Customer {
+  id           String   @id @default(cuid())
+  cedula       String   @unique
+  nombre       String
+  telefonosRaw String?
+  direccionRaw String?
+  provincia    String?
+  zona         String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  cards        Card[]
+}
+
+model Card {
+  id                String          @id @default(cuid())
+  tc                String
+  externalReference String?
+  customerId        String
+  customer          Customer        @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  zona              String
+  provincia         String
+  dispatchDate      DateTime?
+  deliveryType      String?
+  emissionType      String?
+  supplier          String?
+  contractType      String?
+  status            CardStatus      @default(DESPACHADA)
+  isRemote          Boolean         @default(false)
+  urgent            Boolean         @default(false)
+  slaDueDate        DateTime?
+  slaExtensionDays  Int             @default(0)
+  returnReason      String?
+  currentMessengerId String?
+  currentMessenger  Messenger?      @relation("CurrentMessengerCards", fields: [currentMessengerId], references: [id], onDelete: SetNull)
+  metadata          Json?
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+  logs              CardStatusLog[]
+  routeItems        RouteItem[]
+  redactionItems    RedactionItem[]
+  contacts          ContactLog[]
+  lotItems          LotItem[]
+  urgentCases       UrgentCase[]
+
+  @@index([tc])
+  @@index([status])
+  @@index([provincia, zona])
+}
+
+model CardStatusLog {
+  id        String      @id @default(cuid())
+  cardId    String
+  card      Card        @relation(fields: [cardId], references: [id], onDelete: Cascade)
+  fromStatus CardStatus?
+  toStatus  CardStatus
+  note      String?
+  byUserId  String?
+  byUser    User?       @relation(fields: [byUserId], references: [id], onDelete: SetNull)
+  createdAt DateTime    @default(now())
+
+  @@index([cardId, createdAt])
+}
+
+model Messenger {
+  id               String                @id @default(cuid())
+  nombre           String
+  telefono         String?
+  zonaPrincipal    String?
+  activo           Boolean               @default(true)
+  createdAt        DateTime              @default(now())
+  updatedAt        DateTime              @updatedAt
+  serviceRates     MessengerServiceRate[]
+  dailyRecords     MessengerDailyRecord[]
+  routes           Route[]
+  currentCards     Card[]                @relation("CurrentMessengerCards")
+  reports          MessengerReport[]
+}
+
+model MessengerServiceRate {
+  id               String               @id @default(cuid())
+  messengerId      String
+  messenger        Messenger            @relation(fields: [messengerId], references: [id], onDelete: Cascade)
+  serviceType      MessengerServiceType
+  amountCents      Int
+
+  @@unique([messengerId, serviceType])
+}
+
+model MessengerDailyRecord {
+  id               String   @id @default(cuid())
+  messengerId      String
+  messenger        Messenger @relation(fields: [messengerId], references: [id], onDelete: Cascade)
+  fecha            DateTime
+  entregasNormales Int      @default(0)
+  entregasRemotas  Int      @default(0)
+  recogidasBanco   Int      @default(0)
+  mandados         Int      @default(0)
+  totalCents       Int      @default(0)
+  notas            String?
+  createdAt        DateTime @default(now())
+
+  @@index([messengerId, fecha])
+}
+
+model MessengerReport {
+  id               String   @id @default(cuid())
+  messengerId      String
+  messenger        Messenger @relation(fields: [messengerId], references: [id], onDelete: Cascade)
+  fromDate         DateTime
+  toDate           DateTime
+  generatedAt      DateTime @default(now())
+  generatedById    String?
+  generatedBy      User?    @relation("MessengerReportGeneratedBy", fields: [generatedById], references: [id], onDelete: SetNull)
+  totalCents       Int      @default(0)
+  imagePath        String?
+  anulada          Boolean  @default(false)
+}
+
+model Route {
+  id            String      @id @default(cuid())
+  fecha         DateTime
+  messengerId   String
+  messenger     Messenger   @relation(fields: [messengerId], references: [id], onDelete: Restrict)
+  status        RouteStatus @default(PENDIENTE)
+  notas         String?
+  createdById   String?
+  createdBy     User?       @relation("RouteCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt     DateTime    @default(now())
+  items         RouteItem[]
+
+  @@index([fecha, messengerId])
+}
+
+model RouteItem {
+  id          String   @id @default(cuid())
+  routeId     String
+  route       Route    @relation(fields: [routeId], references: [id], onDelete: Cascade)
+  cardId      String
+  card        Card     @relation(fields: [cardId], references: [id], onDelete: Restrict)
+  sequence    Int      @default(0)
+  checkedAt   DateTime?
+
+  @@unique([routeId, cardId])
+}
+
+model ContactLog {
+  id          String   @id @default(cuid())
+  cardId       String
+  card         Card     @relation(fields: [cardId], references: [id], onDelete: Cascade)
+  userId       String?
+  user         User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  telefonosUsados String?
+  comentario   String?
+  contactado   Boolean  @default(false)
+  createdAt    DateTime @default(now())
+
+  @@index([cardId, createdAt])
+}
+
+model Redaction {
+  id           String          @id @default(cuid())
+  tipo         RedactionType
+  status       RedactionStatus @default(BORRADOR)
+  zona         String
+  fecha        DateTime
+  notas        String?
+  approvedAt   DateTime?
+  approvedById String?
+  approvedBy   User?           @relation("RedactionApprovedBy", fields: [approvedById], references: [id], onDelete: SetNull)
+  anulada      Boolean         @default(false)
+  createdAt    DateTime        @default(now())
+  items        RedactionItem[]
+
+  @@index([fecha, tipo, zona])
+}
+
+model RedactionItem {
+  id           String     @id @default(cuid())
+  redactionId  String
+  redaction    Redaction  @relation(fields: [redactionId], references: [id], onDelete: Cascade)
+  cardId       String
+  card         Card       @relation(fields: [cardId], references: [id], onDelete: Restrict)
+  comentario   String?
+  appliedStatus CardStatus
+  isRemote     Boolean?
+
+  @@unique([redactionId, cardId])
+}
+
+model UrgentCase {
+  id          String   @id @default(cuid())
+  cardId      String?
+  card        Card?    @relation(fields: [cardId], references: [id], onDelete: SetNull)
+  tc          String
+  cedula      String
+  provincia   String?
+  telefono    String?
+  status      String?
+  direccion   String?
+  importedAt  DateTime @default(now())
+
+  @@index([cedula])
+  @@index([tc])
+}
+
+model Lot {
+  id          String   @id @default(cuid())
+  lotNumber   String   @unique
+  enviadoA    String
+  sentTo      String?
+  fechaEnvio  DateTime
+  fechaRetorno DateTime?
+  estatus     String
+  notas       String?
+  createdAt   DateTime @default(now())
+  items       LotItem[]
+}
+
+model LotItem {
+  id          String   @id @default(cuid())
+  lotId       String
+  lot         Lot      @relation(fields: [lotId], references: [id], onDelete: Cascade)
+  cardId      String?
+  card        Card?    @relation(fields: [cardId], references: [id], onDelete: SetNull)
+  tc          String
+  cedula      String?
+  telefono    String?
+  recibida    String?
+  retornada   String?
+
+  @@index([tc])
+}
+
+model ZoneTariff {
+  id          String            @id @default(cuid())
+  zona        String            @unique
+  baseCents   Int               @default(0)
+  active      Boolean           @default(true)
+  ranges      ZoneTariffRange[]
+}
+
+model ZoneTariffRange {
+  id          String     @id @default(cuid())
+  zoneTariffId String
+  zoneTariff  ZoneTariff @relation(fields: [zoneTariffId], references: [id], onDelete: Cascade)
+  minQty      Int
+  maxQty      Int?
+  centsPerCard Int
+}
+
+model BillingConfig {
+  id                 String   @id @default("default")
+  remoteSurchargeCents Int    @default(0)
+  updatedAt          DateTime @updatedAt
+}
+
+model SLAConfig {
+  id                 String   @id @default("default")
+  businessDays       Int      @default(5)
+  updatedAt          DateTime @updatedAt
+  updatedById        String?
+  updatedBy          User?    @relation("SlaConfigUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+}
+
+model SLAExtension {
+  id            String            @id @default(cuid())
+  type          SLAExtensionType
+  matchValue    String
+  extraDays     Int
+  active        Boolean           @default(true)
+  createdAt     DateTime          @default(now())
+
+  @@unique([type, matchValue])
+}
+
+model ReturnReason {
+  id          String   @id @default(cuid())
+  nombre      String   @unique
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+}
+
+model ProvinceConfig {
+  id          String   @id @default(cuid())
+  nombre      String   @unique
+  zona        String
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+}
+
+model AuditLog {
+  id          String   @id @default(cuid())
+  entity      String
+  entityId    String
+  action      String
+  details     Json?
+  userId      String?
+  user        User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  createdAt   DateTime @default(now())
+
+  @@index([entity, entityId])
+}
