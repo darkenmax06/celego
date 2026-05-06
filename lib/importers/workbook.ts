@@ -20,11 +20,18 @@ export function getSheetRows(workbook: XLSX.WorkBook, sheetName?: string) {
     throw new Error("No se encontro una hoja valida en el archivo");
   }
 
-  return XLSX.utils.sheet_to_json<(string | number | null)[]>(target, {
+  const options: XLSX.Sheet2JSONOpts & { UTC?: boolean } = {
     header: 1,
     raw: false,
+    UTC: true,
+    dateNF: "yyyy-mm-dd",
     defval: "",
-  });
+  };
+
+  return XLSX.utils.sheet_to_json<(string | number | null)[]>(
+    target,
+    options as XLSX.Sheet2JSONOpts,
+  );
 }
 
 export function findHeaderRow(
