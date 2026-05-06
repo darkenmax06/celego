@@ -134,6 +134,12 @@ function normalizePhones(rawPhones: Array<{ num: string; principal?: boolean; fu
   return deduped;
 }
 
+function phonesSignature(phones: PhoneState[]) {
+  return phones
+    .map((phone) => `${phone.num}|${phone.principal ? 1 : 0}|${phone.funciona ? 1 : 0}`)
+    .join(";");
+}
+
 function parseMetadataPhones(metadata: Record<string, unknown>) {
   const raw = metadata.telefonos;
   if (!Array.isArray(raw)) return [] as PhoneState[];
@@ -456,6 +462,14 @@ export async function POST(request: Request) {
   const metadataRoot = asRecord(card.metadata);
   const previousOperativo = asRecord(metadataRoot.operativo);
   const previousPhones = parseMetadataPhones(previousOperativo);
+  const previousComentario =
+    typeof previousOperativo.comentarioContacto === "string"
+      ? previousOperativo.comentarioContacto.trim()
+      : "";
+  const previousContactado =
+    typeof previousOperativo.contactado === "boolean"
+      ? previousOperativo.contactado
+      : false;
 
   const normalizedPhones = normalizePhones(
     parsed.data.telefonos && parsed.data.telefonos.length > 0
@@ -464,6 +478,27 @@ export async function POST(request: Request) {
         ? previousPhones
         : fallbackPhones,
   );
+  const comentario = parsed.data.comentario?.trim() ?? "";
+  const contactado = parsed.data.contactado;
+  const previousReferencePhones = previousPhones.length > 0 ? previousPhones : fallbackPhones;
+
+  const noChanges =
+    phonesSignature(normalizedPhones) === phonesSignature(previousReferencePhones) &&
+    comentario === previousComentario &&
+    contactado === previousContactado;
+
+  if (noChanges) {
+    return NextResponse.json({
+      saved: false,
+      noChanges: true,
+      state: {
+        cardId: card.id,
+        contactado,
+        comentario,
+        telefonos: normalizedPhones,
+      },
+    });
+  }
 
   const usedPhones =
     parsed.data.telefonosUsados?.trim() ||
@@ -475,10 +510,8 @@ export async function POST(request: Request) {
   const nextOperativo: Record<string, unknown> = {
     ...previousOperativo,
     telefonos: normalizedPhones,
-    comentarioContacto:
-      parsed.data.comentario?.trim() ??
-      (typeof previousOperativo.comentarioContacto === "string" ? previousOperativo.comentarioContacto : ""),
-    contactado: parsed.data.contactado,
+    comentarioContacto: comentario,
+    contactado,
     updatedAt: new Date().toISOString(),
   };
 
@@ -497,8 +530,8 @@ export async function POST(request: Request) {
       cardId: parsed.data.cardId,
       userId: auth.session.user.id,
       telefonosUsados: usedPhones,
-      comentario: parsed.data.comentario,
-      contactado: parsed.data.contactado,
+      comentario: comentario || null,
+      contactado,
     },
   });
 
@@ -506,8 +539,8 @@ export async function POST(request: Request) {
     contact,
     saved: {
       cardId: card.id,
-      contactado: parsed.data.contactado,
-      comentario: parsed.data.comentario ?? "",
+      contactado,
+      comentario,
       telefonos: normalizedPhones,
     },
   }, { status: 201 });

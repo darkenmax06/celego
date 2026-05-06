@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { PageHeader } from "@/components/ui/page-header";
 import { Panel } from "@/components/ui/panel";
 
@@ -81,6 +81,58 @@ function principalPhone(card: OperativeCard) {
 function chunkAddress(lines: string[]) {
   if (!lines.length) return "-";
   return lines.join(" · ");
+}
+
+function normalizePhoneForSave(raw: string) {
+  return raw.trim().replace(/[^\d+]/g, "");
+}
+
+function normalizePhonesForSave(phones: PhoneState[]) {
+  const deduped: PhoneState[] = [];
+  const seen = new Set<string>();
+
+  for (const phone of phones) {
+    const num = normalizePhoneForSave(phone.num);
+    if (!num) continue;
+
+    const key = num.replace(/\D/g, "") || num.toUpperCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+
+    deduped.push({
+      num,
+      principal: Boolean(phone.principal),
+      funciona: Boolean(phone.funciona),
+    });
+  }
+
+  if (!deduped.length) return deduped;
+
+  let principalFound = false;
+  for (let index = 0; index < deduped.length; index += 1) {
+    if (deduped[index].principal && !principalFound) {
+      principalFound = true;
+      continue;
+    }
+    deduped[index].principal = false;
+  }
+
+  if (!principalFound) {
+    deduped[0].principal = true;
+  }
+
+  return deduped;
+}
+
+function buildContactSignature(input: {
+  telefonos: PhoneState[];
+  comentario: string;
+  contactado: boolean;
+}) {
+  const phonesSig = normalizePhonesForSave(input.telefonos)
+    .map((phone) => `${phone.num}|${phone.principal ? 1 : 0}|${phone.funciona ? 1 : 0}`)
+    .join(";");
+  return `${phonesSig}::${input.comentario.trim()}::${input.contactado ? 1 : 0}`;
 }
 
 export default function OperativoClient() {
@@ -180,8 +232,18 @@ export default function OperativoClient() {
       return data.error ?? "No se pudo registrar contacto";
     }
 
-    setMessage("Contacto guardado");
-    await loadCards(current.id);
+    setCards((prev) =>
+      prev.map((item) =>
+        item.id === current.id
+          ? {
+              ...item,
+              telefonos: normalizePhonesForSave(payload.telefonos),
+              comentarioContacto: payload.comentario,
+              contactado: payload.contactado,
+            }
+          : item,
+      ),
+    );
     return null;
   }
 
@@ -448,34 +510,12 @@ function ContactModal({
   const [feedback, setFeedback] = useState("");
   const skipAutoSave = useRef(true);
   const autoSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastSavedSignature = useRef("");
+  const onSaveRef = useRef(onSave);
 
-  const save = useCallback(async (silent = false) => {
-    if (card.readOnly) return;
-
-    const payloadPhones = telefonos
-      .map((phone) => ({
-        num: phone.num.trim(),
-        principal: phone.principal,
-        funciona: phone.funciona,
-      }))
-      .filter((phone) => phone.num.length > 0);
-
-    if (payloadPhones.length && !payloadPhones.some((phone) => phone.principal)) {
-      payloadPhones[0].principal = true;
-    }
-
-    setSaving(true);
-    if (!silent) setFeedback("");
-    const error = await onSave({ telefonos: payloadPhones, comentario, contactado });
-    if (error) {
-      setFeedback(error);
-      setSaving(false);
-      return;
-    }
-
-    setFeedback(silent ? "Cambios guardados automaticamente" : "Cambios guardados");
-    setSaving(false);
-  }, [card.readOnly, comentario, contactado, onSave, telefonos]);
+  useEffect(() => {
+    onSaveRef.current = onSave;
+  }, [onSave]);
 
   useEffect(() => {
     skipAutoSave.current = true;
@@ -485,6 +525,11 @@ function ContactModal({
     setTelefonos(basePhones);
     setComentario(card.comentarioContacto ?? "");
     setContactado(card.contactado);
+    lastSavedSignature.current = buildContactSignature({
+      telefonos: basePhones,
+      comentario: card.comentarioContacto ?? "",
+      contactado: card.contactado,
+    });
     setNewPhone("");
     setFeedback("");
   }, [card.id, card.comentarioContacto, card.contactado, card.telefonos]);
@@ -509,12 +554,37 @@ function ContactModal({
     }
     if (card.readOnly) return;
 
+    const normalizedPhones = normalizePhonesForSave(telefonos);
+    const signature = buildContactSignature({
+      telefonos: normalizedPhones,
+      comentario,
+      contactado,
+    });
+    if (signature === lastSavedSignature.current) {
+      return;
+    }
+
     if (autoSaveTimer.current) {
       clearTimeout(autoSaveTimer.current);
     }
 
     autoSaveTimer.current = setTimeout(() => {
-      void save(true);
+      void (async () => {
+        setSaving(true);
+        const error = await onSaveRef.current({
+          telefonos: normalizedPhones,
+          comentario,
+          contactado,
+        });
+        if (error) {
+          setFeedback(error);
+          setSaving(false);
+          return;
+        }
+        lastSavedSignature.current = signature;
+        setFeedback("Cambios guardados automaticamente");
+        setSaving(false);
+      })();
     }, 800);
 
     return () => {
@@ -522,7 +592,7 @@ function ContactModal({
         clearTimeout(autoSaveTimer.current);
       }
     };
-  }, [telefonos, comentario, contactado, card.readOnly, save]);
+  }, [telefonos, comentario, contactado, card.readOnly]);
 
   function setPrincipal(phoneIndex: number) {
     setTelefonos((prev) =>
