@@ -959,7 +959,7 @@ export default function RutasClient() {
       ) : null}
 
       {showNewLot ? (
-        <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/40 px-4 py-6" onClick={() => setShowNewLot(false)}>
+        <div className="fixed inset-0 z-[120] flex items-start justify-center overflow-y-auto bg-black/40 px-4 py-6" onClick={() => setShowNewLot(false)}>
           <div className="w-full max-w-xl rounded-2xl bg-white p-5 shadow-2xl" onClick={(event) => event.stopPropagation()}>
             <div className="mb-3 flex items-center justify-between">
               <h3 className="font-display text-xl font-bold text-slate-900">Nuevo lote</h3>
@@ -1104,8 +1104,8 @@ function RouteLotModal({
   onRequireReturnReason: (existing?: string | null) => string | null;
 }) {
   return (
-    <div className="fixed inset-0 z-[125] flex items-center justify-center bg-black/40 px-4 py-6" onClick={onClose}>
-      <div className="flex max-h-[90vh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl" onClick={(event) => event.stopPropagation()}>
+    <div className="fixed inset-0 z-[125] flex items-start justify-center overflow-y-auto bg-black/40 px-4 py-6" onClick={onClose}>
+      <div className="flex max-h-[calc(100vh-3rem)] w-full max-w-5xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl" onClick={(event) => event.stopPropagation()}>
         <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
           <div>
             <p className="font-display text-xs font-bold tracking-wide text-blue-700">LOTE {route.id.slice(-5).toUpperCase()}</p>
@@ -1219,8 +1219,8 @@ function TrackingLotModal({
   }
 
   return (
-    <div className="fixed inset-0 z-[126] flex items-center justify-center bg-black/40 px-4 py-6" onClick={onClose}>
-      <div className="flex max-h-[90vh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl" onClick={(event) => event.stopPropagation()}>
+    <div className="fixed inset-0 z-[126] flex items-start justify-center overflow-y-auto bg-black/40 px-4 py-6" onClick={onClose}>
+      <div className="flex max-h-[calc(100vh-3rem)] w-full max-w-5xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl" onClick={(event) => event.stopPropagation()}>
         <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
           <div>
             <p className="font-display text-xs font-bold tracking-wide text-blue-700">LOTE {lot.lotNumber}</p>
@@ -1230,7 +1230,7 @@ function TrackingLotModal({
           <button onClick={onClose} className="rounded-md bg-slate-100 px-2 py-1 text-sm text-slate-700">✕</button>
         </div>
 
-        <div className="p-4">
+        <div className="flex-1 overflow-y-auto p-4">
           <div className="mb-3 grid gap-3 sm:grid-cols-4">
             <Stat label="Total" value={lot.stats.total} />
             <Stat label="Acuses" value={lot.stats.recibidas} />

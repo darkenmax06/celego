@@ -65,6 +65,8 @@ export async function GET(request: NextRequest) {
         return due > max ? due : max;
       }, new Date(0))
     : addBusinessDaysStrict(route.fecha, baseSlaDays);
+  const returnDateForMessenger = new Date(returnDate);
+  returnDateForMessenger.setDate(returnDateForMessenger.getDate() - 1);
 
   const rows = route.items.map((item, index) => ({
     no: index + 1,
@@ -72,11 +74,7 @@ export async function GET(request: NextRequest) {
     nombre: item.card.customer.nombre,
     cedula: item.card.customer.cedula,
     telefonos: parsePhones(item.card.customer.telefonosRaw),
-    lote: lotLabel,
-    despacho: formatDate(item.card.dispatchDate),
-    slaVence: formatDate(
-      item.card.slaDueDate ?? addBusinessDaysStrict(item.card.dispatchDate ?? route.fecha, baseSlaDays),
-    ),
+    devuelta: "\u2610",
   }));
 
   if (format === "xlsx") {
@@ -87,23 +85,14 @@ export async function GET(request: NextRequest) {
     sheet.addRow([`Mensajero: ${route.messenger.nombre}`]);
     sheet.addRow([`Fecha ruta: ${formatDate(route.fecha)}`]);
     sheet.addRow([]);
-    sheet.addRow(["NO", "NUMERO TC", "NOMBRE", "CEDULA", "TELEFONOS", "LOTE", "DESPACHO", "SLA"]);
+    sheet.addRow(["NO", "NUMERO TC", "NOMBRE", "CEDULA", "TELEFONOS", "DEVUELTA"]);
 
     rows.forEach((row) => {
-      sheet.addRow([
-        row.no,
-        row.tc,
-        row.nombre,
-        row.cedula,
-        row.telefonos,
-        row.lote,
-        row.despacho,
-        row.slaVence,
-      ]);
+      sheet.addRow([row.no, row.tc, row.nombre, row.cedula, row.telefonos, row.devuelta]);
     });
 
     sheet.addRow([]);
-    sheet.addRow([`Fecha limite de devolucion del lote: ${formatDate(returnDate)}`]);
+    sheet.addRow([`Fecha limite de devolucion del lote: ${formatDate(returnDateForMessenger)}`]);
 
     sheet.getRow(1).font = { bold: true, size: 14 };
     sheet.getRow(2).font = { bold: true };
@@ -114,8 +103,6 @@ export async function GET(request: NextRequest) {
       { width: 32 },
       { width: 18 },
       { width: 24 },
-      { width: 12 },
-      { width: 14 },
       { width: 14 },
     ];
 
@@ -143,8 +130,8 @@ export async function GET(request: NextRequest) {
   page.drawText(`Mensajero: ${route.messenger.nombre}`, { x: 40, y: 740, size: 10, font });
   page.drawText(`Fecha ruta: ${formatDate(route.fecha)}`, { x: 40, y: 726, size: 10, font });
 
-  const headers = ["NO", "TC", "NOMBRE", "CEDULA", "TELEFONOS", "LOTE", "DESPACHO", "SLA"];
-  const x = [40, 66, 154, 300, 376, 470, 510, 560];
+  const headers = ["NO", "TC", "NOMBRE", "CEDULA", "TELEFONOS", "DEVUELTA"];
+  const x = [40, 66, 156, 306, 394, 540];
 
   let y = 700;
   headers.forEach((header, index) => {
@@ -155,17 +142,22 @@ export async function GET(request: NextRequest) {
   for (const row of rows.slice(0, 42)) {
     page.drawText(String(row.no), { x: x[0], y, size: 8, font });
     page.drawText(row.tc.slice(0, 16), { x: x[1], y, size: 8, font });
-    page.drawText(row.nombre.slice(0, 26), { x: x[2], y, size: 8, font });
+    page.drawText(row.nombre.slice(0, 24), { x: x[2], y, size: 8, font });
     page.drawText(row.cedula.slice(0, 13), { x: x[3], y, size: 8, font });
-    page.drawText(row.telefonos.slice(0, 18), { x: x[4], y, size: 8, font });
-    page.drawText(row.lote, { x: x[5], y, size: 8, font });
-    page.drawText(row.despacho, { x: x[6], y, size: 8, font });
-    page.drawText(row.slaVence, { x: x[7], y, size: 8, font });
+    page.drawText(row.telefonos.slice(0, 20), { x: x[4], y, size: 8, font });
+    page.drawRectangle({
+      x: x[5] + 6,
+      y: y + 1,
+      width: 7,
+      height: 7,
+      borderColor: rgb(0.2, 0.2, 0.2),
+      borderWidth: 0.7,
+    });
     y -= 12;
     if (y < 80) break;
   }
 
-  page.drawText(`Fecha limite de devolucion del lote: ${formatDate(returnDate)}`, {
+  page.drawText(`Fecha limite de devolucion del lote: ${formatDate(returnDateForMessenger)}`, {
     x: 40,
     y: 48,
     size: 11,

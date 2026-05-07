@@ -5,6 +5,7 @@ import { CardStatus } from "@prisma/client";
 import { PDFDocument, type PDFFont, type PDFPage, StandardFonts, rgb } from "pdf-lib";
 import { z } from "zod";
 import { requireApiSession } from "@/lib/api-session";
+import { dedupeBillingCardsByCustomerAndDispatchDate } from "@/lib/billing";
 import { prisma } from "@/lib/prisma";
 
 const schema = z.object({
@@ -148,18 +149,38 @@ export async function POST(request: Request) {
         status: { in: [CardStatus.ENTREGADA, CardStatus.ENTREGA_DIGITAL] },
         dispatchDate: { gte: fromDate, lte: toDate },
       },
-      select: { zona: true, isRemote: true },
+      select: {
+        id: true,
+        zona: true,
+        isRemote: true,
+        dispatchDate: true,
+        customer: {
+          select: {
+            cedula: true,
+          },
+        },
+      },
       take: 5000,
     }),
     prisma.zoneTariff.findMany({ where: { active: true }, include: { ranges: true } }),
   ]);
 
-  if (!cards.length) {
+  const billableCards = dedupeBillingCardsByCustomerAndDispatchDate(
+    cards.map((card) => ({
+      id: card.id,
+      zona: card.zona,
+      isRemote: card.isRemote,
+      dispatchDate: card.dispatchDate,
+      customerCedula: card.customer.cedula,
+    })),
+  );
+
+  if (!billableCards.length) {
     return NextResponse.json({ error: "No hay entregas en el periodo seleccionado" }, { status: 404 });
   }
 
   const grouped = new Map<string, number>();
-  for (const card of cards) {
+  for (const card of billableCards) {
     grouped.set(card.zona, (grouped.get(card.zona) ?? 0) + 1);
   }
 
@@ -186,7 +207,7 @@ export async function POST(request: Request) {
       };
     });
 
-  const remoteCount = cards.filter((card) => card.isRemote).length;
+  const remoteCount = billableCards.filter((card) => card.isRemote).length;
   if (remoteCount > 0) {
     const remoteTariff = tariffMap.get("REMOTA");
     const remoteSurchargeCents = resolveCentsPerCard(

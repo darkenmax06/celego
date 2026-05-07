@@ -11,6 +11,7 @@ type Messenger = {
   nombre: string;
   telefono: string | null;
   zonaPrincipal: string | null;
+  provinciaTrabajo: string | null;
   activo: boolean;
   serviceRates: Array<{
     id: string;
@@ -48,6 +49,7 @@ type Counts = {
 };
 
 type PaginationMeta = { page: number; pageSize: number; total: number; totalPages: number };
+type ProvinceRow = { id: string; nombre: string; zona: string; active: boolean };
 
 const ZONES = ["Metro", "Este", "Norte", "Sur"] as const;
 const SERVICE_ORDER: MessengerServiceType[] = ["NORMAL", "REMOTA", "RECOGIDA", "MANDADO"];
@@ -108,6 +110,7 @@ function initials(name: string) {
 
 export default function MensajerosClient() {
   const [messengers, setMessengers] = useState<Messenger[]>([]);
+  const [provinces, setProvinces] = useState<string[]>([]);
   const [messengerPagination, setMessengerPagination] = useState<PaginationMeta>({
     page: 1,
     pageSize: 24,
@@ -153,8 +156,21 @@ export default function MensajerosClient() {
     setReports(dailyJson.reports ?? []);
   }
 
+  async function loadProvinces() {
+    const res = await fetch("/api/config/provincias", { cache: "no-store" });
+    const json = await res.json();
+    const list = (json.provincias ?? [])
+      .filter((item: ProvinceRow) => item.active)
+      .map((item: ProvinceRow) => item.nombre);
+    setProvinces(list);
+  }
+
   useEffect(() => {
     void loadActivity();
+  }, []);
+
+  useEffect(() => {
+    void loadProvinces();
   }, []);
 
   useEffect(() => {
@@ -318,6 +334,7 @@ export default function MensajerosClient() {
                   <div className="flex-1">
                     <p className="font-display text-base font-bold text-slate-900">{messenger.nombre}</p>
                     <p className="text-xs text-slate-500">{messenger.telefono ?? "-"}</p>
+                    <p className="text-xs text-slate-500">{messenger.provinciaTrabajo ?? "Sin provincia asignada"}</p>
                   </div>
                   <button
                     onClick={() => setSelectedMessengerId(messenger.id)}
@@ -462,6 +479,7 @@ export default function MensajerosClient() {
 
       {showNew ? (
         <NewMessengerModal
+          provinces={provinces}
           onClose={() => setShowNew(false)}
           onCreated={async () => {
             setShowNew(false);
@@ -474,6 +492,7 @@ export default function MensajerosClient() {
       {selectedMessenger ? (
         <MessengerModal
           messenger={selectedMessenger}
+          provinces={provinces}
           records={records.filter((item) => item.messengerId === selectedMessenger.id)}
           reports={reports.filter((item) => item.messengerId === selectedMessenger.id)}
           onClose={() => setSelectedMessengerId(null)}
@@ -499,18 +518,27 @@ function MiniStat({ label, value }: { label: string; value: string | number }) {
 }
 
 function NewMessengerModal({
+  provinces,
   onClose,
   onCreated,
 }: {
+  provinces: string[];
   onClose: () => void;
   onCreated: () => Promise<void>;
 }) {
   const [nombre, setNombre] = useState("");
   const [telefono, setTelefono] = useState("");
   const [zona, setZona] = useState("Metro");
+  const [provinciaTrabajo, setProvinciaTrabajo] = useState("");
   const [rates, setRates] = useState<Counts>({ NORMAL: 0, REMOTA: 0, RECOGIDA: 0, MANDADO: 0 });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+
+  useEffect(() => {
+    if (!provinciaTrabajo && provinces.length) {
+      setProvinciaTrabajo(provinces[0]);
+    }
+  }, [provinciaTrabajo, provinces]);
 
   async function create() {
     setSaving(true);
@@ -523,6 +551,7 @@ function NewMessengerModal({
         nombre,
         telefono: telefono || undefined,
         zonaPrincipal: zona,
+        provinciaTrabajo: provinciaTrabajo || undefined,
         rates: SERVICE_ORDER.map((service) => ({
           serviceType: service,
           amountCents: toCents(rates[service]),
@@ -569,6 +598,18 @@ function NewMessengerModal({
               </option>
             ))}
           </select>
+          <select
+            value={provinciaTrabajo}
+            onChange={(event) => setProvinciaTrabajo(event.target.value)}
+            className="w-full rounded-xl border border-slate-300 px-3 py-2"
+          >
+            {!provinces.length ? <option value="">Sin provincias configuradas</option> : null}
+            {provinces.map((province) => (
+              <option key={province} value={province}>
+                Provincia de trabajo: {province}
+              </option>
+            ))}
+          </select>
 
           <div className="grid grid-cols-2 gap-2">
             {SERVICE_ORDER.map((service) => (
@@ -610,12 +651,14 @@ function NewMessengerModal({
 
 function MessengerModal({
   messenger,
+  provinces,
   records,
   reports,
   onClose,
   onUpdated,
 }: {
   messenger: Messenger;
+  provinces: string[];
   records: DailyRecord[];
   reports: MessengerReport[];
   onClose: () => void;
@@ -624,6 +667,7 @@ function MessengerModal({
   const [tab, setTab] = useState<"perfil" | "registro" | "reporte" | "historial">("perfil");
   const [telefono, setTelefono] = useState(messenger.telefono ?? "");
   const [zona, setZona] = useState(messenger.zonaPrincipal ?? "Metro");
+  const [provinciaTrabajo, setProvinciaTrabajo] = useState(messenger.provinciaTrabajo ?? "");
   const [rates, setRates] = useState(() => {
     const map = rateMap(messenger.serviceRates);
     return {
@@ -648,6 +692,12 @@ function MessengerModal({
     const existing = records.find((record) => dateKey(record.fecha) === recordDate);
     setRecordCounts(countsFromRecord(existing));
   }, [recordDate, records]);
+
+  useEffect(() => {
+    if (!provinciaTrabajo && provinces.length) {
+      setProvinciaTrabajo(provinces[0]);
+    }
+  }, [provinciaTrabajo, provinces]);
 
   const previewRecords = useMemo(() => {
     const start = new Date(from);
@@ -675,6 +725,7 @@ function MessengerModal({
         nombre: messenger.nombre,
         telefono: telefono || undefined,
         zonaPrincipal: zona || undefined,
+        provinciaTrabajo: provinciaTrabajo || undefined,
         activo: messenger.activo,
         rates: SERVICE_ORDER.map((service) => ({
           serviceType: service,
@@ -840,7 +891,7 @@ function MessengerModal({
         <div className="flex-1 overflow-y-auto px-5 py-4">
           {tab === "perfil" ? (
             <div>
-              <div className="mb-3 grid gap-3 md:grid-cols-2">
+              <div className="mb-3 grid gap-3 md:grid-cols-3">
                 <input
                   value={telefono}
                   onChange={(event) => setTelefono(event.target.value)}
@@ -855,6 +906,18 @@ function MessengerModal({
                   {ZONES.map((zone) => (
                     <option key={zone} value={zone}>
                       {zone}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  value={provinciaTrabajo}
+                  onChange={(event) => setProvinciaTrabajo(event.target.value)}
+                  className="rounded-xl border border-slate-300 px-3 py-2"
+                >
+                  {!provinces.length ? <option value="">Sin provincias configuradas</option> : null}
+                  {provinces.map((province) => (
+                    <option key={province} value={province}>
+                      {province}
                     </option>
                   ))}
                 </select>

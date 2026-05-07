@@ -3,6 +3,7 @@ import { CardStatus, Prisma, RouteStatus } from "@prisma/client";
 import { z } from "zod";
 import { requireApiSession } from "@/lib/api-session";
 import { prisma } from "@/lib/prisma";
+import { resolveZone } from "@/lib/zone-map";
 
 const createSchema = z.object({
   fecha: z.string(),
@@ -301,12 +302,15 @@ export async function POST(request: Request) {
   });
 
   await prisma.$transaction(async (tx) => {
+    const messengerProvince = route.messenger.provinciaTrabajo?.trim() || null;
     for (const card of selectedCards) {
       await tx.card.update({
         where: { id: card.id },
         data: {
           currentMessengerId: parsed.data.messengerId,
           status: CardStatus.EN_RUTA,
+          provincia: messengerProvince ?? undefined,
+          zona: messengerProvince ? resolveZone(messengerProvince, card.zona) : undefined,
         },
       });
       await tx.cardStatusLog.create({

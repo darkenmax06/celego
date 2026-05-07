@@ -33,14 +33,16 @@ type Redaction = {
   zona: string;
   status: string;
   fecha: string;
+  notas?: string | null;
   items: Array<{
     id: string;
+    cardId: string;
     comentario: string | null;
     appliedStatus: string;
-      card: { tc: string; customer: { nombre: string; cedula: string } };
-      isRemote?: boolean | null;
-    }>;
-  };
+    card: { tc: string; customer: { nombre: string; cedula: string } };
+    isRemote?: boolean | null;
+  }>;
+};
 
 type Motivo = { id: string; nombre: string; active: boolean };
 type PaginationMeta = { page: number; pageSize: number; total: number; totalPages: number };
@@ -78,7 +80,7 @@ export default function RedaccionClient() {
     totalPages: 1,
   });
   const [historyPage, setHistoryPage] = useState(1);
-  const [lastRedactionIds, setLastRedactionIds] = useState<string[]>([]);
+  const [editingRedactionId, setEditingRedactionId] = useState<string | null>(null);
   const [processing, setProcessing] = useState(false);
   const [message, setMessage] = useState("");
 
@@ -87,7 +89,11 @@ export default function RedaccionClient() {
     () => redacciones.filter((row) => row.status === "APROBADA").map((row) => row.id),
     [redacciones],
   );
-  const canExportApproved = true;
+  const canExportApproved = approvedRedactionIds.length > 0;
+  const editingRedaction = useMemo(
+    () => redacciones.find((row) => row.id === editingRedactionId) ?? null,
+    [editingRedactionId, redacciones],
+  );
 
   async function loadCatalogs() {
     const params = new URLSearchParams({
@@ -268,7 +274,6 @@ export default function RedaccionClient() {
       return;
     }
 
-    setLastRedactionIds(redactionIds);
     setRetornos([]);
     setEntregas([]);
     setSelectedRetornos([]);
@@ -279,10 +284,11 @@ export default function RedaccionClient() {
     await loadCatalogs();
   }
 
-  async function exportRelation(format: "xlsx" | "csv" | "pdf") {
-    const approvedSet = new Set(approvedRedactionIds);
-    const preferred = lastRedactionIds.filter((id) => approvedSet.has(id));
-    const exportIds = preferred.length ? preferred : approvedRedactionIds;
+  async function exportRelation(format: "xlsx" | "pdf", redactionId?: string) {
+    if (!redactionId && !approvedRedactionIds.length) {
+      setMessage("No hay relaciones aprobadas para exportar");
+      return;
+    }
 
     const params = new URLSearchParams({
       type: "redaccion",
@@ -290,8 +296,10 @@ export default function RedaccionClient() {
       zona,
       date: historyDate,
     });
-    if (exportIds.length) {
-      params.set("redactionIds", exportIds.join(","));
+    if (redactionId) {
+      params.set("redactionIds", redactionId);
+    } else if (approvedRedactionIds.length) {
+      params.set("redactionIds", approvedRedactionIds.join(","));
     }
 
     const res = await fetch(`/api/reportes/export?${params.toString()}`);
@@ -305,10 +313,45 @@ export default function RedaccionClient() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `entregas-retornos-${fecha}.${format}`;
+    a.download = redactionId
+      ? `relacion-${redactionId.slice(-6)}.${format}`
+      : `entregas-retornos-${historyDate}.${format}`;
     a.click();
     URL.revokeObjectURL(url);
-    setMessage(`Relacion exportada en ${format.toUpperCase()}`);
+    setMessage(
+      redactionId
+        ? `Relacion ${redactionId.slice(-6)} exportada en ${format.toUpperCase()}`
+        : `Relaciones exportadas en ${format.toUpperCase()}`,
+    );
+  }
+
+  async function addItemsToRedaction(
+    redactionId: string,
+    items: Array<{ cardId: string; isRemote?: boolean; comentario?: string }>,
+  ) {
+    const res = await fetch("/api/redacciones", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: "ADD_ITEMS",
+        redactionId,
+        items,
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      setMessage(data.error ?? "No se pudo actualizar la relacion");
+      return false;
+    }
+
+    setMessage(
+      data.appliedImmediately
+        ? `Relacion actualizada. ${data.addedItems} tarjeta(s) agregadas y aplicadas`
+        : `Relacion actualizada. ${data.addedItems} tarjeta(s) agregadas`,
+    );
+    setHistoryPage(1);
+    await loadCatalogs();
+    return true;
   }
 
   return (
@@ -551,13 +594,6 @@ export default function RedaccionClient() {
             Exportar Excel
           </button>
           <button
-            onClick={() => void exportRelation("csv")}
-            disabled={!canExportApproved}
-            className="rounded-xl border border-slate-300 px-4 py-2 text-sm disabled:opacity-50"
-          >
-            Exportar CSV
-          </button>
-          <button
             onClick={() => void exportRelation("pdf")}
             disabled={!canExportApproved}
             className="rounded-xl border border-slate-300 px-4 py-2 text-sm disabled:opacity-50"
@@ -565,7 +601,7 @@ export default function RedaccionClient() {
             Exportar PDF
           </button>
           <p className="text-xs text-slate-500">
-            Exportacion disponible solo para redacciones aprobadas.
+            Exportacion disponible para relaciones aprobadas.
           </p>
           </div>
         </div>
@@ -581,6 +617,31 @@ export default function RedaccionClient() {
               </div>
               <p className="text-xs text-slate-500">{new Date(red.fecha).toLocaleString("es-DO")}</p>
               <p className="mt-2 text-xs text-slate-600">Tarjetas: {red.items.length}</p>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => setEditingRedactionId(red.id)}
+                  className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs"
+                >
+                  Agregar tarjetas
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void exportRelation("xlsx", red.id)}
+                  disabled={red.status !== "APROBADA"}
+                  className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs disabled:opacity-40"
+                >
+                  Excel individual
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void exportRelation("pdf", red.id)}
+                  disabled={red.status !== "APROBADA"}
+                  className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs disabled:opacity-40"
+                >
+                  PDF individual
+                </button>
+              </div>
             </article>
           ))}
           {!redacciones.length ? (
@@ -613,6 +674,268 @@ export default function RedaccionClient() {
           </div>
         </div>
       </Panel>
+
+      {editingRedaction ? (
+        <EditRedactionModal
+          redaction={editingRedaction}
+          onClose={() => setEditingRedactionId(null)}
+          onSave={async (items) => {
+            const ok = await addItemsToRedaction(editingRedaction.id, items);
+            if (ok) {
+              setEditingRedactionId(null);
+            }
+          }}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+type EditRedactionRow = {
+  cardId: string;
+  tc: string;
+  cedula: string;
+  nombre: string;
+  isRemote: boolean;
+  comentario: string;
+};
+
+function EditRedactionModal({
+  redaction,
+  onClose,
+  onSave,
+}: {
+  redaction: Redaction;
+  onClose: () => void;
+  onSave: (
+    items: Array<{ cardId: string; isRemote?: boolean; comentario?: string }>,
+  ) => Promise<void>;
+}) {
+  const [scanInput, setScanInput] = useState("");
+  const [rows, setRows] = useState<EditRedactionRow[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [feedback, setFeedback] = useState("");
+  const existingCardIds = useMemo(
+    () => new Set(redaction.items.map((item) => item.cardId)),
+    [redaction.items],
+  );
+
+  async function findCard(identifier: string): Promise<CardLookup | null> {
+    const res = await fetch(`/api/tarjetas?q=${encodeURIComponent(identifier)}`, {
+      cache: "no-store",
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    const cards = (data.cards ?? []) as CardLookup[];
+    if (!cards.length) return null;
+
+    const digits = identifier.replace(/\D/g, "");
+    return (
+      cards.find((card) => card.tc === identifier) ??
+      cards.find((card) => card.customer.cedula === identifier || card.customer.cedula.replace(/\D/g, "") === digits) ??
+      cards[0]
+    );
+  }
+
+  async function addByScan() {
+    const value = scanInput.trim();
+    if (!value) return;
+
+    const card = await findCard(value);
+    if (!card) {
+      setFeedback("No se encontro tarjeta para ese TC/Cedula");
+      return;
+    }
+
+    if (existingCardIds.has(card.id)) {
+      setFeedback("Esa tarjeta ya existe en la relacion");
+      setScanInput("");
+      return;
+    }
+
+    if (rows.some((row) => row.cardId === card.id)) {
+      setFeedback("Esa tarjeta ya esta agregada en esta edicion");
+      setScanInput("");
+      return;
+    }
+
+    setRows((prev) => [
+      ...prev,
+      {
+        cardId: card.id,
+        tc: card.tc,
+        cedula: card.customer.cedula,
+        nombre: card.customer.nombre,
+        isRemote: card.isRemote,
+        comentario: "",
+      },
+    ]);
+    setScanInput("");
+    setFeedback("");
+  }
+
+  async function submit() {
+    if (!rows.length) {
+      setFeedback("Debes agregar al menos una tarjeta");
+      return;
+    }
+    if (redaction.tipo === "RETORNO") {
+      const missingReason = rows.find((row) => !row.comentario.trim());
+      if (missingReason) {
+        setFeedback(`Debes indicar motivo para la tarjeta ${missingReason.tc}`);
+        return;
+      }
+    }
+
+    setBusy(true);
+    setFeedback("");
+    await onSave(
+      rows.map((row) => ({
+        cardId: row.cardId,
+        isRemote: row.isRemote,
+        comentario: row.comentario.trim() || undefined,
+      })),
+    );
+    setBusy(false);
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-[140] flex items-start justify-center overflow-y-auto bg-black/40 px-4 py-6"
+      onClick={onClose}
+    >
+      <div
+        className="w-full max-w-4xl rounded-2xl bg-white p-5 shadow-2xl"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="mb-4 flex items-start justify-between gap-3">
+          <div>
+            <h3 className="font-display text-xl font-bold text-slate-900">
+              Editar relacion {redaction.id.slice(-6)}
+            </h3>
+            <p className="text-xs text-slate-500">
+              {redaction.tipo} · {redaction.status} · tarjetas actuales: {redaction.items.length}
+            </p>
+          </div>
+          <button onClick={onClose} className="rounded-lg border border-slate-300 px-2.5 py-1 text-sm">
+            Cerrar
+          </button>
+        </div>
+
+        <div className="mb-3 flex items-center gap-2 rounded-xl border border-blue-200 bg-blue-50 px-3 py-2">
+          <input
+            value={scanInput}
+            onChange={(event) => setScanInput(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                void addByScan();
+              }
+            }}
+            placeholder="Pistolear o escribir TC/Cedula y Enter"
+            className="flex-1 bg-transparent text-sm outline-none"
+            autoFocus
+          />
+          <button
+            type="button"
+            onClick={() => void addByScan()}
+            className="rounded-lg border border-blue-300 bg-white px-3 py-1.5 text-xs font-semibold text-blue-700"
+          >
+            Agregar
+          </button>
+        </div>
+
+        <div className="max-h-[52vh] overflow-y-auto rounded-xl border border-slate-200">
+          <table className="w-full text-left text-sm">
+            <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+              <tr>
+                <th className="px-3 py-2">No.</th>
+                <th className="px-3 py-2">TC</th>
+                <th className="px-3 py-2">Cedula</th>
+                <th className="px-3 py-2">Nombre</th>
+                <th className="px-3 py-2">Remota</th>
+                {redaction.tipo === "RETORNO" ? <th className="px-3 py-2">Motivo</th> : null}
+                <th className="px-3 py-2"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row, index) => (
+                <tr key={row.cardId} className="border-t border-slate-100">
+                  <td className="px-3 py-2 text-slate-400">{index + 1}</td>
+                  <td className="px-3 py-2 font-medium text-blue-700">{row.tc}</td>
+                  <td className="px-3 py-2">{row.cedula}</td>
+                  <td className="px-3 py-2">{row.nombre}</td>
+                  <td className="px-3 py-2">
+                    <input
+                      type="checkbox"
+                      checked={row.isRemote}
+                      onChange={(event) =>
+                        setRows((prev) =>
+                          prev.map((item) =>
+                            item.cardId === row.cardId ? { ...item, isRemote: event.target.checked } : item,
+                          ),
+                        )
+                      }
+                    />
+                  </td>
+                  {redaction.tipo === "RETORNO" ? (
+                    <td className="px-3 py-2">
+                      <input
+                        value={row.comentario}
+                        onChange={(event) =>
+                          setRows((prev) =>
+                            prev.map((item) =>
+                              item.cardId === row.cardId ? { ...item, comentario: event.target.value } : item,
+                            ),
+                          )
+                        }
+                        placeholder="Motivo de devolucion"
+                        className="w-full rounded-lg border border-slate-300 px-2 py-1"
+                      />
+                    </td>
+                  ) : null}
+                  <td className="px-3 py-2 text-right">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setRows((prev) => prev.filter((item) => item.cardId !== row.cardId))
+                      }
+                      className="rounded-md border border-slate-300 px-2 py-1 text-xs"
+                    >
+                      Quitar
+                    </button>
+                  </td>
+                </tr>
+              ))}
+              {!rows.length ? (
+                <tr>
+                  <td
+                    colSpan={redaction.tipo === "RETORNO" ? 7 : 6}
+                    className="px-3 py-8 text-center text-sm text-slate-500"
+                  >
+                    No hay tarjetas agregadas en esta edicion.
+                  </td>
+                </tr>
+              ) : null}
+            </tbody>
+          </table>
+        </div>
+
+        {feedback ? <p className="mt-3 text-sm text-emerald-700">{feedback}</p> : null}
+
+        <div className="mt-4 flex justify-end gap-2">
+          <button onClick={onClose} className="rounded-lg border border-slate-300 px-3 py-2 text-sm">
+            Cancelar
+          </button>
+          <button
+            onClick={() => void submit()}
+            disabled={busy || !rows.length}
+            className="rounded-lg bg-[#0f2544] px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
+          >
+            {busy ? "Guardando..." : "Guardar cambios"}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

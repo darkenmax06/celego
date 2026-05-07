@@ -140,6 +140,7 @@ model Messenger {
   nombre           String
   telefono         String?
   zonaPrincipal    String?
+  provinciaTrabajo String?
   activo           Boolean               @default(true)
   createdAt        DateTime              @default(now())
   updatedAt        DateTime              @updatedAt

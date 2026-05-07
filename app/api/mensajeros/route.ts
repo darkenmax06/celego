@@ -13,6 +13,7 @@ const createSchema = z.object({
   nombre: z.string().min(2),
   telefono: z.string().optional(),
   zonaPrincipal: z.string().optional(),
+  provinciaTrabajo: z.string().optional(),
   rates: z.array(rateSchema).default([]),
 });
 
@@ -96,6 +97,7 @@ export async function POST(request: Request) {
       nombre: parsed.data.nombre,
       telefono: parsed.data.telefono,
       zonaPrincipal: parsed.data.zonaPrincipal,
+      provinciaTrabajo: parsed.data.provinciaTrabajo,
       serviceRates: {
         create: parsed.data.rates,
       },
@@ -121,6 +123,7 @@ export async function PATCH(request: Request) {
       nombre: parsed.data.nombre,
       telefono: parsed.data.telefono,
       zonaPrincipal: parsed.data.zonaPrincipal,
+      provinciaTrabajo: parsed.data.provinciaTrabajo,
       activo: parsed.data.activo,
     },
   });

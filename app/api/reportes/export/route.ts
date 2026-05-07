@@ -3,6 +3,7 @@ import { CardStatus, Prisma, RedactionStatus, RedactionType } from "@prisma/clie
 import ExcelJS from "exceljs";
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 import { requireApiSession } from "@/lib/api-session";
+import { dedupeBillingCardsByCustomerAndDispatchDate } from "@/lib/billing";
 import { formatDateEs } from "@/lib/date";
 import { fromCents } from "@/lib/money";
 import { prisma } from "@/lib/prisma";
@@ -403,15 +404,35 @@ export async function GET(request: NextRequest) {
         ...(zone && zone !== "ALL" ? { zona: zone } : {}),
         ...(dispatchDate ? { dispatchDate } : {}),
       },
-      select: { zona: true, isRemote: true },
+      select: {
+        id: true,
+        zona: true,
+        isRemote: true,
+        dispatchDate: true,
+        customer: {
+          select: {
+            cedula: true,
+          },
+        },
+      },
       take: 5000,
       orderBy: { dispatchDate: "desc" },
       }),
       prisma.zoneTariff.findMany({ include: { ranges: true } }),
     ]);
 
+    const billableCards = dedupeBillingCardsByCustomerAndDispatchDate(
+      cards.map((card) => ({
+        id: card.id,
+        zona: card.zona,
+        isRemote: card.isRemote,
+        dispatchDate: card.dispatchDate,
+        customerCedula: card.customer.cedula,
+      })),
+    );
+
     const grouped = new Map<string, number>();
-    cards.forEach((card) => {
+    billableCards.forEach((card) => {
       grouped.set(card.zona, (grouped.get(card.zona) ?? 0) + 1);
     });
 
@@ -436,7 +457,7 @@ export async function GET(request: NextRequest) {
       };
     });
 
-    const remoteCount = cards.filter((card) => card.isRemote).length;
+    const remoteCount = billableCards.filter((card) => card.isRemote).length;
     if (remoteCount > 0) {
       const remoteTariff = tariffMap.get("REMOTA");
       const remoteSurchargeCents = resolveCentsPerCard(

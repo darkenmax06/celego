@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { CardStatus } from "@prisma/client";
 import { requireApiSession } from "@/lib/api-session";
+import { dedupeBillingCardsByCustomerAndDispatchDate } from "@/lib/billing";
 import { prisma } from "@/lib/prisma";
 
 function resolveCentsPerCard(
@@ -63,12 +64,32 @@ export async function GET(request: NextRequest) {
   const [cards, tariffs] = await Promise.all([
     prisma.card.findMany({
       where,
-      select: { zona: true, isRemote: true },
+      select: {
+        id: true,
+        zona: true,
+        isRemote: true,
+        dispatchDate: true,
+        customer: {
+          select: {
+            cedula: true,
+          },
+        },
+      },
       orderBy: { dispatchDate: "desc" },
       take: 5000,
     }),
     prisma.zoneTariff.findMany({ where: { active: true }, include: { ranges: true } }),
   ]);
+
+  const billableCards = dedupeBillingCardsByCustomerAndDispatchDate(
+    cards.map((card) => ({
+      id: card.id,
+      zona: card.zona,
+      isRemote: card.isRemote,
+      dispatchDate: card.dispatchDate,
+      customerCedula: card.customer.cedula,
+    })),
+  );
 
   const tariffMap = new Map(tariffs.map((tariff) => [tariff.zona, tariff]));
 
@@ -82,7 +103,7 @@ export async function GET(request: NextRequest) {
     }
   >();
 
-  for (const card of cards) {
+  for (const card of billableCards) {
     const key = card.zona;
     const current = grouped.get(key) ?? {
       zona: key,
@@ -126,7 +147,7 @@ export async function GET(request: NextRequest) {
       };
     });
 
-  const remoteCount = cards.filter((card) => card.isRemote).length;
+  const remoteCount = billableCards.filter((card) => card.isRemote).length;
   const remoteTariff = tariffMap.get("REMOTA");
   const remoteSurchargeCents = resolveCentsPerCard(
     remoteCount,
@@ -159,6 +180,6 @@ export async function GET(request: NextRequest) {
     totalCents: totalUsdCents,
     totalUsdCents,
     totalDopCents,
-    totalEntregas: cards.length,
+    totalEntregas: billableCards.length,
   });
 }
