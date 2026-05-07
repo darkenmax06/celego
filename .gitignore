@@ -32,6 +32,9 @@ yarn-error.log*
 
 # local temp
 celego-app-temp/
+mobile/.expo/
+mobile/dist/
+mobile/build-log.txt
 
 # env files (can opt-in for committing if needed)
 .env*

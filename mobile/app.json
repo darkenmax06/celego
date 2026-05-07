@@ -1,0 +1,32 @@
+{
+  "expo": {
+    "name": "Celego Mensajeros",
+    "slug": "celego-mensajeros",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "android": {
+      "package": "com.celego.mensajeros"
+    },
+    "ios": {
+      "bundleIdentifier": "com.celego.mensajeros"
+    },
+    "plugins": [
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "usesCleartextTraffic": true
+          }
+        }
+      ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "4dfef046-736a-41d6-83c5-c2b6124a2ceb"
+      }
+    }
+  }
+}
