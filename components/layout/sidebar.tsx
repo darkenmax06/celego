@@ -15,6 +15,7 @@ import {
   Settings,
   LogOut,
   ScanLine,
+  Images,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { type ModuleName } from "@/lib/constants";
@@ -28,6 +29,7 @@ const NAV_ITEMS: Array<{
   { module: "dashboard", label: "Dashboard", href: "/dashboard", icon: ChartArea },
   { module: "tarjetas", label: "Tarjetas", href: "/tarjetas", icon: CreditCard },
   { module: "modificacion_masiva", label: "Imagenes Digitales", href: "/modificacion-masiva", icon: ScanLine },
+  { module: "status_digitales", label: "Status Digitales", href: "/status-digitales", icon: Images },
   { module: "rutas", label: "Rutas", href: "/rutas", icon: Route },
   { module: "operativo", label: "Operativo", href: "/operativo", icon: Phone },
   { module: "redaccion", label: "Redaccion", href: "/redaccion", icon: FileText },

@@ -5,6 +5,7 @@ const ACCESS: Record<ModuleName, UserRole[]> = {
   dashboard: ["ADMIN", "OPERADOR", "FACTURACION", "MENSAJERO"],
   tarjetas: ["ADMIN", "OPERADOR"],
   modificacion_masiva: ["ADMIN", "OPERADOR"],
+  status_digitales: ["ADMIN", "OPERADOR"],
   rutas: ["ADMIN", "OPERADOR"],
   operativo: ["ADMIN", "OPERADOR"],
   redaccion: ["ADMIN", "OPERADOR"],
