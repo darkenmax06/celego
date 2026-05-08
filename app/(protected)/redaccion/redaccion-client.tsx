@@ -85,6 +85,7 @@ export default function RedaccionClient() {
   const [message, setMessage] = useState("");
 
   const listaActiva = mode === "retorno" ? retornos : entregas;
+  const allRetornosSelected = retornos.length > 0 && selectedRetornos.length === retornos.length;
   const approvedRedactionIds = useMemo(
     () => redacciones.filter((row) => row.status === "APROBADA").map((row) => row.id),
     [redacciones],
@@ -218,6 +219,14 @@ export default function RedaccionClient() {
     );
     setSelectedRetornos([]);
     setBulkMotivo("");
+  }
+
+  function toggleSelectAllRetornos() {
+    if (allRetornosSelected) {
+      setSelectedRetornos([]);
+      return;
+    }
+    setSelectedRetornos(retornos.map((item) => item.cardId));
   }
 
   async function approveRedaction() {
@@ -418,6 +427,18 @@ export default function RedaccionClient() {
             Acuses de Entrega ({entregas.length})
           </button>
         </div>
+
+        {mode === "retorno" && retornos.length > 0 ? (
+          <div className="mb-3 flex justify-end">
+            <button
+              type="button"
+              onClick={toggleSelectAllRetornos}
+              className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700"
+            >
+              {allRetornosSelected ? "Quitar selección total" : "Seleccionar todas las tarjetas"}
+            </button>
+          </div>
+        ) : null}
 
         <div className="mb-4 flex items-center gap-3 rounded-xl border border-blue-200 bg-blue-50 px-4 py-3">
           <span className="text-lg text-blue-700">⊙</span>

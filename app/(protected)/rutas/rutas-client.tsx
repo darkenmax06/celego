@@ -7,6 +7,7 @@ import { StatusBadge } from "@/components/ui/status-badge";
 
 type Messenger = { id: string; nombre: string };
 type ProvinceRow = { id: string; nombre: string; zona: string; active: boolean };
+type ReturnReasonRow = { id: string; nombre: string; active: boolean };
 type PaginationMeta = { page: number; pageSize: number; total: number; totalPages: number };
 
 type RouteItem = {
@@ -117,6 +118,7 @@ export default function RutasClient() {
 
   const [messengers, setMessengers] = useState<Messenger[]>([]);
   const [provinces, setProvinces] = useState<ProvinceRow[]>([]);
+  const [returnReasons, setReturnReasons] = useState<string[]>([]);
   const [routes, setRoutes] = useState<RouteRow[]>([]);
   const [lots, setLots] = useState<LotRow[]>([]);
   const [routesPagination, setRoutesPagination] = useState<PaginationMeta>({
@@ -178,6 +180,15 @@ export default function RutasClient() {
     }
   }
 
+  async function loadReturnReasons() {
+    const res = await fetch("/api/config/motivos-retorno", { cache: "no-store" });
+    const json = await res.json();
+    const list = (json.motivos ?? [])
+      .filter((item: ReturnReasonRow) => item.active)
+      .map((item: ReturnReasonRow) => item.nombre);
+    setReturnReasons(list);
+  }
+
   async function loadRoutes(pageArg = routePage) {
     const params = new URLSearchParams({
       date: fecha,
@@ -224,7 +235,7 @@ export default function RutasClient() {
   }
 
   useEffect(() => {
-    void Promise.all([loadMessengers(), loadProvinces()]);
+    void Promise.all([loadMessengers(), loadProvinces(), loadReturnReasons()]);
   }, []);
 
   useEffect(() => {
@@ -354,6 +365,7 @@ export default function RutasClient() {
     itemId: string,
     result: "EN_RUTA" | "ACUSE_RECIBIDO" | "DEVUELTA_TIENDA",
     comentario?: string,
+    options?: { silent?: boolean; skipRefresh?: boolean },
   ) {
     const res = await fetch("/api/rutas", {
       method: "PATCH",
@@ -367,17 +379,24 @@ export default function RutasClient() {
     });
     const data = await res.json();
     if (!res.ok) {
-      setMessage(data.error ?? "No se pudo actualizar tarjeta de ruta");
+      if (!options?.silent) {
+        setMessage(data.error ?? "No se pudo actualizar tarjeta de ruta");
+      }
       return;
     }
-    setMessage(`Tarjeta marcada como ${result}`);
-    await Promise.all([loadRoutes(routePage), loadLots(lotPage)]);
+    if (!options?.silent) {
+      setMessage(`Tarjeta marcada como ${result}`);
+    }
+    if (!options?.skipRefresh) {
+      await Promise.all([loadRoutes(routePage), loadLots(lotPage)]);
+    }
   }
 
   async function markLotTrackingItem(
     lotItemId: string,
     result: "ACUSE_RECIBIDO" | "DEVUELTA_TIENDA" | "EN_RUTA",
     comentario?: string,
+    options?: { silent?: boolean; skipRefresh?: boolean },
   ) {
     const res = await fetch("/api/lotes", {
       method: "PATCH",
@@ -391,19 +410,25 @@ export default function RutasClient() {
     });
     const data = await res.json();
     if (!res.ok) {
-      setMessage(data.error ?? "No se pudo actualizar item de lote");
+      if (!options?.silent) {
+        setMessage(data.error ?? "No se pudo actualizar item de lote");
+      }
       return;
     }
-    setMessage(
-      `Item de lote actualizado: ${
-        result === "ACUSE_RECIBIDO"
-          ? "ACUSE RECIBIDO"
-          : result === "DEVUELTA_TIENDA"
-            ? "DEVUELTA A TIENDA"
-            : "EN RUTA"
-      }`,
-    );
-    await Promise.all([loadRoutes(routePage), loadLots(lotPage)]);
+    if (!options?.silent) {
+      setMessage(
+        `Item de lote actualizado: ${
+          result === "ACUSE_RECIBIDO"
+            ? "ACUSE RECIBIDO"
+            : result === "DEVUELTA_TIENDA"
+              ? "DEVUELTA A TIENDA"
+              : "EN RUTA"
+        }`,
+      );
+    }
+    if (!options?.skipRefresh) {
+      await Promise.all([loadRoutes(routePage), loadLots(lotPage)]);
+    }
   }
 
   async function createLot() {
@@ -943,6 +968,7 @@ export default function RutasClient() {
       {selectedRouteLot ? (
         <RouteLotModal
           route={selectedRouteLot}
+          returnReasons={returnReasons}
           onClose={() => setSelectedRouteForLot(null)}
           onMark={markRouteItem}
           onRequireReturnReason={requestReturnReason}
@@ -952,6 +978,7 @@ export default function RutasClient() {
       {selectedLotTracking ? (
         <TrackingLotModal
           lot={selectedLotTracking}
+          returnReasons={returnReasons}
           onClose={() => setSelectedLotTrackingId(null)}
           onMark={markLotTrackingItem}
           onRequireReturnReason={requestReturnReason}
@@ -1090,19 +1117,75 @@ function ListPager({
 
 function RouteLotModal({
   route,
+  returnReasons,
   onClose,
   onMark,
   onRequireReturnReason,
 }: {
   route: RouteRow;
+  returnReasons: string[];
   onClose: () => void;
   onMark: (
     itemId: string,
     result: "EN_RUTA" | "ACUSE_RECIBIDO" | "DEVUELTA_TIENDA",
     comentario?: string,
+    options?: { silent?: boolean; skipRefresh?: boolean },
   ) => Promise<void>;
   onRequireReturnReason: (existing?: string | null) => string | null;
 }) {
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [bulkStatus, setBulkStatus] = useState<"EN_RUTA" | "ACUSE_RECIBIDO" | "DEVUELTA_TIENDA">("ACUSE_RECIBIDO");
+  const [bulkReason, setBulkReason] = useState("");
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [bulkFeedback, setBulkFeedback] = useState("");
+  const allSelected = route.items.length > 0 && selectedIds.length === route.items.length;
+
+  useEffect(() => {
+    setSelectedIds((prev) => prev.filter((id) => route.items.some((item) => item.id === id)));
+  }, [route.items]);
+
+  function toggleItemSelection(itemId: string, checked: boolean) {
+    setSelectedIds((prev) => {
+      if (checked) {
+        if (prev.includes(itemId)) return prev;
+        return [...prev, itemId];
+      }
+      return prev.filter((id) => id !== itemId);
+    });
+  }
+
+  function toggleSelectAll(checked: boolean) {
+    setSelectedIds(checked ? route.items.map((item) => item.id) : []);
+  }
+
+  async function applyBulkStatus() {
+    if (!selectedIds.length) {
+      setBulkFeedback("Selecciona al menos una tarjeta.");
+      return;
+    }
+    if (bulkStatus === "DEVUELTA_TIENDA" && !bulkReason.trim()) {
+      setBulkFeedback("Selecciona o escribe el motivo de devolución.");
+      return;
+    }
+
+    setBulkBusy(true);
+    setBulkFeedback("");
+    const motivo = bulkReason.trim();
+    for (let index = 0; index < selectedIds.length; index += 1) {
+      const itemId = selectedIds[index];
+      const isLast = index === selectedIds.length - 1;
+      await onMark(
+        itemId,
+        bulkStatus,
+        bulkStatus === "DEVUELTA_TIENDA" ? motivo : undefined,
+        { silent: true, skipRefresh: !isLast },
+      );
+    }
+    setBulkBusy(false);
+    setBulkFeedback(`Se actualizaron ${selectedIds.length} tarjetas.`);
+    setSelectedIds([]);
+  }
+
   return (
     <div className="fixed inset-0 z-[125] flex items-start justify-center overflow-y-auto bg-black/40 px-4 py-6" onClick={onClose}>
       <div className="flex max-h-[calc(100vh-3rem)] w-full max-w-5xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl" onClick={(event) => event.stopPropagation()}>
@@ -1123,10 +1206,64 @@ function RouteLotModal({
             <Stat label="Pendientes" value={route.items.filter((item) => getRouteLifecycle(item) === "EN RUTA").length} />
           </div>
 
+          <div className="mx-4 mb-3 rounded-xl border border-slate-200 p-3">
+            <div className="mb-2 flex flex-wrap items-center gap-2">
+              <label className="inline-flex items-center gap-2 text-sm text-slate-700">
+                <input
+                  type="checkbox"
+                  checked={allSelected}
+                  onChange={(event) => toggleSelectAll(event.target.checked)}
+                />
+                Seleccionar todas ({selectedIds.length})
+              </label>
+              <select
+                value={bulkStatus}
+                onChange={(event) =>
+                  setBulkStatus(event.target.value as "EN_RUTA" | "ACUSE_RECIBIDO" | "DEVUELTA_TIENDA")
+                }
+                className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
+              >
+                <option value="ACUSE_RECIBIDO">Acuse recibido</option>
+                <option value="DEVUELTA_TIENDA">Devuelta a tienda</option>
+                <option value="EN_RUTA">En ruta</option>
+              </select>
+              <button
+                type="button"
+                onClick={() => void applyBulkStatus()}
+                disabled={bulkBusy || !selectedIds.length}
+                className="rounded-lg bg-slate-900 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50"
+              >
+                {bulkBusy ? "Aplicando..." : "Aplicar a seleccionadas"}
+              </button>
+            </div>
+            {bulkStatus === "DEVUELTA_TIENDA" ? (
+              <input
+                value={bulkReason}
+                onChange={(event) => setBulkReason(event.target.value)}
+                list="route-return-reasons"
+                placeholder="Motivo de devolución para seleccionadas"
+                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+              />
+            ) : null}
+            {bulkFeedback ? <p className="mt-2 text-xs text-emerald-700">{bulkFeedback}</p> : null}
+            <datalist id="route-return-reasons">
+              {returnReasons.map((reason) => (
+                <option key={reason} value={reason} />
+              ))}
+            </datalist>
+          </div>
+
           <div className="overflow-x-auto px-4 pb-4">
             <table className="w-full text-left text-sm">
               <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
                 <tr>
+                  <th className="px-3 py-2 text-center">
+                    <input
+                      type="checkbox"
+                      checked={allSelected}
+                      onChange={(event) => toggleSelectAll(event.target.checked)}
+                    />
+                  </th>
                   <th className="px-3 py-2">No. tarjeta</th>
                   <th className="px-3 py-2">Cedula</th>
                   <th className="px-3 py-2">Cliente</th>
@@ -1138,6 +1275,13 @@ function RouteLotModal({
               <tbody>
                 {route.items.map((item) => (
                   <tr key={item.id} className="border-t border-slate-100">
+                    <td className="px-3 py-2 text-center">
+                      <input
+                        type="checkbox"
+                        checked={selectedIds.includes(item.id)}
+                        onChange={(event) => toggleItemSelection(item.id, event.target.checked)}
+                      />
+                    </td>
                     <td className="px-3 py-2 font-display text-xs font-semibold text-blue-700">{item.card.tc}</td>
                     <td className="px-3 py-2">{item.card.customer.cedula}</td>
                     <td className="px-3 py-2">{item.card.customer.nombre}</td>
@@ -1181,17 +1325,76 @@ function RouteLotModal({
 
 function TrackingLotModal({
   lot,
+  returnReasons,
   onClose,
   onMark,
   onRequireReturnReason,
 }: {
   lot: LotRow;
+  returnReasons: string[];
   onClose: () => void;
-  onMark: (itemId: string, result: "ACUSE_RECIBIDO" | "DEVUELTA_TIENDA" | "EN_RUTA", comentario?: string) => Promise<void>;
+  onMark: (
+    itemId: string,
+    result: "ACUSE_RECIBIDO" | "DEVUELTA_TIENDA" | "EN_RUTA",
+    comentario?: string,
+    options?: { silent?: boolean; skipRefresh?: boolean },
+  ) => Promise<void>;
   onRequireReturnReason: (existing?: string | null) => string | null;
 }) {
   const [scanInput, setScanInput] = useState("");
   const [scanResult, setScanResult] = useState("");
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [bulkStatus, setBulkStatus] = useState<"ACUSE_RECIBIDO" | "DEVUELTA_TIENDA" | "EN_RUTA">("ACUSE_RECIBIDO");
+  const [bulkReason, setBulkReason] = useState("");
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [bulkFeedback, setBulkFeedback] = useState("");
+  const allSelected = lot.items.length > 0 && selectedIds.length === lot.items.length;
+
+  useEffect(() => {
+    setSelectedIds((prev) => prev.filter((id) => lot.items.some((item) => item.id === id)));
+  }, [lot.items]);
+
+  function toggleItemSelection(itemId: string, checked: boolean) {
+    setSelectedIds((prev) => {
+      if (checked) {
+        if (prev.includes(itemId)) return prev;
+        return [...prev, itemId];
+      }
+      return prev.filter((id) => id !== itemId);
+    });
+  }
+
+  function toggleSelectAll(checked: boolean) {
+    setSelectedIds(checked ? lot.items.map((item) => item.id) : []);
+  }
+
+  async function applyBulkStatus() {
+    if (!selectedIds.length) {
+      setBulkFeedback("Selecciona al menos una tarjeta.");
+      return;
+    }
+    if (bulkStatus === "DEVUELTA_TIENDA" && !bulkReason.trim()) {
+      setBulkFeedback("Selecciona o escribe el motivo de devolución.");
+      return;
+    }
+
+    setBulkBusy(true);
+    setBulkFeedback("");
+    const motivo = bulkReason.trim();
+    for (let index = 0; index < selectedIds.length; index += 1) {
+      const itemId = selectedIds[index];
+      const isLast = index === selectedIds.length - 1;
+      await onMark(
+        itemId,
+        bulkStatus,
+        bulkStatus === "DEVUELTA_TIENDA" ? motivo : undefined,
+        { silent: true, skipRefresh: !isLast },
+      );
+    }
+    setBulkBusy(false);
+    setBulkFeedback(`Se actualizaron ${selectedIds.length} tarjetas.`);
+    setSelectedIds([]);
+  }
 
   async function onScan(event: KeyboardEvent<HTMLInputElement>) {
     if (event.key !== "Enter") return;
@@ -1239,6 +1442,53 @@ function TrackingLotModal({
           </div>
 
           <div className="mb-3 rounded-xl border border-slate-200 p-3">
+            <div className="mb-2 flex flex-wrap items-center gap-2">
+              <label className="inline-flex items-center gap-2 text-sm text-slate-700">
+                <input
+                  type="checkbox"
+                  checked={allSelected}
+                  onChange={(event) => toggleSelectAll(event.target.checked)}
+                />
+                Seleccionar todas ({selectedIds.length})
+              </label>
+              <select
+                value={bulkStatus}
+                onChange={(event) =>
+                  setBulkStatus(event.target.value as "ACUSE_RECIBIDO" | "DEVUELTA_TIENDA" | "EN_RUTA")
+                }
+                className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
+              >
+                <option value="ACUSE_RECIBIDO">Acuse recibido</option>
+                <option value="DEVUELTA_TIENDA">Devuelta a tienda</option>
+                <option value="EN_RUTA">En ruta</option>
+              </select>
+              <button
+                type="button"
+                onClick={() => void applyBulkStatus()}
+                disabled={bulkBusy || !selectedIds.length}
+                className="rounded-lg bg-slate-900 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50"
+              >
+                {bulkBusy ? "Aplicando..." : "Aplicar a seleccionadas"}
+              </button>
+            </div>
+            {bulkStatus === "DEVUELTA_TIENDA" ? (
+              <input
+                value={bulkReason}
+                onChange={(event) => setBulkReason(event.target.value)}
+                list="tracking-return-reasons"
+                placeholder="Motivo de devolución para seleccionadas"
+                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+              />
+            ) : null}
+            {bulkFeedback ? <p className="mt-2 text-xs text-emerald-700">{bulkFeedback}</p> : null}
+            <datalist id="tracking-return-reasons">
+              {returnReasons.map((reason) => (
+                <option key={reason} value={reason} />
+              ))}
+            </datalist>
+          </div>
+
+          <div className="mb-3 rounded-xl border border-slate-200 p-3">
             <input
               value={scanInput}
               onChange={(event) => setScanInput(event.target.value)}
@@ -1253,6 +1503,13 @@ function TrackingLotModal({
             <table className="w-full text-left text-sm">
               <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
                 <tr>
+                  <th className="px-3 py-2 text-center">
+                    <input
+                      type="checkbox"
+                      checked={allSelected}
+                      onChange={(event) => toggleSelectAll(event.target.checked)}
+                    />
+                  </th>
                   <th className="px-3 py-2">No. tarjeta</th>
                   <th className="px-3 py-2">Cedula</th>
                   <th className="px-3 py-2">Telefono</th>
@@ -1274,6 +1531,13 @@ function TrackingLotModal({
                     (item.retornada ?? "").toUpperCase() === "SI" || routeResult === "DEVUELTA_TIENDA";
                   return (
                     <tr key={item.id} className="border-t border-slate-100">
+                      <td className="px-3 py-2 text-center">
+                        <input
+                          type="checkbox"
+                          checked={selectedIds.includes(item.id)}
+                          onChange={(event) => toggleItemSelection(item.id, event.target.checked)}
+                        />
+                      </td>
                       <td className="px-3 py-2 font-display text-xs font-semibold text-blue-700">{item.tc}</td>
                       <td className="px-3 py-2">{item.cedula ?? "-"}</td>
                       <td className="px-3 py-2">{item.telefono ?? "-"}</td>

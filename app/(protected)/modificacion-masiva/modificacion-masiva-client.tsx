@@ -33,6 +33,7 @@ const zonas = ["Metro", "Este", "Norte", "Sur"];
 export default function ModificacionMasivaClient() {
   const [scanInput, setScanInput] = useState("");
   const [scannedCards, setScannedCards] = useState<CardRow[]>([]);
+  const [selectedCardIds, setSelectedCardIds] = useState<string[]>([]);
   const [batchStatus, setBatchStatus] = useState<string>("UNCHANGED");
   const [batchProvincia, setBatchProvincia] = useState("UNCHANGED");
   const [batchZona, setBatchZona] = useState("UNCHANGED");
@@ -53,10 +54,15 @@ export default function ModificacionMasivaClient() {
     })();
   }, []);
 
+  useEffect(() => {
+    setSelectedCardIds((prev) => prev.filter((id) => scannedCards.some((card) => card.id === id)));
+  }, [scannedCards]);
+
   const provincias = useMemo(
     () => Array.from(new Set(scannedCards.map((card) => card.provincia))).sort(),
     [scannedCards],
   );
+  const allSelected = scannedCards.length > 0 && selectedCardIds.length === scannedCards.length;
 
   async function findCard(identifier: string) {
     const res = await fetch(`/api/tarjetas?q=${encodeURIComponent(identifier)}`, { cache: "no-store" });
@@ -94,6 +100,7 @@ export default function ModificacionMasivaClient() {
     }
 
     setScannedCards((prev) => [...prev, card]);
+    setSelectedCardIds((prev) => [...prev, card.id]);
     setScanInput("");
     setMessage("");
   }
@@ -110,6 +117,10 @@ export default function ModificacionMasivaClient() {
       setMessage("Primero pistolea tarjetas");
       return;
     }
+    if (!selectedCardIds.length) {
+      setMessage("Selecciona al menos una tarjeta");
+      return;
+    }
     if (
       batchStatus === "UNCHANGED" &&
       batchProvincia === "UNCHANGED" &&
@@ -120,8 +131,9 @@ export default function ModificacionMasivaClient() {
       return;
     }
 
+    const selectedCards = scannedCards.filter((card) => selectedCardIds.includes(card.id));
     const payload: Record<string, unknown> = {
-      cardIds: scannedCards.map((card) => card.id),
+      cardIds: selectedCards.map((card) => card.id),
       note: "Cambio masivo por pistoleo",
     };
     const selectedStatus = batchStatus !== "UNCHANGED" ? batchStatus : null;
@@ -149,8 +161,9 @@ export default function ModificacionMasivaClient() {
       return;
     }
 
-    setMessage(`Cambios aplicados en ${scannedCards.length} tarjetas`);
+    setMessage(`Cambios aplicados en ${selectedCards.length} tarjetas`);
     setScannedCards([]);
+    setSelectedCardIds([]);
     setBatchStatus("UNCHANGED");
     setBatchProvincia("UNCHANGED");
     setBatchZona("UNCHANGED");
@@ -158,10 +171,28 @@ export default function ModificacionMasivaClient() {
     setBatchReturnReason("");
   }
 
+  function toggleSelectCard(cardId: string, checked: boolean) {
+    setSelectedCardIds((prev) => {
+      if (checked) {
+        if (prev.includes(cardId)) return prev;
+        return [...prev, cardId];
+      }
+      return prev.filter((id) => id !== cardId);
+    });
+  }
+
+  function toggleSelectAll() {
+    if (allSelected) {
+      setSelectedCardIds([]);
+      return;
+    }
+    setSelectedCardIds(scannedCards.map((card) => card.id));
+  }
+
   return (
     <div>
       <PageHeader
-        title="Modificacion masiva"
+        title="Imagenes digitales"
         subtitle="Pistolea tarjetas y modifica estado, provincia o zona en lote"
       />
 
@@ -254,11 +285,21 @@ export default function ModificacionMasivaClient() {
             onClick={() => void applyBatchChanges()}
             className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white"
           >
-            Aplicar cambios ({scannedCards.length})
+            Aplicar cambios ({selectedCardIds.length})
           </button>
           <button
             type="button"
-            onClick={() => setScannedCards([])}
+            onClick={toggleSelectAll}
+            className="rounded-xl border border-slate-300 px-4 py-2 text-sm"
+          >
+            {allSelected ? "Quitar seleccion total" : "Seleccionar todas"}
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setScannedCards([]);
+              setSelectedCardIds([]);
+            }}
             className="rounded-xl border border-slate-300 px-4 py-2 text-sm"
           >
             Limpiar
@@ -273,6 +314,9 @@ export default function ModificacionMasivaClient() {
           <table className="w-full text-left text-sm">
             <thead className="text-xs uppercase tracking-wide text-slate-500">
               <tr>
+                <th className="pb-2">
+                  <input type="checkbox" checked={allSelected} onChange={() => toggleSelectAll()} />
+                </th>
                 <th className="pb-2">TC</th>
                 <th className="pb-2">Cliente</th>
                 <th className="pb-2">Cedula</th>
@@ -286,6 +330,13 @@ export default function ModificacionMasivaClient() {
             <tbody>
               {scannedCards.map((card) => (
                 <tr key={card.id} className="border-t border-slate-100">
+                  <td className="py-2">
+                    <input
+                      type="checkbox"
+                      checked={selectedCardIds.includes(card.id)}
+                      onChange={(event) => toggleSelectCard(card.id, event.target.checked)}
+                    />
+                  </td>
                   <td className="py-2 font-medium text-blue-700">{card.tc}</td>
                   <td className="py-2">{card.customer.nombre}</td>
                   <td className="py-2">{card.customer.cedula}</td>
@@ -309,7 +360,7 @@ export default function ModificacionMasivaClient() {
               ))}
               {!scannedCards.length ? (
                 <tr>
-                  <td colSpan={8} className="py-6 text-center text-sm text-slate-500">
+                  <td colSpan={9} className="py-6 text-center text-sm text-slate-500">
                     No hay tarjetas pistoleadas.
                   </td>
                 </tr>
