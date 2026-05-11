@@ -146,7 +146,7 @@ export async function POST(request: Request) {
   const [cards, tariffs] = await Promise.all([
     prisma.card.findMany({
       where: {
-        status: { in: [CardStatus.ENTREGADA, CardStatus.ENTREGA_DIGITAL] },
+        status: CardStatus.ENTREGADA,
         dispatchDate: { gte: fromDate, lte: toDate },
       },
       select: {

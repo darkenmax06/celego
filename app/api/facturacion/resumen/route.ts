@@ -43,7 +43,7 @@ export async function GET(request: NextRequest) {
   const fxRate = parseFxRate(request.nextUrl.searchParams.get("fxRate"));
 
   const where: Record<string, unknown> = {
-    status: { in: [CardStatus.ENTREGADA, CardStatus.ENTREGA_DIGITAL] },
+    status: CardStatus.ENTREGADA,
   };
 
   if (fromStr || toStr) {

@@ -13,20 +13,12 @@ const reportTypes = [
 
 const formats = ["xlsx", "csv", "pdf"] as const;
 
-function monthDefaults() {
-  const now = new Date();
-  const from = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().slice(0, 10);
-  const to = new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().slice(0, 10);
-  return { from, to };
-}
-
 export default function ReportesClient() {
-  const defaults = monthDefaults();
   const [type, setType] = useState<(typeof reportTypes)[number]["value"]>("tarjetas");
   const [status, setStatus] = useState("ALL");
   const [zona, setZona] = useState("ALL");
-  const [from, setFrom] = useState(defaults.from);
-  const [to, setTo] = useState(defaults.to);
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
   const [message, setMessage] = useState("");
 
   async function exportFile(format: (typeof formats)[number]) {
@@ -34,8 +26,8 @@ export default function ReportesClient() {
     if (status !== "ALL") params.set("status", status);
     if (zona !== "ALL") params.set("zona", zona);
     if (type === "tarjetas") {
-      params.set("from", from);
-      params.set("to", to);
+      if (from) params.set("from", from);
+      if (to) params.set("to", to);
     }
 
     const res = await fetch(`/api/reportes/export?${params.toString()}`);

@@ -37,7 +37,10 @@ type Summary = {
 function parseImageFileName(fileName: string) {
   const noExt = fileName.replace(/\.[^/.]+$/, "").trim();
   const hasRemoteTag = /\(\s*zr\s*\)/i.test(noExt);
-  const identifier = noExt.replace(/\(\s*zr\s*\)/gi, "").trim();
+  const identifier = noExt
+    .replace(/\(\s*zr\s*\)/gi, "")
+    .replace(/\s*\(\d+\)\s*$/, "")
+    .trim();
   return { identifier, hasRemoteTag };
 }
 

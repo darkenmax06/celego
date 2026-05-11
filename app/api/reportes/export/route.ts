@@ -42,6 +42,56 @@ function parseFxRate(raw: string | null) {
   return parsed;
 }
 
+type LifecycleDates = {
+  deliveryDate: Date | null;
+  returnDate: Date | null;
+};
+
+async function getLifecycleDatesByCard(cardIds: string[]) {
+  const uniqueCardIds = [...new Set(cardIds.filter(Boolean))];
+  const byCard = new Map<string, LifecycleDates>();
+  if (!uniqueCardIds.length) return byCard;
+
+  const logs = await prisma.cardStatusLog.findMany({
+    where: {
+      cardId: { in: uniqueCardIds },
+      toStatus: {
+        in: [
+          CardStatus.ENTREGADA,
+          CardStatus.ENTREGA_DIGITAL,
+          CardStatus.RETORNADA,
+          CardStatus.DEVUELTA_TIENDA,
+        ],
+      },
+    },
+    select: {
+      cardId: true,
+      toStatus: true,
+      createdAt: true,
+    },
+    orderBy: { createdAt: "desc" },
+  });
+
+  for (const log of logs) {
+    const current = byCard.get(log.cardId) ?? { deliveryDate: null, returnDate: null };
+    if (
+      (log.toStatus === CardStatus.ENTREGADA || log.toStatus === CardStatus.ENTREGA_DIGITAL) &&
+      !current.deliveryDate
+    ) {
+      current.deliveryDate = log.createdAt;
+    }
+    if (
+      (log.toStatus === CardStatus.RETORNADA || log.toStatus === CardStatus.DEVUELTA_TIENDA) &&
+      !current.returnDate
+    ) {
+      current.returnDate = log.createdAt;
+    }
+    byCard.set(log.cardId, current);
+  }
+
+  return byCard;
+}
+
 type RedactionExportRows = {
   retornadas: Array<{
     no: number;
@@ -332,7 +382,11 @@ export async function GET(request: NextRequest) {
       orderBy: { updatedAt: "desc" },
     });
 
+    const lifecycleByCard = await getLifecycleDatesByCard(cards.map((card) => card.id));
+
     rows = cards.map((card) => ({
+      fechaEntrega: formatDateEs(lifecycleByCard.get(card.id)?.deliveryDate),
+      fechaRetorno: formatDateEs(lifecycleByCard.get(card.id)?.returnDate),
       numeroTarjeta: card.tc,
       cliente: card.customer.nombre,
       cedula: card.customer.cedula,
@@ -365,8 +419,12 @@ export async function GET(request: NextRequest) {
       take: 5000,
     });
 
+    const lifecycleByCard = await getLifecycleDatesByCard(contacts.map((contact) => contact.card.id));
+
     rows = contacts.map((contact) => ({
       fecha: formatDateEs(contact.createdAt),
+      fechaEntrega: formatDateEs(lifecycleByCard.get(contact.card.id)?.deliveryDate),
+      fechaRetorno: formatDateEs(lifecycleByCard.get(contact.card.id)?.returnDate),
       cliente: contact.card.customer.nombre,
       cedula: contact.card.customer.cedula,
       tc: contact.card.tc,
@@ -400,7 +458,7 @@ export async function GET(request: NextRequest) {
     const [cards, tariffs] = await Promise.all([
       prisma.card.findMany({
       where: {
-        status: { in: [CardStatus.ENTREGADA, CardStatus.ENTREGA_DIGITAL] },
+        status: CardStatus.ENTREGADA,
         ...(zone && zone !== "ALL" ? { zona: zone } : {}),
         ...(dispatchDate ? { dispatchDate } : {}),
       },
@@ -529,6 +587,13 @@ export async function GET(request: NextRequest) {
     ];
   } else {
     return NextResponse.json({ error: "Tipo de reporte no soportado" }, { status: 400 });
+  }
+
+  if (!rows.length) {
+    return NextResponse.json(
+      { error: "No hay datos para exportar con los filtros seleccionados" },
+      { status: 404 },
+    );
   }
 
   if (format === "csv") {

@@ -99,6 +99,10 @@ function calcTotalCents(counts: Counts, rates: Record<MessengerServiceType, numb
   );
 }
 
+function recordSignature(date: string, counts: Counts) {
+  return `${date}|${counts.NORMAL}|${counts.REMOTA}|${counts.RECOGIDA}|${counts.MANDADO}`;
+}
+
 function initials(name: string) {
   return name
     .split(" ")
@@ -683,14 +687,18 @@ function MessengerModal({
   const [from, setFrom] = useState(new Date().toISOString().slice(0, 10));
   const [to, setTo] = useState(new Date().toISOString().slice(0, 10));
   const [busy, setBusy] = useState(false);
+  const [savingRecord, setSavingRecord] = useState(false);
   const [feedback, setFeedback] = useState("");
   const skipRecordAutoSave = useRef(true);
   const recordAutoSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastRecordSignature = useRef("");
 
   useEffect(() => {
     skipRecordAutoSave.current = true;
     const existing = records.find((record) => dateKey(record.fecha) === recordDate);
-    setRecordCounts(countsFromRecord(existing));
+    const nextCounts = countsFromRecord(existing);
+    setRecordCounts(nextCounts);
+    lastRecordSignature.current = recordSignature(recordDate, nextCounts);
   }, [recordDate, records]);
 
   useEffect(() => {
@@ -746,8 +754,14 @@ function MessengerModal({
   }
 
   const saveDailyRecord = useCallback(async (silent = false) => {
-    setBusy(true);
-    if (!silent) {
+    const currentSignature = recordSignature(recordDate, recordCounts);
+    if (silent && currentSignature === lastRecordSignature.current) {
+      return;
+    }
+    if (silent) {
+      setSavingRecord(true);
+    } else {
+      setBusy(true);
       setFeedback("");
     }
 
@@ -767,11 +781,20 @@ function MessengerModal({
     const json = await res.json();
     if (!res.ok) {
       setFeedback(json.error ?? "No se pudo guardar registro");
-      setBusy(false);
+      if (silent) {
+        setSavingRecord(false);
+      } else {
+        setBusy(false);
+      }
       return;
     }
 
-    setBusy(false);
+    lastRecordSignature.current = currentSignature;
+    if (silent) {
+      setSavingRecord(false);
+    } else {
+      setBusy(false);
+    }
     setFeedback(silent ? "Cambios guardados automaticamente" : "Registro diario guardado");
     await onUpdated(silent ? "" : `Registro diario guardado para ${messenger.nombre}`);
   }, [messenger.id, messenger.nombre, onUpdated, recordCounts, recordDate]);
@@ -782,7 +805,9 @@ function MessengerModal({
       skipRecordAutoSave.current = false;
       return;
     }
-    if (busy) return;
+
+    const currentSignature = recordSignature(recordDate, recordCounts);
+    if (currentSignature === lastRecordSignature.current) return;
 
     if (recordAutoSaveTimer.current) {
       clearTimeout(recordAutoSaveTimer.current);
@@ -797,7 +822,7 @@ function MessengerModal({
         clearTimeout(recordAutoSaveTimer.current);
       }
     };
-  }, [busy, recordCounts, recordDate, saveDailyRecord, tab]);
+  }, [recordCounts, recordDate, saveDailyRecord, tab]);
 
   async function generateReport() {
     setBusy(true);
@@ -979,7 +1004,7 @@ function MessengerModal({
                   </label>
                 ))}
               </div>
-              {busy ? <p className="mt-3 text-xs text-slate-500">Guardando cambios...</p> : null}
+              {busy || savingRecord ? <p className="mt-3 text-xs text-slate-500">Guardando cambios...</p> : null}
 
               <div className="mt-5 overflow-x-auto rounded-xl border border-slate-200">
                 <table className="w-full text-left text-sm">

@@ -19,7 +19,8 @@ RUN npm ci --ignore-scripts --include=dev
 COPY . .
 RUN npm run prisma:generate
 RUN npm run build
+RUN chmod +x ./docker-entrypoint.sh
 
 EXPOSE 3000
 
-CMD ["sh", "-c", "npx prisma db push --skip-generate && npm run db:bootstrap && npm run start"]
+CMD ["./docker-entrypoint.sh"]

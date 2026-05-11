@@ -2,6 +2,15 @@ import ExcelJS from "exceljs";
 import Papa from "papaparse";
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 
+function toXlsxCellValue(value: unknown) {
+  if (value == null) return "";
+  if (value instanceof Date) return value.toISOString();
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    return value;
+  }
+  return JSON.stringify(value);
+}
+
 export async function exportRowsToXlsx(
   rows: Record<string, unknown>[],
   sheetName = "Reporte",
@@ -10,15 +19,26 @@ export async function exportRowsToXlsx(
   const sheet = workbook.addWorksheet(sheetName);
 
   const headers = rows.length > 0 ? Object.keys(rows[0]) : [];
-  sheet.addRow(headers);
+  if (!headers.length) {
+    sheet.addRow(["Sin datos para exportar"]);
+    sheet.getRow(1).font = { bold: true };
+    sheet.getColumn(1).width = 28;
+    return workbook.xlsx.writeBuffer();
+  }
 
+  sheet.addRow(headers);
   for (const row of rows) {
-    sheet.addRow(headers.map((h) => row[h] ?? ""));
+    sheet.addRow(headers.map((h) => toXlsxCellValue(row[h])));
   }
 
   sheet.getRow(1).font = { bold: true };
-  sheet.columns.forEach((col) => {
-    col.width = Math.max(12, (col.header ? String(col.header).length : 10) + 2);
+  headers.forEach((header, index) => {
+    let maxLen = String(header).length;
+    for (const row of rows) {
+      const value = toXlsxCellValue(row[header]);
+      maxLen = Math.max(maxLen, String(value).length);
+    }
+    sheet.getColumn(index + 1).width = Math.max(12, Math.min(80, maxLen + 2));
   });
 
   return workbook.xlsx.writeBuffer();
