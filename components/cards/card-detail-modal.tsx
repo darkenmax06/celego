@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { CardStatus } from "@prisma/client";
 import { StatusBadge } from "@/components/ui/status-badge";
+import { notifyInBrowser } from "@/lib/browser-notifications";
 
 type ReturnReason = { id: string; nombre: string; active: boolean };
 
@@ -46,12 +47,43 @@ type CardDetail = {
     createdAt: string;
     user: { name: string } | null;
   }>;
+  activeUrgentCase: {
+    id: string;
+    level: number;
+    nextNotificationAt: string | null;
+    lastNotifiedAt: string | null;
+  } | null;
 };
 
 type Props = {
   cardId: string;
   onClose: () => void;
   onUpdated?: () => void;
+};
+
+type UrgentNotification = {
+  urgentCaseId: string;
+  cardId: string;
+  tc: string;
+  cliente: string;
+  cedula: string;
+  provincia: string;
+  level: number;
+  label: string;
+  intervalMinutes: number;
+  nextNotificationAt: string;
+};
+
+type UrgencyMutationResponse = {
+  ok?: boolean;
+  urgent?: boolean;
+  level?: number;
+  label?: string;
+  intervalMinutes?: number;
+  nextNotificationAt?: string | null;
+  notifyNow?: boolean;
+  notification?: UrgentNotification | null;
+  error?: string;
 };
 
 const statusOptions: CardStatus[] = [
@@ -87,6 +119,21 @@ function requiresReturnReason(status: CardStatus) {
   return status === CardStatus.RETORNADA || status === CardStatus.DEVUELTA_TIENDA;
 }
 
+function urgencyLabel(level: number) {
+  if (level === 5) return "Nivel 5 (Extremadamente urgente)";
+  if (level === 4) return "Nivel 4 (Muy urgente)";
+  if (level === 3) return "Nivel 3 (Alta)";
+  if (level === 2) return "Nivel 2 (Moderada)";
+  return "Nivel 1 (Leve)";
+}
+
+function formatUrgentClock(value: string | null | undefined) {
+  if (!value) return "-";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "-";
+  return date.toLocaleString("es-DO");
+}
+
 export function CardDetailModal({ cardId, onClose, onUpdated }: Props) {
   const [tab, setTab] = useState<"info" | "bitacora" | "status">("info");
   const [loading, setLoading] = useState(true);
@@ -97,7 +144,11 @@ export function CardDetailModal({ cardId, onClose, onUpdated }: Props) {
   const [isRemoteValue, setIsRemoteValue] = useState(false);
   const [note, setNote] = useState("");
   const [saving, setSaving] = useState(false);
+  const [savingUrgency, setSavingUrgency] = useState(false);
   const [message, setMessage] = useState("");
+  const [urgencyEnabled, setUrgencyEnabled] = useState(false);
+  const [urgencyLevel, setUrgencyLevel] = useState(3);
+  const [urgencyComment, setUrgencyComment] = useState("");
 
   async function loadCard() {
     setLoading(true);
@@ -118,6 +169,9 @@ export function CardDetailModal({ cardId, onClose, onUpdated }: Props) {
     setStatusValue(nextCard.status as CardStatus);
     setReturnReason(nextCard.returnReason ?? "");
     setIsRemoteValue(nextCard.isRemote);
+    setUrgencyEnabled(nextCard.urgent);
+    setUrgencyLevel(nextCard.activeUrgentCase?.level ?? 3);
+    setUrgencyComment("");
     setMotivos((motivosJson.motivos ?? []).filter((item: ReturnReason) => item.active));
     setLoading(false);
   }
@@ -220,6 +274,78 @@ export function CardDetailModal({ cardId, onClose, onUpdated }: Props) {
     onUpdated?.();
   }
 
+  async function saveUrgencySettings() {
+    if (!card) return;
+    setSavingUrgency(true);
+    setMessage("");
+
+    const res = await fetch("/api/operativo/urgencias", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        cardId: card.id,
+        urgent: urgencyEnabled,
+        level: urgencyEnabled ? urgencyLevel : undefined,
+        note: urgencyComment.trim() || undefined,
+      }),
+    });
+    const json = (await res
+      .json()
+      .catch(() => ({ error: "No se pudo actualizar urgencia" }))) as UrgencyMutationResponse;
+
+    if (!res.ok) {
+      setMessage(json.error ?? "No se pudo actualizar urgencia");
+      setSavingUrgency(false);
+      return;
+    }
+
+    if (json.notifyNow && json.notification) {
+      await notifyInBrowser({
+        title: `Urgencia activa: ${json.notification.label}`,
+        body: `${json.notification.cliente} - TC ${json.notification.tc}. Primera notificacion enviada.`,
+        tag: `urgent-now-${json.notification.urgentCaseId}`,
+        requireInteraction: true,
+      });
+    }
+
+    setMessage(urgencyEnabled ? "Urgencia actualizada" : "Urgencia desactivada");
+    setSavingUrgency(false);
+    await loadCard();
+    onUpdated?.();
+  }
+
+  async function resolveUrgency() {
+    if (!card) return;
+    setSavingUrgency(true);
+    setMessage("");
+
+    const res = await fetch("/api/operativo/urgencias", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        cardId: card.id,
+        urgent: false,
+        resolve: true,
+        note: urgencyComment.trim() || undefined,
+      }),
+    });
+    const json = (await res
+      .json()
+      .catch(() => ({ error: "No se pudo resolver urgencia" }))) as UrgencyMutationResponse;
+
+    if (!res.ok) {
+      setMessage(json.error ?? "No se pudo resolver urgencia");
+      setSavingUrgency(false);
+      return;
+    }
+
+    setUrgencyEnabled(false);
+    setMessage("Caso urgente marcado como resuelto");
+    setSavingUrgency(false);
+    await loadCard();
+    onUpdated?.();
+  }
+
   if (!card && loading) {
     return (
       <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/35">
@@ -299,6 +425,10 @@ export function CardDetailModal({ cardId, onClose, onUpdated }: Props) {
                   value={card.slaDueDate ? new Date(card.slaDueDate).toLocaleDateString("es-DO") : "-"}
                 />
                 <InfoItem label="Urgente" value={card.urgent ? "SI" : "NO"} />
+                <InfoItem
+                  label="Nivel urgencia"
+                  value={card.activeUrgentCase ? urgencyLabel(card.activeUrgentCase.level) : "-"}
+                />
                 <InfoItem label="Referencia" value={card.externalReference || "-"} />
               </div>
 
@@ -433,6 +563,77 @@ export function CardDetailModal({ cardId, onClose, onUpdated }: Props) {
                   className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
                   placeholder="Comentario opcional del cambio"
                 />
+              </div>
+
+              <div className="mt-4 rounded-xl border border-rose-200 bg-rose-50/40 px-3 py-3">
+                <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-rose-700">
+                  Gestion de urgencia (CE)
+                </p>
+
+                <label className="mb-2 flex items-center gap-2 text-sm text-slate-700">
+                  <input
+                    type="checkbox"
+                    checked={urgencyEnabled}
+                    onChange={(event) => setUrgencyEnabled(event.target.checked)}
+                  />
+                  Marcar tarjeta como urgente
+                </label>
+
+                {urgencyEnabled ? (
+                  <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                    Nivel de urgencia
+                    <select
+                      value={urgencyLevel}
+                      onChange={(event) => setUrgencyLevel(Number(event.target.value))}
+                      className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-normal text-slate-700"
+                    >
+                      <option value={1}>Nivel 1 (Leve) - cada 4.5 horas</option>
+                      <option value={2}>Nivel 2 (Moderada) - cada 3.5 horas</option>
+                      <option value={3}>Nivel 3 (Alta) - cada 2.5 horas</option>
+                      <option value={4}>Nivel 4 (Muy urgente) - cada 1.5 horas</option>
+                      <option value={5}>Nivel 5 (Extremadamente urgente) - cada 30 min</option>
+                    </select>
+                  </label>
+                ) : null}
+
+                <div className="mt-2 text-xs text-slate-600">
+                  <p>Ultima alerta: {formatUrgentClock(card.activeUrgentCase?.lastNotifiedAt)}</p>
+                  <p>Proxima alerta: {formatUrgentClock(card.activeUrgentCase?.nextNotificationAt)}</p>
+                </div>
+
+                <div className="mt-3">
+                  <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">
+                    Comentario de urgencia
+                  </label>
+                  <textarea
+                    value={urgencyComment}
+                    onChange={(event) => setUrgencyComment(event.target.value)}
+                    rows={2}
+                    className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
+                    placeholder="Ej: cliente confirma disponibilidad, mantener prioridad..."
+                  />
+                </div>
+
+                <div className="mt-3 flex flex-wrap items-center justify-end gap-2">
+                  {card.urgent ? (
+                    <button
+                      type="button"
+                      onClick={() => void resolveUrgency()}
+                      disabled={savingUrgency}
+                      className="rounded-lg border border-rose-300 bg-white px-3 py-2 text-xs font-semibold text-rose-700 disabled:opacity-60"
+                    >
+                      Marcar urgente como resuelto
+                    </button>
+                  ) : null}
+                  <button
+                    type="button"
+                    onClick={() => void saveUrgencySettings()}
+                    disabled={savingUrgency}
+                    className="rounded-lg bg-rose-700 px-3 py-2 text-xs font-semibold text-white disabled:opacity-60"
+                  >
+                    {savingUrgency ? "Guardando..." : "Guardar urgencia"}
+                  </button>
+                </div>
               </div>
 
               <div className="mt-4 flex items-center justify-end gap-2">

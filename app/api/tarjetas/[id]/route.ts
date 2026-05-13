@@ -26,6 +26,11 @@ export async function GET(
         orderBy: { createdAt: "desc" },
         take: 120,
       },
+      urgentCases: {
+        where: { resolvedAt: null },
+        orderBy: [{ level: "desc" }, { importedAt: "desc" }],
+        take: 1,
+      },
     },
   });
 
@@ -74,6 +79,7 @@ export async function GET(
     card: {
       ...card,
       logs: enrichedLogs,
+      activeUrgentCase: card.urgentCases[0] ?? null,
     },
   });
 }

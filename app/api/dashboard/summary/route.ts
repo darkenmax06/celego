@@ -3,6 +3,12 @@ import { CardStatus } from "@prisma/client";
 import { requireApiSession } from "@/lib/api-session";
 import { prisma } from "@/lib/prisma";
 import { remainingBusinessDays } from "@/lib/sla";
+import {
+  clampUrgencyLevel,
+  emitDueUrgentNotifications,
+  urgencyIntervalMinutes,
+  urgencyLevelLabel,
+} from "@/lib/urgent-alerts";
 
 function parseDateRange(fromRaw: string | null, toRaw: string | null) {
   const now = new Date();
@@ -34,6 +40,11 @@ export async function GET(request: Request) {
   const auth = await requireApiSession(["ADMIN", "OPERADOR", "FACTURACION", "MENSAJERO"]);
   if ("error" in auth) return auth.error;
 
+  await emitDueUrgentNotifications({
+    byUserId: auth.session.user.id,
+    limit: 20,
+  });
+
   const url = new URL(request.url);
   const { start, end } = parseDateRange(
     url.searchParams.get("from"),
@@ -42,7 +53,7 @@ export async function GET(request: Request) {
 
   const dispatchRange = { gte: start, lte: end };
 
-  const [statusGroups, urgentCards, recentLogs, cardsWithSla, nonDeliveredCards] = await Promise.all([
+  const [statusGroups, activeUrgentCasesRaw, urgentTotal, recentLogs, cardsWithSla, nonDeliveredCards] = await Promise.all([
     prisma.card.groupBy({
       where: {
         dispatchDate: dispatchRange,
@@ -50,11 +61,23 @@ export async function GET(request: Request) {
       by: ["status"],
       _count: { _all: true },
     }),
-    prisma.card.findMany({
-      where: { urgent: true, dispatchDate: dispatchRange },
-      include: { customer: true },
-      orderBy: { updatedAt: "desc" },
-      take: 8,
+    prisma.urgentCase.findMany({
+      where: {
+        resolvedAt: null,
+        cardId: { not: null },
+      },
+      include: {
+        card: {
+          include: { customer: true },
+        },
+      },
+      orderBy: [{ level: "desc" }, { nextNotificationAt: "asc" }, { importedAt: "desc" }],
+      take: 20,
+    }),
+    prisma.urgentCase.count({
+      where: {
+        resolvedAt: null,
+      },
     }),
     prisma.cardStatusLog.findMany({
       where: {
@@ -118,6 +141,33 @@ export async function GET(request: Request) {
     count: statusMap[status] ?? 0,
   }));
 
+  const seenCards = new Set<string>();
+  const activeUrgentCases = activeUrgentCasesRaw
+    .filter((item) => item.card?.id && !seenCards.has(item.card.id))
+    .map((item) => {
+      if (item.card?.id) {
+        seenCards.add(item.card.id);
+      }
+      const level = clampUrgencyLevel(item.level);
+      return {
+        id: item.id,
+        cardId: item.card!.id,
+        tc: item.card!.tc,
+        provincia: item.card!.provincia,
+        status: item.card!.status,
+        customer: {
+          nombre: item.card!.customer.nombre,
+          cedula: item.card!.customer.cedula,
+        },
+        level,
+        levelLabel: urgencyLevelLabel(level),
+        intervalMinutes: urgencyIntervalMinutes(level),
+        nextNotificationAt: item.nextNotificationAt?.toISOString() ?? null,
+        lastNotifiedAt: item.lastNotifiedAt?.toISOString() ?? null,
+      };
+    })
+    .slice(0, 12);
+
   const slaAlerts = cardsWithSla
     .map((card) => {
       const remaining = card.slaDueDate ? remainingBusinessDays(new Date(), card.slaDueDate) : null;
@@ -170,10 +220,10 @@ export async function GET(request: Request) {
         (statusMap.ENVIADA_INTERIOR ?? 0),
       enRuta: statusMap.EN_RUTA ?? 0,
       entregadas: (statusMap.ENTREGADA ?? 0) + (statusMap.ENTREGA_DIGITAL ?? 0),
-      urgentes: urgentCards.length,
+      urgentes: urgentTotal,
       retornadas: statusMap.RETORNADA ?? 0,
     },
-    urgentes: urgentCards,
+    urgentes: activeUrgentCases,
     slaAlerts,
     recentActivity: recentLogs.map((log) => ({
       ...log,

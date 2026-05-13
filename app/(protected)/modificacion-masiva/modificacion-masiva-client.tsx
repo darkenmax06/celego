@@ -192,8 +192,8 @@ export default function ModificacionMasivaClient() {
   return (
     <div>
       <PageHeader
-        title="Imagenes digitales"
-        subtitle="Pistolea tarjetas y modifica estado, provincia o zona en lote"
+        title="Actualizacion masiva"
+        subtitle="Pistolea tarjetas y aplica cambios de estado, provincia o zona en lote"
       />
 
       <Panel>

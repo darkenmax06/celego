@@ -39,6 +39,7 @@ function parseImageFileName(fileName: string) {
   const hasRemoteTag = /\(\s*zr\s*\)/i.test(noExt);
   const identifier = noExt
     .replace(/\(\s*zr\s*\)/gi, "")
+    .replace(/\(\s*adicional(?:\s+\d+)?\s*\)\s*$/i, "")
     .replace(/\s*\(\d+\)\s*$/, "")
     .trim();
   return { identifier, hasRemoteTag };
@@ -102,7 +103,7 @@ export default function StatusDigitalesClient() {
   return (
     <div>
       <PageHeader
-        title="Status digitales"
+        title="Entrega digital por imagenes"
         subtitle="Sube imagenes, detecta numero de tarjeta por nombre de archivo y aplica ENTREGA DIGITAL"
       />
 
@@ -117,7 +118,8 @@ export default function StatusDigitalesClient() {
             className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm"
           />
           <p className="mt-2 text-xs text-slate-500">
-            Regla: si el nombre incluye <code>(ZR)</code> o <code>(zr)</code>, se marca como zona remota.
+            Reglas: <code>(ZR)</code> marca zona remota. <code>(ADICIONAL)</code> y <code>(ADICIONAL 2)</code> al final
+            seleccionan tarjetas adicionales por nombre/cédula y fecha de despacho.
           </p>
         </div>
 

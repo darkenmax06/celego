@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { CardDetailModal } from "@/components/cards/card-detail-modal";
 import { PageHeader } from "@/components/ui/page-header";
 import { Panel } from "@/components/ui/panel";
 import { StatusBadge } from "@/components/ui/status-badge";
+import { notifyInBrowser } from "@/lib/browser-notifications";
 
 type DashboardPayload = {
   range?: { from: string; to: string };
@@ -18,8 +19,15 @@ type DashboardPayload = {
   };
   urgentes: Array<{
     id: string;
+    cardId: string;
     tc: string;
     provincia: string;
+    status: string;
+    level: number;
+    levelLabel: string;
+    intervalMinutes: number;
+    nextNotificationAt: string | null;
+    lastNotifiedAt: string | null;
     customer: { nombre: string; cedula: string };
   }>;
   slaAlerts: Array<{
@@ -47,6 +55,19 @@ type DashboardPayload = {
   }>;
 };
 
+type UrgentNotification = {
+  urgentCaseId: string;
+  cardId: string;
+  tc: string;
+  cliente: string;
+  cedula: string;
+  provincia: string;
+  level: number;
+  label: string;
+  intervalMinutes: number;
+  nextNotificationAt: string;
+};
+
 const emptyData: DashboardPayload = {
   range: undefined,
   statusBreakdown: [],
@@ -64,6 +85,21 @@ function monthDefaults() {
   return { from, to };
 }
 
+function urgencyBadge(level: number) {
+  if (level >= 5) return "border-red-600 bg-red-100 text-red-900";
+  if (level === 4) return "border-rose-500 bg-rose-100 text-rose-900";
+  if (level === 3) return "border-orange-500 bg-orange-100 text-orange-900";
+  if (level === 2) return "border-amber-500 bg-amber-100 text-amber-900";
+  return "border-yellow-500 bg-yellow-100 text-yellow-900";
+}
+
+function dateClock(value: string | null) {
+  if (!value) return "-";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "-";
+  return date.toLocaleString("es-DO");
+}
+
 export default function DashboardClient() {
   const defaults = monthDefaults();
   const [data, setData] = useState<DashboardPayload>(emptyData);
@@ -71,6 +107,8 @@ export default function DashboardClient() {
   const [selectedCardId, setSelectedCardId] = useState<string | null>(null);
   const [from, setFrom] = useState(defaults.from);
   const [to, setTo] = useState(defaults.to);
+  const [urgentNotifications, setUrgentNotifications] = useState<UrgentNotification[]>([]);
+  const seenNotificationKeys = useRef(new Set<string>());
 
   async function loadSummary(fromDate = from, toDate = to) {
     const params = new URLSearchParams({ from: fromDate, to: toDate });
@@ -83,6 +121,39 @@ export default function DashboardClient() {
   useEffect(() => {
     void loadSummary(from, to);
   }, [from, to]);
+
+  useEffect(() => {
+    let mounted = true;
+    const pullNotifications = async () => {
+      const res = await fetch("/api/operativo/urgencias", { cache: "no-store" });
+      const json = await res.json().catch(() => ({ notifications: [] }));
+      if (!mounted || !res.ok) return;
+      const notifications = (json.notifications ?? []) as UrgentNotification[];
+      if (notifications.length) {
+        setUrgentNotifications(notifications);
+        for (const notification of notifications) {
+          const key = `${notification.urgentCaseId}-${notification.nextNotificationAt}`;
+          if (seenNotificationKeys.current.has(key)) continue;
+          seenNotificationKeys.current.add(key);
+          await notifyInBrowser({
+            title: `Recordatorio urgente: ${notification.label}`,
+            body: `${notification.cliente} - TC ${notification.tc} (${notification.provincia})`,
+            tag: `urgent-reminder-${notification.urgentCaseId}`,
+            requireInteraction: true,
+          });
+        }
+      }
+    };
+
+    void pullNotifications();
+    const timer = setInterval(() => {
+      void pullNotifications();
+    }, 60_000);
+    return () => {
+      mounted = false;
+      clearInterval(timer);
+    };
+  }, []);
 
   return (
     <div>
@@ -150,38 +221,79 @@ export default function DashboardClient() {
         <MetricCard label="Retornadas" value={data.metrics.retornadas} color="bg-emerald-50 text-emerald-700" />
       </div>
 
+      {urgentNotifications.length ? (
+        <Panel className="mb-5" title="Recordatorios de urgencia">
+          <div className="space-y-2">
+            {urgentNotifications.map((item) => (
+              <button
+                key={`${item.urgentCaseId}-${item.nextNotificationAt}`}
+                type="button"
+                onClick={() => setSelectedCardId(item.cardId)}
+                className={`w-full rounded-xl border px-3 py-2 text-left ${urgencyBadge(item.level)}`}
+              >
+                <p className="text-sm font-semibold">
+                  {item.label} - {item.cliente} ({item.tc})
+                </p>
+                <p className="text-xs">
+                  {item.provincia} - proxima alerta: {dateClock(item.nextNotificationAt)}
+                </p>
+              </button>
+            ))}
+            <button
+              type="button"
+              onClick={() => setUrgentNotifications([])}
+              className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs"
+            >
+              Limpiar recordatorios
+            </button>
+          </div>
+        </Panel>
+      ) : null}
+
       <div className="grid gap-5 xl:grid-cols-[1.2fr_1fr]">
         <Panel title="Tarjetas urgentes" subtitle="Casos marcados como prioridad">
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-sm">
-              <thead className="text-xs uppercase tracking-wide text-slate-500">
-                <tr>
-                  <th className="pb-2">TC</th>
-                  <th className="pb-2">Cliente</th>
-                  <th className="pb-2">Provincia</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.urgentes.map((row) => (
-                  <tr
-                    key={row.id}
-                    className="cursor-pointer border-t border-slate-100 hover:bg-slate-50"
-                    onClick={() => setSelectedCardId(row.id)}
-                  >
-                    <td className="py-2 font-medium">{row.tc}</td>
-                    <td className="py-2">{row.customer.nombre}</td>
-                    <td className="py-2">{row.provincia}</td>
-                  </tr>
-                ))}
-                {!data.urgentes.length ? (
-                  <tr>
-                    <td colSpan={3} className="py-4 text-sm text-slate-500">
-                      {loading ? "Cargando..." : "Sin urgentes activos"}
-                    </td>
-                  </tr>
-                ) : null}
-              </tbody>
-            </table>
+          <div className="space-y-2">
+            {data.urgentes.map((row) => (
+              <button
+                key={row.id}
+                type="button"
+                onClick={() => setSelectedCardId(row.cardId)}
+                className={`w-full rounded-xl border p-3 text-left transition hover:opacity-95 ${urgencyBadge(row.level)}`}
+              >
+                <div className="flex flex-wrap items-start justify-between gap-2">
+                  <div>
+                    <p className="text-sm font-semibold">{row.customer.nombre}</p>
+                    <p className="text-xs">
+                      {row.customer.cedula} - TC {row.tc}
+                    </p>
+                  </div>
+                  <span className={`rounded-md border px-2 py-1 text-xs font-semibold ${urgencyBadge(row.level)}`}>
+                    {row.levelLabel}
+                  </span>
+                </div>
+                <div className="mt-2 grid gap-2 text-xs sm:grid-cols-3">
+                  <div>
+                    <p className="font-semibold uppercase tracking-wide opacity-70">Provincia</p>
+                    <p>{row.provincia || "-"}</p>
+                  </div>
+                  <div>
+                    <p className="font-semibold uppercase tracking-wide opacity-70">Proxima alerta</p>
+                    <p>{dateClock(row.nextNotificationAt)}</p>
+                  </div>
+                  <div>
+                    <p className="font-semibold uppercase tracking-wide opacity-70">Estado</p>
+                    <div className="mt-1">
+                      <StatusBadge value={row.status} />
+                    </div>
+                  </div>
+                </div>
+              </button>
+            ))}
+            {!data.urgentes.length ? (
+              <p className="py-4 text-sm text-slate-500">
+                {loading ? "Cargando..." : "Sin urgentes activos"}
+              </p>
+            ) : null}
           </div>
         </Panel>
 

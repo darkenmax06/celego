@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { PageHeader } from "@/components/ui/page-header";
 import { Panel } from "@/components/ui/panel";
+import { notifyInBrowser } from "@/lib/browser-notifications";
 
 type OperativeTab = "activos" | "urgentes";
 type ExportFormat = "xlsx" | "csv" | "pdf";
@@ -24,6 +25,11 @@ type OperativeCard = {
   zona: string;
   status: string;
   urgent: boolean;
+  urgentLevel: number | null;
+  urgentLabel: string | null;
+  urgentIntervalMinutes: number | null;
+  urgentNextNotificationAt: string | null;
+  urgentLastNotificationAt: string | null;
   remaining: number | null;
   presinto: string | null;
   fechaDespacho: string | null;
@@ -39,6 +45,30 @@ type OperativeCard = {
 
 type PaginationMeta = { page: number; pageSize: number; total: number; totalPages: number };
 type OperativoResponse = { cards: OperativeCard[]; pagination?: PaginationMeta };
+type UrgentNotification = {
+  urgentCaseId: string;
+  cardId: string;
+  tc: string;
+  cliente: string;
+  cedula: string;
+  provincia: string;
+  level: number;
+  label: string;
+  intervalMinutes: number;
+  nextNotificationAt: string;
+};
+
+type UrgencyMutationResponse = {
+  urgent?: boolean;
+  urgentCaseId?: string | null;
+  level?: number;
+  label?: string;
+  intervalMinutes?: number;
+  nextNotificationAt?: string;
+  notifyNow?: boolean;
+  notification?: UrgentNotification | null;
+  error?: string;
+};
 
 const STATUS_OPTIONS = [
   { value: "ALL", label: "Todos los status" },
@@ -72,6 +102,15 @@ function statusClasses(value: string) {
   if (key === "EN_RUTA" || key === "EN_PROCESO") return "text-sky-700 bg-sky-50";
   if (key === "DESPACHADA") return "text-indigo-700 bg-indigo-50";
   return "text-slate-700 bg-slate-100";
+}
+
+function urgencyClasses(level: number | null) {
+  if (level === 5) return "border-red-600 bg-red-100 text-red-900";
+  if (level === 4) return "border-rose-500 bg-rose-100 text-rose-900";
+  if (level === 3) return "border-orange-500 bg-orange-100 text-orange-900";
+  if (level === 2) return "border-amber-500 bg-amber-100 text-amber-900";
+  if (level === 1) return "border-yellow-500 bg-yellow-100 text-yellow-900";
+  return "border-slate-300 bg-slate-100 text-slate-700";
 }
 
 function principalPhone(card: OperativeCard) {
@@ -135,6 +174,13 @@ function buildContactSignature(input: {
   return `${phonesSig}::${input.comentario.trim()}::${input.contactado ? 1 : 0}`;
 }
 
+function formatUrgentClock(value: string | null) {
+  if (!value) return "-";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "-";
+  return date.toLocaleString("es-DO");
+}
+
 export default function OperativoClient() {
   const [cards, setCards] = useState<OperativeCard[]>([]);
   const [tab, setTab] = useState<OperativeTab>("activos");
@@ -157,6 +203,22 @@ export default function OperativoClient() {
   });
   const [page, setPage] = useState(1);
   const [message, setMessage] = useState("");
+  const [urgentNotifications, setUrgentNotifications] = useState<UrgentNotification[]>([]);
+
+  async function pullUrgentNotifications() {
+    const res = await fetch("/api/operativo/urgencias", { cache: "no-store" });
+    const json = await res.json().catch(() => ({ notifications: [] }));
+    if (!res.ok) return;
+    const notifications = (json.notifications ?? []) as UrgentNotification[];
+    if (!notifications.length) return;
+    setUrgentNotifications(notifications);
+    setMessage(
+      `Recordatorios urgentes: ${notifications
+        .map((item) => `${item.tc} (${item.label})`)
+        .slice(0, 3)
+        .join(", ")}`,
+    );
+  }
 
   async function loadCards(keepSelectedId?: string) {
     setLoading(true);
@@ -203,6 +265,22 @@ export default function OperativoClient() {
     void loadCards();
   }, [tab, provincia, status, search, days, page]);
 
+  useEffect(() => {
+    let mounted = true;
+    const run = async () => {
+      if (!mounted) return;
+      await pullUrgentNotifications();
+    };
+    void run();
+    const timer = setInterval(() => {
+      void run();
+    }, 60_000);
+    return () => {
+      mounted = false;
+      clearInterval(timer);
+    };
+  }, []);
+
   const provincias = useMemo(() => Array.from(new Set(cards.map((c) => c.provincia))).sort(), [cards]);
   const contactadas = useMemo(() => cards.filter((card) => card.contactado).length, [cards]);
   const current = selectedIndex !== null ? cards[selectedIndex] : undefined;
@@ -244,6 +322,60 @@ export default function OperativoClient() {
           : item,
       ),
     );
+    return null;
+  }
+
+  async function saveUrgency(payload: {
+    cardId: string;
+    urgent: boolean;
+    level?: number;
+    resolve?: boolean;
+    note?: string;
+  }) {
+    const res = await fetch("/api/operativo/urgencias", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const json = (await res
+      .json()
+      .catch(() => ({ error: "No se pudo actualizar urgencia" }))) as UrgencyMutationResponse;
+    if (!res.ok) {
+      return json.error ?? "No se pudo actualizar urgencia";
+    }
+
+    const updatedLevel = typeof json.level === "number" ? Number(json.level) : null;
+    setCards((prev) =>
+      prev.map((item) =>
+        item.cardId === payload.cardId
+          ? {
+              ...item,
+              urgent: Boolean(json.urgent),
+              urgentCaseId: (json.urgentCaseId as string | null | undefined) ?? item.urgentCaseId,
+              urgentLevel: json.urgent ? updatedLevel : null,
+              urgentLabel: json.urgent ? ((json.label as string | undefined) ?? item.urgentLabel) : null,
+              urgentIntervalMinutes:
+                json.urgent && typeof json.intervalMinutes === "number"
+                  ? Number(json.intervalMinutes)
+                  : null,
+              urgentNextNotificationAt:
+                json.urgent && typeof json.nextNotificationAt === "string"
+                  ? json.nextNotificationAt
+                  : null,
+            }
+          : item,
+        ),
+    );
+
+    if (json.notifyNow && json.notification) {
+      await notifyInBrowser({
+        title: `Urgencia activa: ${json.notification.label}`,
+        body: `${json.notification.cliente} - TC ${json.notification.tc}. Primera notificacion enviada.`,
+        tag: `urgent-now-${json.notification.urgentCaseId}`,
+        requireInteraction: true,
+      });
+    }
+
     return null;
   }
 
@@ -374,13 +506,41 @@ export default function OperativoClient() {
         </div>
       </Panel>
 
+      {urgentNotifications.length ? (
+        <Panel className="mt-5" title="Notificaciones de urgencia">
+          <div className="space-y-2">
+            {urgentNotifications.map((item) => (
+              <div key={`${item.urgentCaseId}-${item.nextNotificationAt}`} className="rounded-xl border border-rose-300 bg-rose-50 px-3 py-2">
+                <p className="text-sm font-semibold text-rose-900">
+                  {item.label} - {item.cliente} ({item.tc})
+                </p>
+                <p className="text-xs text-rose-800">
+                  {item.provincia} - siguiente en {item.intervalMinutes} minutos ({formatUrgentClock(item.nextNotificationAt)})
+                </p>
+              </div>
+            ))}
+            <button
+              type="button"
+              onClick={() => setUrgentNotifications([])}
+              className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs"
+            >
+              Limpiar notificaciones
+            </button>
+          </div>
+        </Panel>
+      ) : null}
+
       <Panel className="mt-5" title={tab === "activos" ? "Cola de clientes" : "Casos urgentes"}>
         <div className="space-y-2">
           {cards.map((card, index) => (
             <div
               key={card.id}
               className={`rounded-xl border px-3 py-3 ${
-                card.contactado ? "border-emerald-200 bg-emerald-50/40" : "border-slate-200 bg-white"
+                card.contactado
+                  ? "border-emerald-200 bg-emerald-50/40"
+                  : tab === "urgentes" && card.urgentLevel
+                    ? urgencyClasses(card.urgentLevel)
+                    : "border-slate-200 bg-white"
               }`}
             >
               <div className="flex flex-wrap items-start justify-between gap-2">
@@ -393,6 +553,11 @@ export default function OperativoClient() {
                         Contactado
                       </span>
                     ) : null}
+                    {card.urgent && card.urgentLevel ? (
+                      <span className={`rounded-md border px-2 py-0.5 text-xs font-semibold ${urgencyClasses(card.urgentLevel)}`}>
+                        {card.urgentLabel ?? `Nivel ${card.urgentLevel}`}
+                      </span>
+                    ) : null}
                   </div>
                   <p className="mt-1 text-xs text-slate-500">
                     {card.cedula} · {card.provincia}
@@ -400,6 +565,11 @@ export default function OperativoClient() {
                   </p>
                   {card.comentarioContacto ? (
                     <p className="mt-1 text-xs italic text-slate-600">{`"${card.comentarioContacto}"`}</p>
+                  ) : null}
+                  {card.urgent && card.urgentNextNotificationAt ? (
+                    <p className="mt-1 text-xs font-medium text-rose-700">
+                      Proxima alerta: {formatUrgentClock(card.urgentNextNotificationAt)}
+                    </p>
                   ) : null}
                 </div>
                 <div className="flex items-center gap-2">
@@ -469,6 +639,7 @@ export default function OperativoClient() {
             setSelectedIndex((prev) => (prev !== null ? Math.min(prev + 1, cards.length - 1) : prev))
           }
           onSave={saveContact}
+          onUrgencyChange={saveUrgency}
         />
       ) : null}
 
@@ -492,6 +663,7 @@ function ContactModal({
   onPrev,
   onNext,
   onSave,
+  onUrgencyChange,
 }: {
   card: OperativeCard;
   index: number;
@@ -500,6 +672,13 @@ function ContactModal({
   onPrev: () => void;
   onNext: () => void;
   onSave: (payload: { telefonos: PhoneState[]; comentario: string; contactado: boolean }) => Promise<string | null>;
+  onUrgencyChange: (payload: {
+    cardId: string;
+    urgent: boolean;
+    level?: number;
+    resolve?: boolean;
+    note?: string;
+  }) => Promise<string | null>;
 }) {
   const [telefonos, setTelefonos] = useState<PhoneState[]>([]);
   const [comentario, setComentario] = useState("");
@@ -507,6 +686,10 @@ function ContactModal({
   const [newPhone, setNewPhone] = useState("");
   const [saving, setSaving] = useState(false);
   const [sharing, setSharing] = useState(false);
+  const [savingUrgency, setSavingUrgency] = useState(false);
+  const [urgentEnabled, setUrgentEnabled] = useState(false);
+  const [urgencyLevel, setUrgencyLevel] = useState(3);
+  const [urgencyComment, setUrgencyComment] = useState("");
   const [feedback, setFeedback] = useState("");
   const skipAutoSave = useRef(true);
   const autoSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -525,6 +708,9 @@ function ContactModal({
     setTelefonos(basePhones);
     setComentario(card.comentarioContacto ?? "");
     setContactado(card.contactado);
+    setUrgentEnabled(card.urgent);
+    setUrgencyLevel(card.urgentLevel ?? 3);
+    setUrgencyComment("");
     lastSavedSignature.current = buildContactSignature({
       telefonos: basePhones,
       comentario: card.comentarioContacto ?? "",
@@ -532,7 +718,7 @@ function ContactModal({
     });
     setNewPhone("");
     setFeedback("");
-  }, [card.id, card.comentarioContacto, card.contactado, card.telefonos]);
+  }, [card.id, card.comentarioContacto, card.contactado, card.telefonos, card.urgent, card.urgentLevel]);
 
   useEffect(() => {
     const onEsc = (event: KeyboardEvent) => {
@@ -652,11 +838,54 @@ function ContactModal({
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `contacto-${card.tc}.svg`;
+    a.download = `contacto-${card.tc}.jpg`;
     a.click();
     URL.revokeObjectURL(url);
     setFeedback("Imagen generada");
     setSharing(false);
+  }
+
+  async function saveUrgencySettings() {
+    if (!card.cardId) {
+      setFeedback("No hay tarjeta vinculada para actualizar urgencia");
+      return;
+    }
+    setSavingUrgency(true);
+    const error = await onUrgencyChange({
+      cardId: card.cardId,
+      urgent: urgentEnabled,
+      level: urgentEnabled ? urgencyLevel : undefined,
+      note: urgencyComment.trim() || undefined,
+    });
+    if (error) {
+      setFeedback(error);
+      setSavingUrgency(false);
+      return;
+    }
+    setFeedback(urgentEnabled ? "Urgencia actualizada" : "Urgencia desactivada");
+    setSavingUrgency(false);
+  }
+
+  async function resolveUrgency() {
+    if (!card.cardId) {
+      setFeedback("No hay tarjeta vinculada para resolver urgencia");
+      return;
+    }
+    setSavingUrgency(true);
+    const error = await onUrgencyChange({
+      cardId: card.cardId,
+      urgent: false,
+      resolve: true,
+      note: urgencyComment.trim() || undefined,
+    });
+    if (error) {
+      setFeedback(error);
+      setSavingUrgency(false);
+      return;
+    }
+    setUrgentEnabled(false);
+    setFeedback("Caso urgente marcado como resuelto");
+    setSavingUrgency(false);
   }
 
   return (
@@ -682,6 +911,11 @@ function ContactModal({
               <span className={`mt-2 inline-block rounded-md px-2 py-1 text-xs font-semibold ${statusClasses(card.status)}`}>
                 {statusLabel(card.status)}
               </span>
+              {card.urgent && card.urgentLevel ? (
+                <span className={`ml-2 mt-2 inline-block rounded-md border px-2 py-1 text-xs font-semibold ${urgencyClasses(card.urgentLevel)}`}>
+                  {card.urgentLabel ?? `Nivel ${card.urgentLevel}`}
+                </span>
+              ) : null}
             </div>
           </div>
 
@@ -814,6 +1048,78 @@ function ContactModal({
             <input type="checkbox" checked={contactado} onChange={(event) => setContactado(event.target.checked)} />
             <span className="text-sm text-slate-700">Marcar como contactado</span>
           </label>
+
+          {!card.readOnly ? (
+            <div className="rounded-xl border border-rose-200 bg-rose-50/40 px-3 py-3">
+              <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-rose-700">Gestion de urgencia</p>
+              <label className="mb-2 flex items-center gap-2 text-sm text-slate-700">
+                <input
+                  type="checkbox"
+                  checked={urgentEnabled}
+                  onChange={(event) => setUrgentEnabled(event.target.checked)}
+                />
+                Marcar tarjeta como urgente
+              </label>
+
+              {urgentEnabled ? (
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <label className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                    Nivel de urgencia
+                    <select
+                      value={urgencyLevel}
+                      onChange={(event) => setUrgencyLevel(Number(event.target.value))}
+                      className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm font-normal text-slate-700"
+                    >
+                      <option value={1}>Nivel 1 (Leve) - cada 4.5 horas</option>
+                      <option value={2}>Nivel 2 (Moderada) - cada 3.5 horas</option>
+                      <option value={3}>Nivel 3 (Alta) - cada 2.5 horas</option>
+                      <option value={4}>Nivel 4 (Muy urgente) - cada 1.5 horas</option>
+                      <option value={5}>Nivel 5 (Extremadamente urgente) - cada 30 min</option>
+                    </select>
+                  </label>
+                  <div className="text-xs text-slate-600">
+                    <p className="font-semibold text-slate-700">Programacion actual</p>
+                    <p>Ultima alerta: {formatUrgentClock(card.urgentLastNotificationAt)}</p>
+                    <p>Proxima alerta: {formatUrgentClock(card.urgentNextNotificationAt)}</p>
+                  </div>
+                </div>
+              ) : null}
+
+              <div className="mt-2">
+                <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  Comentario de urgencia
+                </label>
+                <textarea
+                  value={urgencyComment}
+                  onChange={(event) => setUrgencyComment(event.target.value)}
+                  rows={2}
+                  className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
+                  placeholder="Ej: cliente confirma entrega hoy, requiere seguimiento prioritario..."
+                />
+              </div>
+
+              <div className="mt-3 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => void saveUrgencySettings()}
+                  disabled={savingUrgency}
+                  className="rounded-lg bg-rose-700 px-3 py-2 text-xs font-semibold text-white disabled:opacity-60"
+                >
+                  {savingUrgency ? "Guardando..." : "Guardar urgencia"}
+                </button>
+                {card.urgent ? (
+                  <button
+                    type="button"
+                    onClick={() => void resolveUrgency()}
+                    disabled={savingUrgency}
+                    className="rounded-lg border border-rose-300 bg-white px-3 py-2 text-xs font-semibold text-rose-700 disabled:opacity-60"
+                  >
+                    Marcar urgente como resuelto
+                  </button>
+                ) : null}
+              </div>
+            </div>
+          ) : null}
 
           {card.readOnly ? (
             <p className="text-sm text-amber-700">

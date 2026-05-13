@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import sharp from "sharp";
 import { requireApiSession } from "@/lib/api-session";
 import { prisma } from "@/lib/prisma";
 
@@ -15,6 +16,12 @@ function escapeXml(value: string) {
     .replace(/>/g, "&gt;")
     .replace(/\"/g, "&quot;")
     .replace(/'/g, "&apos;");
+}
+
+async function svgToJpeg(svg: string) {
+  return sharp(Buffer.from(svg))
+    .jpeg({ quality: 90, mozjpeg: true })
+    .toBuffer();
 }
 
 export async function GET(request: NextRequest) {
@@ -83,10 +90,11 @@ export async function GET(request: NextRequest) {
   <text x="80" y="640" font-size="13" font-family="Arial" fill="#64748b">Generado ${escapeXml(generatedAt)}</text>
 </svg>`;
 
-  return new NextResponse(svg, {
+  const jpg = await svgToJpeg(svg);
+  return new NextResponse(Uint8Array.from(jpg), {
     headers: {
-      "Content-Type": "image/svg+xml; charset=utf-8",
-      "Content-Disposition": `attachment; filename="contacto-${card.tc}.svg"`,
+      "Content-Type": "image/jpeg",
+      "Content-Disposition": `attachment; filename="contacto-${card.tc}.jpg"`,
     },
   });
 }

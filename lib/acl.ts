@@ -6,6 +6,8 @@ const ACCESS: Record<ModuleName, UserRole[]> = {
   tarjetas: ["ADMIN", "OPERADOR"],
   modificacion_masiva: ["ADMIN", "OPERADOR"],
   status_digitales: ["ADMIN", "OPERADOR"],
+  rastreo_masivo: ["ADMIN", "OPERADOR", "FACTURACION"],
+  sla_vencidas: ["ADMIN", "OPERADOR", "FACTURACION"],
   rutas: ["ADMIN", "OPERADOR"],
   operativo: ["ADMIN", "OPERADOR"],
   redaccion: ["ADMIN", "OPERADOR"],

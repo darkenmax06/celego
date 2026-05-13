@@ -70,6 +70,8 @@ model User {
   generatedMessengerReports  MessengerReport[] @relation("MessengerReportGeneratedBy")
   updatedSlaConfigs          SLAConfig[]       @relation("SlaConfigUpdatedBy")
   auditLogs                  AuditLog[]
+  createdUrgentCases         UrgentCase[]      @relation("UrgentCaseCreatedBy")
+  resolvedUrgentCases        UrgentCase[]      @relation("UrgentCaseResolvedBy")
 }
 
 model Customer {
@@ -263,19 +265,31 @@ model RedactionItem {
 }
 
 model UrgentCase {
-  id          String   @id @default(cuid())
-  cardId      String?
-  card        Card?    @relation(fields: [cardId], references: [id], onDelete: SetNull)
-  tc          String
-  cedula      String
-  provincia   String?
-  telefono    String?
-  status      String?
-  direccion   String?
-  importedAt  DateTime @default(now())
+  id                 String   @id @default(cuid())
+  cardId             String?
+  card               Card?    @relation(fields: [cardId], references: [id], onDelete: SetNull)
+  tc                 String
+  cedula             String
+  provincia          String?
+  telefono           String?
+  status             String?
+  direccion          String?
+  level              Int      @default(1)
+  createdById        String?
+  createdBy          User?    @relation("UrgentCaseCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  resolvedAt         DateTime?
+  resolvedById       String?
+  resolvedBy         User?    @relation("UrgentCaseResolvedBy", fields: [resolvedById], references: [id], onDelete: SetNull)
+  lastNotifiedAt     DateTime?
+  nextNotificationAt DateTime?
+  importedAt         DateTime @default(now())
+  updatedAt          DateTime @updatedAt
 
   @@index([cedula])
   @@index([tc])
+  @@index([cardId, resolvedAt])
+  @@index([nextNotificationAt, resolvedAt])
+  @@index([level, resolvedAt])
 }
 
 model Lot {

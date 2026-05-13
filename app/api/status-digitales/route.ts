@@ -22,6 +22,21 @@ function stripRemoteTag(value: string) {
   return value.replace(/\(\s*zr\s*\)/gi, "").trim();
 }
 
+const ADDITIONAL_TAG_REGEX = /\(\s*adicional(?:\s+(\d+))?\s*\)\s*$/i;
+
+function parseAdditionalIndex(value: string) {
+  const match = value.match(ADDITIONAL_TAG_REGEX);
+  if (!match) return 0;
+  if (!match[1]) return 1;
+  const parsed = Number(match[1]);
+  if (!Number.isFinite(parsed)) return 1;
+  return Math.max(1, Math.trunc(parsed));
+}
+
+function stripAdditionalTag(value: string) {
+  return value.replace(ADDITIONAL_TAG_REGEX, "").trim();
+}
+
 function stripCopySuffix(value: string) {
   return value.replace(/\s*\(\d+\)\s*$/, "").trim();
 }
@@ -35,11 +50,65 @@ function normalizeLookupValue(value: string) {
     .toUpperCase();
 }
 
+function normalizeCedula(raw: string) {
+  const digits = raw.replace(/\D/g, "");
+  return digits || raw.trim().toUpperCase();
+}
+
 function parseIdentifierCandidate(raw: string) {
   const noExt = stripExtension(raw);
   const noRemote = stripRemoteTag(noExt);
-  const noCopy = stripCopySuffix(noRemote);
+  const noAdditional = stripAdditionalTag(noRemote);
+  const noCopy = stripCopySuffix(noAdditional);
   return noCopy.replace(/\s+/g, " ").trim();
+}
+
+function dateKeyUtc(date: Date | null | undefined) {
+  if (!date) return "";
+  const y = date.getUTCFullYear();
+  const m = String(date.getUTCMonth() + 1).padStart(2, "0");
+  const d = String(date.getUTCDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
+function toDateKey(year: number, month: number, day: number) {
+  const dt = new Date(Date.UTC(year, month - 1, day));
+  if (
+    dt.getUTCFullYear() !== year ||
+    dt.getUTCMonth() + 1 !== month ||
+    dt.getUTCDate() !== day
+  ) {
+    return null;
+  }
+  return `${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+}
+
+function parseDispatchDateKey(raw: string) {
+  const normalized = stripCopySuffix(stripAdditionalTag(stripRemoteTag(stripExtension(raw))));
+
+  const ymd = normalized.match(/\b(20\d{2})[\/._-](0?[1-9]|1[0-2])[\/._-](0?[1-9]|[12]\d|3[01])\b/);
+  if (ymd) {
+    const key = toDateKey(Number(ymd[1]), Number(ymd[2]), Number(ymd[3]));
+    if (key) return key;
+  }
+
+  const dmy = normalized.match(/\b(0?[1-9]|[12]\d|3[01])[\/._-](0?[1-9]|1[0-2])[\/._-]((?:19|20)\d{2})\b/);
+  if (dmy) {
+    const key = toDateKey(Number(dmy[3]), Number(dmy[2]), Number(dmy[1]));
+    if (key) return key;
+  }
+
+  const ymdCompact = normalized.match(/\b(20\d{2})(0[1-9]|1[0-2])([0-2]\d|3[01])\b/);
+  if (ymdCompact) {
+    const key = toDateKey(Number(ymdCompact[1]), Number(ymdCompact[2]), Number(ymdCompact[3]));
+    if (key) return key;
+  }
+
+  return null;
+}
+
+function detectDispatchDateKey(fileName: string, identifier: string) {
+  return parseDispatchDateKey(fileName) ?? parseDispatchDateKey(identifier);
 }
 
 function buildLookupCandidates(identifier: string, fileName: string) {
@@ -106,12 +175,18 @@ export async function POST(request: Request) {
   }
 
   const cleanItems = parsed.data.items
-    .map((item) => ({
-      fileName: item.fileName.trim(),
-      identifier: parseIdentifierCandidate(item.identifier),
-      isRemote: item.isRemote,
-      lookupCandidates: buildLookupCandidates(item.identifier, item.fileName),
-    }))
+    .map((item) => {
+      const fileAdditional = parseAdditionalIndex(stripRemoteTag(stripExtension(item.fileName)));
+      const identifierAdditional = parseAdditionalIndex(stripRemoteTag(item.identifier));
+      return {
+        fileName: item.fileName.trim(),
+        identifier: parseIdentifierCandidate(item.identifier),
+        isRemote: item.isRemote,
+        additionalIndex: Math.max(fileAdditional, identifierAdditional),
+        dispatchDateKey: detectDispatchDateKey(item.fileName, item.identifier),
+        lookupCandidates: buildLookupCandidates(item.identifier, item.fileName),
+      };
+    })
     .filter((item) => item.fileName && item.lookupCandidates.length);
 
   if (!cleanItems.length) {
@@ -133,10 +208,13 @@ export async function POST(request: Request) {
       status: true,
       isRemote: true,
       returnReason: true,
+      createdAt: true,
       updatedAt: true,
+      dispatchDate: true,
       customer: {
         select: {
           nombre: true,
+          cedula: true,
         },
       },
     },
@@ -172,10 +250,13 @@ export async function POST(request: Request) {
         status: true,
         isRemote: true,
         returnReason: true,
+        createdAt: true,
         updatedAt: true,
+        dispatchDate: true,
         customer: {
           select: {
             nombre: true,
+            cedula: true,
           },
         },
       },
@@ -236,7 +317,7 @@ export async function POST(request: Request) {
     }
   }
 
-  function findCardForItem(item: (typeof cleanItems)[number]) {
+  function findSingleCardForItem(item: (typeof cleanItems)[number]) {
     for (const candidate of item.lookupCandidates) {
       const byTc = cardByTc.get(candidate);
       if (byTc) return byTc;
@@ -270,10 +351,135 @@ export async function POST(request: Request) {
     return null;
   }
 
-  const resolvedRows = cleanItems.map((item) => ({
-    ...item,
-    card: findCardForItem(item),
-  }));
+  function resolveNameBucket(item: (typeof cleanItems)[number]) {
+    const seen = new Set<string>();
+    for (const candidate of item.lookupCandidates) {
+      const nameKey = normalizeLookupValue(candidate);
+      if (!nameKey || seen.has(nameKey)) continue;
+      seen.add(nameKey);
+      const bucket = cardByCustomerName.get(nameKey);
+      if (bucket?.length) {
+        return bucket;
+      }
+    }
+    return null;
+  }
+
+  function findCardsForItem(item: (typeof cleanItems)[number]) {
+    const directMatch = findSingleCardForItem(item);
+    if (directMatch) {
+      return {
+        card: directMatch,
+        matchMode: "DIRECT" as const,
+      };
+    }
+
+    const bucket = resolveNameBucket(item);
+    if (!bucket?.length) {
+      return {
+        card: null as (typeof cards)[number] | null,
+        matchMode: "NONE" as const,
+      };
+    }
+
+    type NameGroup = {
+      dispatchDateKey: string;
+      cards: Array<(typeof cards)[number]>;
+      latestUpdatedAt: number;
+    };
+
+    const groupsByKey = new Map<string, NameGroup>();
+    for (const card of bucket) {
+      const dispatchKey = dateKeyUtc(card.dispatchDate);
+      const key = `${normalizeCedula(card.customer.cedula)}|${dispatchKey || "SIN_FECHA"}`;
+      const existing = groupsByKey.get(key);
+      if (existing) {
+        existing.cards.push(card);
+        existing.latestUpdatedAt = Math.max(existing.latestUpdatedAt, card.updatedAt.getTime());
+      } else {
+        groupsByKey.set(key, {
+          dispatchDateKey: dispatchKey,
+          cards: [card],
+          latestUpdatedAt: card.updatedAt.getTime(),
+        });
+      }
+    }
+
+    const groups = Array.from(groupsByKey.values()).map((group) => ({
+      ...group,
+      cards: [...group.cards].sort((a, b) => {
+        const byCreated = a.createdAt.getTime() - b.createdAt.getTime();
+        if (byCreated !== 0) return byCreated;
+        return a.id.localeCompare(b.id);
+      }),
+    }));
+
+    let candidates = groups;
+    if (item.dispatchDateKey) {
+      const byDate = groups.filter((group) => group.dispatchDateKey === item.dispatchDateKey);
+      if (byDate.length) {
+        candidates = byDate;
+      }
+    }
+
+    candidates = [...candidates].sort((a, b) => {
+      const aKey = a.dispatchDateKey || "0000-00-00";
+      const bKey = b.dispatchDateKey || "0000-00-00";
+      if (aKey !== bKey) return bKey.localeCompare(aKey);
+      return b.latestUpdatedAt - a.latestUpdatedAt;
+    });
+
+    const ordinal = Math.max(0, item.additionalIndex);
+    let targetGroup = candidates.find((group) => group.cards.length > ordinal) ?? null;
+
+    if (!targetGroup && ordinal === 0 && candidates.length > 0) {
+      targetGroup = candidates[0];
+    }
+
+    if (!targetGroup) {
+      return {
+        card: null as (typeof cards)[number] | null,
+        matchMode: "NONE" as const,
+      };
+    }
+
+    const selected = targetGroup.cards[ordinal];
+    if (!selected) {
+      return {
+        card: null as (typeof cards)[number] | null,
+        matchMode: "NONE" as const,
+      };
+    }
+
+    return {
+      card: selected,
+      matchMode:
+        ordinal === 0
+          ? (item.dispatchDateKey ? ("NOMBRE_PRINCIPAL_FECHA" as const) : ("NOMBRE_PRINCIPAL" as const))
+          : (item.dispatchDateKey ? ("ADICIONAL_NOMBRE_Y_FECHA" as const) : ("ADICIONAL_NOMBRE_ORDINAL" as const)),
+    };
+  }
+
+  type MatchMode =
+    | "DIRECT"
+    | "NONE"
+    | "NOMBRE_PRINCIPAL"
+    | "NOMBRE_PRINCIPAL_FECHA"
+    | "ADICIONAL_NOMBRE_Y_FECHA"
+    | "ADICIONAL_NOMBRE_ORDINAL";
+  type ResolvedRow = (typeof cleanItems)[number] & {
+    card: (typeof cards)[number] | null;
+    matchMode: MatchMode;
+  };
+
+  const resolvedRows = cleanItems.map<ResolvedRow>((item) => {
+    const resolved = findCardsForItem(item);
+    return {
+      ...item,
+      card: resolved.card,
+      matchMode: resolved.matchMode,
+    };
+  });
 
   const groupedByCard = new Map<string, {
     card: NonNullable<(typeof resolvedRows)[number]["card"]>;
@@ -400,6 +606,15 @@ export async function POST(request: Request) {
     if (nextRemote !== card.isRemote) {
       action = action === "SIN_CAMBIOS" ? "MARCADA_ZONA_REMOTA" : `${action} + ZONA_REMOTA`;
     }
+    if (item.matchMode === "ADICIONAL_NOMBRE_Y_FECHA") {
+      action = action === "SIN_CAMBIOS" ? "ADICIONAL_NOMBRE_Y_FECHA" : `${action} + ADICIONAL_NOMBRE_Y_FECHA`;
+    } else if (item.matchMode === "ADICIONAL_NOMBRE_ORDINAL") {
+      action = action === "SIN_CAMBIOS" ? "ADICIONAL_NOMBRE_ORDINAL" : `${action} + ADICIONAL_NOMBRE_ORDINAL`;
+    } else if (item.matchMode === "NOMBRE_PRINCIPAL_FECHA") {
+      action = action === "SIN_CAMBIOS" ? "NOMBRE_PRINCIPAL_FECHA" : `${action} + NOMBRE_PRINCIPAL_FECHA`;
+    } else if (item.matchMode === "NOMBRE_PRINCIPAL") {
+      action = action === "SIN_CAMBIOS" ? "NOMBRE_PRINCIPAL" : `${action} + NOMBRE_PRINCIPAL`;
+    }
 
     return {
       fileName: item.fileName,
@@ -414,8 +629,9 @@ export async function POST(request: Request) {
     };
   });
 
-  const cardsMatched = rows.filter((row) => row.found).length;
-  const cardsNotFound = rows.length - cardsMatched;
+  const matchedFiles = new Set(rows.filter((row) => row.found).map((row) => row.fileName));
+  const cardsMatched = matchedFiles.size;
+  const cardsNotFound = cleanItems.length - cardsMatched;
   const updatedToDigital = updatePlan.filter(
     (item) => item.shouldUpdate && item.card.status !== CardStatus.ENTREGADA && item.nextStatus === CardStatus.ENTREGA_DIGITAL,
   ).length;

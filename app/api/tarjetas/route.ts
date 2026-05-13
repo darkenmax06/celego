@@ -64,6 +64,17 @@ export async function GET(request: NextRequest) {
       include: {
         customer: true,
         currentMessenger: true,
+        urgentCases: {
+          where: { resolvedAt: null },
+          orderBy: [{ level: "desc" }, { importedAt: "desc" }],
+          take: 1,
+          select: {
+            id: true,
+            level: true,
+            nextNotificationAt: true,
+            lastNotifiedAt: true,
+          },
+        },
       },
       orderBy: [{ updatedAt: "desc" }],
       skip: (page - 1) * pageSize,
@@ -73,8 +84,13 @@ export async function GET(request: NextRequest) {
   ]);
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const normalizedCards = cards.map(({ urgentCases, ...card }) => ({
+    ...card,
+    activeUrgentCase: urgentCases[0] ?? null,
+  }));
+
   return NextResponse.json({
-    cards,
+    cards: normalizedCards,
     pagination: { page, pageSize, total, totalPages },
   });
 }

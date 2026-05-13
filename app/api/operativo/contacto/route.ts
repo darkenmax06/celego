@@ -6,6 +6,12 @@ import { prisma } from "@/lib/prisma";
 import { addBusinessDaysStrict, remainingBusinessDays } from "@/lib/sla";
 import { resolveZone } from "@/lib/zone-map";
 import { normalizeText } from "@/lib/utils";
+import {
+  clampUrgencyLevel,
+  emitDueUrgentNotifications,
+  urgencyIntervalMinutes,
+  urgencyLevelLabel,
+} from "@/lib/urgent-alerts";
 
 type PhoneState = {
   num: string;
@@ -37,6 +43,13 @@ type OperativoCardInput = {
     contactado: boolean;
     telefonosUsados: string | null;
   }>;
+};
+
+type ActiveUrgentCaseSnapshot = {
+  id: string;
+  level: number;
+  lastNotifiedAt: Date | null;
+  nextNotificationAt: Date | null;
 };
 
 const phoneSchema = z.object({
@@ -162,7 +175,7 @@ function parseMetadataPhones(metadata: Record<string, unknown>) {
   return normalizePhones(parsed);
 }
 
-function mapCardToOperativeRow(card: OperativoCardInput) {
+function mapCardToOperativeRow(card: OperativoCardInput, activeUrgentCase?: ActiveUrgentCaseSnapshot | null) {
   const root = asRecord(card.metadata);
   const operativo = asRecord(root.operativo);
   const latestContact = card.contacts[0] ?? null;
@@ -202,10 +215,13 @@ function mapCardToOperativeRow(card: OperativoCardInput) {
 
   const presinto = typeof root.presinto === "string" ? root.presinto : null;
 
+  const level = activeUrgentCase ? clampUrgencyLevel(activeUrgentCase.level) : card.urgent ? 3 : null;
+  const intervalMinutes = level ? urgencyIntervalMinutes(level) : null;
+
   return {
     id: card.id,
     cardId: card.id,
-    urgentCaseId: null,
+    urgentCaseId: activeUrgentCase?.id ?? null,
     tc: card.tc,
     nombre: card.customer.nombre,
     cedula: card.customer.cedula,
@@ -213,6 +229,11 @@ function mapCardToOperativeRow(card: OperativoCardInput) {
     zona: card.zona,
     status: card.status,
     urgent: card.urgent,
+    urgentLevel: level,
+    urgentLabel: level ? urgencyLevelLabel(level) : null,
+    urgentIntervalMinutes: intervalMinutes,
+    urgentNextNotificationAt: activeUrgentCase?.nextNotificationAt?.toISOString() ?? null,
+    urgentLastNotificationAt: activeUrgentCase?.lastNotifiedAt?.toISOString() ?? null,
     remaining: card.slaDueDate ? remainingBusinessDays(new Date(), card.slaDueDate) : null,
     presinto,
     fechaDespacho: card.dispatchDate?.toISOString() ?? null,
@@ -230,6 +251,11 @@ function mapCardToOperativeRow(card: OperativoCardInput) {
 export async function GET(request: NextRequest) {
   const auth = await requireApiSession(["ADMIN", "OPERADOR"]);
   if ("error" in auth) return auth.error;
+
+  await emitDueUrgentNotifications({
+    byUserId: auth.session.user.id,
+    limit: 20,
+  });
 
   const tab = request.nextUrl.searchParams.get("tab") === "urgentes" ? "urgentes" : "activos";
   const provincia = request.nextUrl.searchParams.get("provincia");
@@ -307,7 +333,35 @@ export async function GET(request: NextRequest) {
       prisma.card.count({ where }),
     ]);
 
-    const rows = cards.map(mapCardToOperativeRow);
+    const cardIds = cards.map((item) => item.id);
+    const activeCases = cardIds.length
+      ? await prisma.urgentCase.findMany({
+          where: {
+            cardId: { in: cardIds },
+            resolvedAt: null,
+          },
+          orderBy: [{ level: "desc" }, { importedAt: "desc" }],
+          select: {
+            id: true,
+            cardId: true,
+            level: true,
+            lastNotifiedAt: true,
+            nextNotificationAt: true,
+          },
+        })
+      : [];
+    const activeCaseByCard = new Map<string, ActiveUrgentCaseSnapshot>();
+    for (const item of activeCases) {
+      if (!item.cardId || activeCaseByCard.has(item.cardId)) continue;
+      activeCaseByCard.set(item.cardId, {
+        id: item.id,
+        level: item.level,
+        lastNotifiedAt: item.lastNotifiedAt,
+        nextNotificationAt: item.nextNotificationAt,
+      });
+    }
+
+    const rows = cards.map((card) => mapCardToOperativeRow(card, activeCaseByCard.get(card.id) ?? null));
     const totalPages = Math.max(1, Math.ceil(total / pageSize));
     return NextResponse.json({
       tab,
@@ -317,7 +371,10 @@ export async function GET(request: NextRequest) {
   }
 
   const linkedUrgentCards = await prisma.urgentCase.findMany({
-    where: { cardId: { not: null } },
+    where: {
+      cardId: { not: null },
+      resolvedAt: null,
+    },
     select: { cardId: true },
     take: 2000,
   });
@@ -369,6 +426,7 @@ export async function GET(request: NextRequest) {
     prisma.urgentCase.findMany({
       where: {
         cardId: null,
+        resolvedAt: null,
         ...(provincia && provincia !== "ALL" ? { provincia } : {}),
         ...(q
           ? {
@@ -383,10 +441,50 @@ export async function GET(request: NextRequest) {
       },
       orderBy: { importedAt: "desc" },
       take: 250,
+      select: {
+        id: true,
+        tc: true,
+        cedula: true,
+        provincia: true,
+        telefono: true,
+        status: true,
+        direccion: true,
+        level: true,
+        lastNotifiedAt: true,
+        nextNotificationAt: true,
+      },
     }),
   ]);
 
-  const cardRows = urgentCards.map(mapCardToOperativeRow);
+  const urgentCardIds = urgentCards.map((item) => item.id);
+  const activeCases = urgentCardIds.length
+    ? await prisma.urgentCase.findMany({
+        where: {
+          cardId: { in: urgentCardIds },
+          resolvedAt: null,
+        },
+        orderBy: [{ level: "desc" }, { importedAt: "desc" }],
+        select: {
+          id: true,
+          cardId: true,
+          level: true,
+          lastNotifiedAt: true,
+          nextNotificationAt: true,
+        },
+      })
+    : [];
+  const activeCaseByCard = new Map<string, ActiveUrgentCaseSnapshot>();
+  for (const item of activeCases) {
+    if (!item.cardId || activeCaseByCard.has(item.cardId)) continue;
+    activeCaseByCard.set(item.cardId, {
+      id: item.id,
+      level: item.level,
+      lastNotifiedAt: item.lastNotifiedAt,
+      nextNotificationAt: item.nextNotificationAt,
+    });
+  }
+
+  const cardRows = urgentCards.map((card) => mapCardToOperativeRow(card, activeCaseByCard.get(card.id) ?? null));
   const unresolvedRows = unresolvedCases.map((item) => ({
     id: `urgent-${item.id}`,
     cardId: null,
@@ -398,6 +496,11 @@ export async function GET(request: NextRequest) {
     zona: resolveZone(item.provincia || "", "Metro"),
     status: item.status || "URGENTE",
     urgent: true,
+    urgentLevel: clampUrgencyLevel(item.level ?? 3),
+    urgentLabel: urgencyLevelLabel(item.level ?? 3),
+    urgentIntervalMinutes: urgencyIntervalMinutes(item.level ?? 3),
+    urgentNextNotificationAt: item.nextNotificationAt?.toISOString() ?? null,
+    urgentLastNotificationAt: item.lastNotifiedAt?.toISOString() ?? null,
     remaining: null,
     presinto: null,
     fechaDespacho: null,
@@ -421,6 +524,12 @@ export async function GET(request: NextRequest) {
     .filter((row) => matchesStatusFilter(row.status, statusFilter))
     .sort((a, b) => {
       if (a.contactado !== b.contactado) return a.contactado ? 1 : -1;
+      const levelA = a.urgentLevel ?? 0;
+      const levelB = b.urgentLevel ?? 0;
+      if (levelA !== levelB) return levelB - levelA;
+      const nextA = a.urgentNextNotificationAt ? new Date(a.urgentNextNotificationAt).getTime() : Number.MAX_SAFE_INTEGER;
+      const nextB = b.urgentNextNotificationAt ? new Date(b.urgentNextNotificationAt).getTime() : Number.MAX_SAFE_INTEGER;
+      if (nextA !== nextB) return nextA - nextB;
       return a.tc.localeCompare(b.tc);
     });
 

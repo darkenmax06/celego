@@ -48,6 +48,8 @@ export const MODULES = [
   "tarjetas",
   "modificacion_masiva",
   "status_digitales",
+  "rastreo_masivo",
+  "sla_vencidas",
   "rutas",
   "operativo",
   "redaccion",
