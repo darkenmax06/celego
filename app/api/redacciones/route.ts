@@ -3,6 +3,7 @@ import { CardStatus, Prisma, RedactionStatus, RedactionType } from "@prisma/clie
 import { z } from "zod";
 import { requireApiSession } from "@/lib/api-session";
 import { prisma } from "@/lib/prisma";
+import { clearUrgencyOnCardClosure } from "@/lib/urgent-alerts";
 
 const updateSchema = z.discriminatedUnion("action", [
   z.object({
@@ -159,6 +160,13 @@ export async function PATCH(request: Request) {
                   ? null
                   : undefined,
             },
+          });
+
+          await clearUrgencyOnCardClosure({
+            tx,
+            cardId: card.id,
+            nextStatus: appliedStatus,
+            byUserId: auth.session.user.id,
           });
 
           await tx.cardStatusLog.create({

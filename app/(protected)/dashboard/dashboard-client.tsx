@@ -5,7 +5,7 @@ import { CardDetailModal } from "@/components/cards/card-detail-modal";
 import { PageHeader } from "@/components/ui/page-header";
 import { Panel } from "@/components/ui/panel";
 import { StatusBadge } from "@/components/ui/status-badge";
-import { notifyInBrowser } from "@/lib/browser-notifications";
+import { notificationFailureMessage, notifyInBrowser } from "@/lib/browser-notifications";
 
 type DashboardPayload = {
   range?: { from: string; to: string };
@@ -108,6 +108,7 @@ export default function DashboardClient() {
   const [from, setFrom] = useState(defaults.from);
   const [to, setTo] = useState(defaults.to);
   const [urgentNotifications, setUrgentNotifications] = useState<UrgentNotification[]>([]);
+  const [notificationIssue, setNotificationIssue] = useState("");
   const seenNotificationKeys = useRef(new Set<string>());
 
   async function loadSummary(fromDate = from, toDate = to) {
@@ -135,12 +136,18 @@ export default function DashboardClient() {
           const key = `${notification.urgentCaseId}-${notification.nextNotificationAt}`;
           if (seenNotificationKeys.current.has(key)) continue;
           seenNotificationKeys.current.add(key);
-          await notifyInBrowser({
+          const result = await notifyInBrowser({
             title: `Recordatorio urgente: ${notification.label}`,
             body: `${notification.cliente} - TC ${notification.tc} (${notification.provincia})`,
             tag: `urgent-reminder-${notification.urgentCaseId}`,
             requireInteraction: true,
           });
+          const warning = notificationFailureMessage(result);
+          if (warning) {
+            setNotificationIssue(warning);
+          } else if (result.shown) {
+            setNotificationIssue("");
+          }
         }
       }
     };
@@ -161,6 +168,12 @@ export default function DashboardClient() {
         title="Dashboard"
         subtitle="Resumen operativo de tarjetas despachadas en el rango seleccionado"
       />
+
+      {notificationIssue ? (
+        <div className="mb-4 rounded-xl border border-amber-300 bg-amber-50 px-4 py-2 text-sm text-amber-900">
+          {notificationIssue}
+        </div>
+      ) : null}
 
       <Panel className="mb-5" title="Rango de fechas">
         <div className="flex flex-wrap items-end gap-2">

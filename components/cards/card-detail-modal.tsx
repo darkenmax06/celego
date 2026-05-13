@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { CardStatus } from "@prisma/client";
 import { StatusBadge } from "@/components/ui/status-badge";
-import { notifyInBrowser } from "@/lib/browser-notifications";
+import { notificationFailureMessage, notifyInBrowser } from "@/lib/browser-notifications";
 
 type ReturnReason = { id: string; nombre: string; active: boolean };
 
@@ -146,6 +146,7 @@ export function CardDetailModal({ cardId, onClose, onUpdated }: Props) {
   const [saving, setSaving] = useState(false);
   const [savingUrgency, setSavingUrgency] = useState(false);
   const [message, setMessage] = useState("");
+  const [notificationIssue, setNotificationIssue] = useState("");
   const [urgencyEnabled, setUrgencyEnabled] = useState(false);
   const [urgencyLevel, setUrgencyLevel] = useState(3);
   const [urgencyComment, setUrgencyComment] = useState("");
@@ -172,6 +173,7 @@ export function CardDetailModal({ cardId, onClose, onUpdated }: Props) {
     setUrgencyEnabled(nextCard.urgent);
     setUrgencyLevel(nextCard.activeUrgentCase?.level ?? 3);
     setUrgencyComment("");
+    setNotificationIssue("");
     setMotivos((motivosJson.motivos ?? []).filter((item: ReturnReason) => item.active));
     setLoading(false);
   }
@@ -300,12 +302,18 @@ export function CardDetailModal({ cardId, onClose, onUpdated }: Props) {
     }
 
     if (json.notifyNow && json.notification) {
-      await notifyInBrowser({
+      const result = await notifyInBrowser({
         title: `Urgencia activa: ${json.notification.label}`,
         body: `${json.notification.cliente} - TC ${json.notification.tc}. Primera notificacion enviada.`,
         tag: `urgent-now-${json.notification.urgentCaseId}`,
         requireInteraction: true,
       });
+      const warning = notificationFailureMessage(result);
+      if (warning) {
+        setNotificationIssue(warning);
+      } else {
+        setNotificationIssue("");
+      }
     }
 
     setMessage(urgencyEnabled ? "Urgencia actualizada" : "Urgencia desactivada");
@@ -637,7 +645,10 @@ export function CardDetailModal({ cardId, onClose, onUpdated }: Props) {
               </div>
 
               <div className="mt-4 flex items-center justify-end gap-2">
-                {message ? <p className="mr-auto text-sm text-emerald-700">{message}</p> : null}
+                <div className="mr-auto">
+                  {message ? <p className="text-sm text-emerald-700">{message}</p> : null}
+                  {notificationIssue ? <p className="mt-1 text-xs text-amber-700">{notificationIssue}</p> : null}
+                </div>
                 <button
                   onClick={saveStatus}
                   disabled={saving || (requiresReturnReason(statusValue) && !returnReason.trim())}

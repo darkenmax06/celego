@@ -5,6 +5,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { CardStatus, Prisma, UserRole } from "@prisma/client";
 import { requireMobileSession } from "@/lib/mobile-session";
 import { prisma } from "@/lib/prisma";
+import { clearUrgencyOnCardClosure } from "@/lib/urgent-alerts";
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024;
 const ALLOWED_MIME = new Set([
@@ -149,21 +150,32 @@ export async function POST(request: NextRequest) {
     });
   }
 
-  await prisma.card.update({
-    where: { id: item.cardId },
-    data: updateData,
-  });
+  await prisma.$transaction(async (tx) => {
+    await tx.card.update({
+      where: { id: item.cardId },
+      data: updateData,
+    });
 
-  await prisma.cardStatusLog.create({
-    data: {
-      cardId: item.cardId,
-      fromStatus: item.card.status,
-      toStatus: nextStatus ?? item.card.status,
-      note: note
-        ? `Evidencia fotografica subida (${publicUrl}) - ${note}`
-        : `Evidencia fotografica subida (${publicUrl})`,
-      byUserId: auth.session.user.id,
-    },
+    if (nextStatus) {
+      await clearUrgencyOnCardClosure({
+        tx,
+        cardId: item.cardId,
+        nextStatus,
+        byUserId: auth.session.user.id,
+      });
+    }
+
+    await tx.cardStatusLog.create({
+      data: {
+        cardId: item.cardId,
+        fromStatus: item.card.status,
+        toStatus: nextStatus ?? item.card.status,
+        note: note
+          ? `Evidencia fotografica subida (${publicUrl}) - ${note}`
+          : `Evidencia fotografica subida (${publicUrl})`,
+        byUserId: auth.session.user.id,
+      },
+    });
   });
 
   return NextResponse.json(

@@ -34,6 +34,35 @@ type Payload = {
   rows: Row[];
 };
 
+const EXPORT_COLUMNS = [
+  { key: "nombre", label: "Cliente" },
+  { key: "cedula", label: "Cedula" },
+  { key: "tc", label: "TC" },
+  { key: "status", label: "Status" },
+  { key: "slaDueDate", label: "SLA vence" },
+  { key: "diasVencidos", label: "Dias vencidos" },
+  { key: "dispatchDate", label: "Fecha despacho" },
+  { key: "mensajero", label: "Mensajero" },
+  { key: "provincia", label: "Provincia" },
+  { key: "zona", label: "Zona" },
+  { key: "direccion", label: "Direccion" },
+  { key: "telefonos", label: "Contactos" },
+] as const;
+
+type ExportColumnKey = (typeof EXPORT_COLUMNS)[number]["key"];
+
+const DEFAULT_EXPORT_COLUMNS: ExportColumnKey[] = [
+  "nombre",
+  "cedula",
+  "tc",
+  "status",
+  "slaDueDate",
+  "diasVencidos",
+  "mensajero",
+  "direccion",
+  "telefonos",
+];
+
 function dateLabel(value: string | null) {
   if (!value) return "-";
   const date = new Date(value);
@@ -47,6 +76,7 @@ export default function SlaVencidasClient() {
   const [rows, setRows] = useState<Row[]>([]);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
+  const [exportColumns, setExportColumns] = useState<ExportColumnKey[]>(DEFAULT_EXPORT_COLUMNS);
 
   async function loadData(nextMessengerId = messengerId) {
     setLoading(true);
@@ -97,6 +127,49 @@ export default function SlaVencidasClient() {
     setMessage("Export JPG generado");
   }
 
+  function toggleExportColumn(key: ExportColumnKey, checked: boolean) {
+    setExportColumns((prev) => {
+      if (checked) {
+        if (prev.includes(key)) return prev;
+        return [...prev, key];
+      }
+      if (prev.length <= 1) return prev;
+      return prev.filter((item) => item !== key);
+    });
+  }
+
+  async function exportList(format: "csv" | "xlsx" | "pdf") {
+    if (!exportColumns.length) {
+      setMessage("Selecciona al menos una columna para exportar el listado.");
+      return;
+    }
+
+    const res = await fetch("/api/sla-vencidas/export-list", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        messengerId,
+        columns: exportColumns,
+        format,
+      }),
+    });
+
+    if (!res.ok) {
+      const json = await res.json().catch(() => ({ error: "No se pudo exportar el listado" }));
+      setMessage(json.error ?? "No se pudo exportar el listado");
+      return;
+    }
+
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `sla-vencidas-listado.${format}`;
+    a.click();
+    URL.revokeObjectURL(url);
+    setMessage(`Listado exportado en ${format.toUpperCase()}`);
+  }
+
   return (
     <div>
       <PageHeader
@@ -137,12 +210,51 @@ export default function SlaVencidasClient() {
           >
             Exportar JPG (ZIP)
           </button>
+          <button
+            type="button"
+            onClick={() => void exportList("csv")}
+            className="rounded-xl border border-slate-300 px-4 py-2 text-sm"
+          >
+            Exportar listado CSV
+          </button>
+          <button
+            type="button"
+            onClick={() => void exportList("xlsx")}
+            className="rounded-xl border border-slate-300 px-4 py-2 text-sm"
+          >
+            Exportar listado Excel
+          </button>
+          <button
+            type="button"
+            onClick={() => void exportList("pdf")}
+            className="rounded-xl border border-slate-300 px-4 py-2 text-sm"
+          >
+            Exportar listado PDF
+          </button>
         </div>
 
         <div className="mt-3 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-800">
           Total vencidas: {rows.length}
         </div>
         {message ? <p className="mt-3 text-sm text-emerald-700">{message}</p> : null}
+      </Panel>
+
+      <Panel className="mt-5" title="Columnas para exportar listado">
+        <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+          {EXPORT_COLUMNS.map((column) => (
+            <label
+              key={column.key}
+              className="inline-flex items-center gap-2 rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-700"
+            >
+              <input
+                type="checkbox"
+                checked={exportColumns.includes(column.key)}
+                onChange={(event) => toggleExportColumn(column.key, event.target.checked)}
+              />
+              {column.label}
+            </label>
+          ))}
+        </div>
       </Panel>
 
       <Panel className="mt-5" title={loading ? "Cargando..." : `Listado (${rows.length})`}>

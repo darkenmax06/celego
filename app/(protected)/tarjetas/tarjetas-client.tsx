@@ -6,7 +6,7 @@ import { CardDetailModal } from "@/components/cards/card-detail-modal";
 import { PageHeader } from "@/components/ui/page-header";
 import { Panel } from "@/components/ui/panel";
 import { StatusBadge } from "@/components/ui/status-badge";
-import { notifyInBrowser } from "@/lib/browser-notifications";
+import { notificationFailureMessage, notifyInBrowser } from "@/lib/browser-notifications";
 
 type CardRow = {
   id: string;
@@ -101,6 +101,7 @@ export default function TarjetasClient() {
   const [provincia, setProvincia] = useState("ALL");
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
+  const [notificationIssue, setNotificationIssue] = useState("");
   const [selectedCardId, setSelectedCardId] = useState<string | null>(null);
   const [urgencyTarget, setUrgencyTarget] = useState<CardRow | null>(null);
   const [pagination, setPagination] = useState<PaginationMeta>({
@@ -145,14 +146,17 @@ export default function TarjetasClient() {
     const json = await res.json().catch(() => ({ notifications: [] as UrgentNotification[] }));
     if (!res.ok) return 0;
     const notifications = (json.notifications ?? []) as UrgentNotification[];
+    let issue = "";
     for (const item of notifications) {
-      await notifyInBrowser({
+      const result = await notifyInBrowser({
         title: `Urgencia activa: ${item.label}`,
         body: `${item.cliente} - TC ${item.tc} (${item.provincia})`,
         tag: `urgent-import-${item.urgentCaseId}`,
         requireInteraction: true,
       });
+      issue = issue || notificationFailureMessage(result) || "";
     }
+    setNotificationIssue(issue);
     return notifications.length;
   }
 
@@ -219,12 +223,18 @@ export default function TarjetasClient() {
     }
 
     if (json.notifyNow && json.notification) {
-      await notifyInBrowser({
+      const result = await notifyInBrowser({
         title: `Urgencia activa: ${json.notification.label}`,
         body: `${json.notification.cliente} - TC ${json.notification.tc}. Primera notificacion enviada.`,
         tag: `urgent-now-${json.notification.urgentCaseId}`,
         requireInteraction: true,
       });
+      const warning = notificationFailureMessage(result);
+      if (warning) {
+        setNotificationIssue(warning);
+      } else {
+        setNotificationIssue("");
+      }
     }
 
     await fetchCards(page);
@@ -268,6 +278,7 @@ export default function TarjetasClient() {
         </form>
 
         {message ? <p className="mt-3 text-sm text-emerald-700">{message}</p> : null}
+        {notificationIssue ? <p className="mt-2 text-xs text-amber-700">{notificationIssue}</p> : null}
       </Panel>
 
       <Panel className="mt-5" title="Importaciones" subtitle="Archivos Excel oficiales del proceso">

@@ -5,6 +5,7 @@ import { z } from "zod";
 import { requireApiSession } from "@/lib/api-session";
 import { prisma } from "@/lib/prisma";
 import { toCardStatus } from "@/lib/card-status";
+import { clearUrgencyOnCardClosure } from "@/lib/urgent-alerts";
 
 const updateSchema = z.object({
   id: z.string().cuid(),
@@ -126,31 +127,42 @@ export async function PATCH(request: Request) {
     );
   }
 
-  const updated = await prisma.card.update({
-    where: { id: card.id },
-    data: {
-      status: nextStatus,
-      provincia: parsed.data.provincia ?? undefined,
-      zona: parsed.data.zona ?? undefined,
-      isRemote: parsed.data.isRemote ?? undefined,
-      currentMessengerId:
-        parsed.data.messengerId === undefined ? undefined : parsed.data.messengerId,
-      returnReason: nextReturnReason,
-    },
-    include: { customer: true, currentMessenger: true },
-  });
-
-  if (card.status !== nextStatus || parsed.data.note) {
-    await prisma.cardStatusLog.create({
+  const updated = await prisma.$transaction(async (tx) => {
+    const nextCard = await tx.card.update({
+      where: { id: card.id },
       data: {
-        cardId: card.id,
-        fromStatus: card.status,
-        toStatus: nextStatus,
-        note: parsed.data.note,
-        byUserId: auth.session.user.id,
+        status: nextStatus,
+        provincia: parsed.data.provincia ?? undefined,
+        zona: parsed.data.zona ?? undefined,
+        isRemote: parsed.data.isRemote ?? undefined,
+        currentMessengerId:
+          parsed.data.messengerId === undefined ? undefined : parsed.data.messengerId,
+        returnReason: nextReturnReason,
       },
+      include: { customer: true, currentMessenger: true },
     });
-  }
+
+    await clearUrgencyOnCardClosure({
+      tx,
+      cardId: card.id,
+      nextStatus,
+      byUserId: auth.session.user.id,
+    });
+
+    if (card.status !== nextStatus || parsed.data.note) {
+      await tx.cardStatusLog.create({
+        data: {
+          cardId: card.id,
+          fromStatus: card.status,
+          toStatus: nextStatus,
+          note: parsed.data.note,
+          byUserId: auth.session.user.id,
+        },
+      });
+    }
+
+    return nextCard;
+  });
 
   return NextResponse.json({ card: updated });
 }

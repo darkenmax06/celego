@@ -3,6 +3,7 @@ export type BrowserNotificationResult = {
   reason:
     | "shown"
     | "unsupported"
+    | "insecure_context"
     | "permission_denied"
     | "permission_default"
     | "error";
@@ -16,6 +17,10 @@ export async function notifyInBrowser(args: {
 }): Promise<BrowserNotificationResult> {
   if (typeof window === "undefined" || typeof Notification === "undefined") {
     return { shown: false, reason: "unsupported" };
+  }
+
+  if (!window.isSecureContext) {
+    return { shown: false, reason: "insecure_context" };
   }
 
   let permission = Notification.permission;
@@ -44,4 +49,17 @@ export async function notifyInBrowser(args: {
   } catch {
     return { shown: false, reason: "error" };
   }
+}
+
+export function notificationFailureMessage(result: BrowserNotificationResult) {
+  if (result.reason === "insecure_context") {
+    return "Chrome bloquea notificaciones en HTTP no seguro. Usa HTTPS o localhost para habilitarlas.";
+  }
+  if (result.reason === "permission_denied") {
+    return "El navegador tiene las notificaciones bloqueadas para este sitio.";
+  }
+  if (result.reason === "unsupported") {
+    return "Este navegador o contexto no soporta notificaciones.";
+  }
+  return null;
 }

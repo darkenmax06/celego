@@ -6,6 +6,7 @@ import { toCardStatus } from "@/lib/card-status";
 import { type ParsedCardRow } from "@/lib/importers/cards";
 import { resolveZone } from "@/lib/zone-map";
 import { normalizeText } from "@/lib/utils";
+import { clearUrgencyOnCardClosure } from "@/lib/urgent-alerts";
 
 async function getSlaDaysForRow(cedula: string, reference: string) {
   const config = await prisma.sLAConfig.upsert({
@@ -96,35 +97,46 @@ export async function upsertCardsFromImport(rows: ParsedCardRow[], byUserId?: st
     });
 
     if (existing) {
-      const updated = await prisma.card.update({
-        where: { id: existing.id },
-        data: {
-          zona,
-          provincia,
-          isRemote: item.isRemote,
-          deliveryType: item.deliveryType,
-          emissionType: item.emissionType,
-          supplier: item.supplier,
-          contractType: item.contractType,
-          externalReference: item.externalReference || null,
-          status,
-          urgent: existing.urgent,
-          slaDueDate,
-          slaExtensionDays: Math.max(0, sla.totalDays - sla.businessDays),
-          metadata: {
-            tipoEntrega: item.tipoEntrega,
-          } as Prisma.InputJsonValue,
-        },
-      });
+      await prisma.$transaction(async (tx) => {
+        const nextCard = await tx.card.update({
+          where: { id: existing.id },
+          data: {
+            zona,
+            provincia,
+            isRemote: item.isRemote,
+            deliveryType: item.deliveryType,
+            emissionType: item.emissionType,
+            supplier: item.supplier,
+            contractType: item.contractType,
+            externalReference: item.externalReference || null,
+            status,
+            urgent: existing.urgent,
+            slaDueDate,
+            slaExtensionDays: Math.max(0, sla.totalDays - sla.businessDays),
+            metadata: {
+              tipoEntrega: item.tipoEntrega,
+            } as Prisma.InputJsonValue,
+          },
+        });
 
-      await prisma.cardStatusLog.create({
-        data: {
-          cardId: updated.id,
-          fromStatus: existing.status,
-          toStatus: status,
-          note: "Actualizacion por importacion",
+        await clearUrgencyOnCardClosure({
+          tx,
+          cardId: existing.id,
+          nextStatus: status,
           byUserId,
-        },
+        });
+
+        await tx.cardStatusLog.create({
+          data: {
+            cardId: nextCard.id,
+            fromStatus: existing.status,
+            toStatus: status,
+            note: "Actualizacion por importacion",
+            byUserId,
+          },
+        });
+
+        return nextCard;
       });
 
       result.updated += 1;
@@ -230,6 +242,13 @@ export async function batchUpdateCards(
             changes.messengerId === undefined ? undefined : changes.messengerId,
           returnReason: nextReturnReason,
         },
+      });
+
+      await clearUrgencyOnCardClosure({
+        tx,
+        cardId: card.id,
+        nextStatus,
+        byUserId,
       });
 
       if (shouldUpdateStatus || changes.note) {

@@ -163,3 +163,43 @@ export function isClosedCardStatus(status: CardStatus) {
     status === CardStatus.DEVUELTA_TIENDA
   );
 }
+
+export async function clearUrgencyOnCardClosure(args: {
+  cardId: string;
+  nextStatus: CardStatus;
+  byUserId?: string | null;
+  tx?: TxClient;
+}) {
+  if (!isClosedCardStatus(args.nextStatus)) {
+    return false;
+  }
+
+  const now = new Date();
+  const client = args.tx ?? prisma;
+
+  const [resolvedCases, clearedUrgentFlag] = await Promise.all([
+    client.urgentCase.updateMany({
+      where: {
+        cardId: args.cardId,
+        resolvedAt: null,
+      },
+      data: {
+        resolvedAt: now,
+        resolvedById: args.byUserId ?? null,
+        status: "RESUELTO_AUTO_CIERRE",
+        nextNotificationAt: null,
+      },
+    }),
+    client.card.updateMany({
+      where: {
+        id: args.cardId,
+        urgent: true,
+      },
+      data: {
+        urgent: false,
+      },
+    }),
+  ]);
+
+  return resolvedCases.count > 0 || clearedUrgentFlag.count > 0;
+}

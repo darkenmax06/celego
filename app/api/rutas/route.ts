@@ -4,6 +4,7 @@ import { z } from "zod";
 import { requireApiSession } from "@/lib/api-session";
 import { prisma } from "@/lib/prisma";
 import { resolveZone } from "@/lib/zone-map";
+import { clearUrgencyOnCardClosure } from "@/lib/urgent-alerts";
 
 const createSchema = z.object({
   fecha: z.string(),
@@ -152,6 +153,13 @@ async function applyItemResult(
         route: routePayload,
       } as Prisma.InputJsonValue,
     },
+  });
+
+  await clearUrgencyOnCardClosure({
+    tx,
+    cardId: item.cardId,
+    nextStatus,
+    byUserId,
   });
 
   if (lifecycleResult !== "EN_RUTA" || input.comentario || item.card.status !== nextStatus) {

@@ -3,6 +3,7 @@ import { CardStatus, RedactionStatus } from "@prisma/client";
 import { z } from "zod";
 import { requireApiSession } from "@/lib/api-session";
 import { prisma } from "@/lib/prisma";
+import { clearUrgencyOnCardClosure } from "@/lib/urgent-alerts";
 
 const schema = z
   .object({
@@ -76,6 +77,13 @@ export async function POST(request: Request) {
                 ? null
                 : undefined,
           },
+        });
+
+        await clearUrgencyOnCardClosure({
+          tx,
+          cardId: card.id,
+          nextStatus,
+          byUserId: auth.session.user.id,
         });
 
         if (changed || item.comentario) {

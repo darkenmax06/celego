@@ -4,6 +4,7 @@ import { z } from "zod";
 import { requireApiSession } from "@/lib/api-session";
 import { prisma } from "@/lib/prisma";
 import { resolveZone } from "@/lib/zone-map";
+import { clearUrgencyOnCardClosure } from "@/lib/urgent-alerts";
 
 const createSchema = z.object({
   messengerId: z.string().cuid(),
@@ -182,6 +183,13 @@ async function applyLotItemResult(
           },
         } as Prisma.InputJsonValue,
       },
+    });
+
+    await clearUrgencyOnCardClosure({
+      tx,
+      cardId: item.cardId,
+      nextStatus,
+      byUserId,
     });
   }
 
