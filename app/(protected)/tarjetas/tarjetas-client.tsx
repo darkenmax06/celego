@@ -7,6 +7,7 @@ import { PageHeader } from "@/components/ui/page-header";
 import { Panel } from "@/components/ui/panel";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { notificationFailureMessage, notifyInBrowser } from "@/lib/browser-notifications";
+import { usePersistentState } from "@/lib/use-persistent-state";
 
 type CardRow = {
   id: string;
@@ -96,13 +97,19 @@ function formatUrgentClock(value: string | null) {
 
 export default function TarjetasClient() {
   const [cards, setCards] = useState<CardRow[]>([]);
-  const [q, setQ] = useState("");
-  const [status, setStatus] = useState("ALL");
-  const [provincia, setProvincia] = useState("ALL");
+  const [q, setQ, queryHydrated] = usePersistentState("tarjetas:query", "");
+  const [status, setStatus, statusHydrated] = usePersistentState("tarjetas:status", "ALL");
+  const [provincia, setProvincia, provinceHydrated] = usePersistentState(
+    "tarjetas:province",
+    "ALL",
+  );
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
   const [notificationIssue, setNotificationIssue] = useState("");
-  const [selectedCardId, setSelectedCardId] = useState<string | null>(null);
+  const [selectedCardId, setSelectedCardId] = usePersistentState<string | null>(
+    "tarjetas:selected-card",
+    null,
+  );
   const [urgencyTarget, setUrgencyTarget] = useState<CardRow | null>(null);
   const [pagination, setPagination] = useState<PaginationMeta>({
     page: 1,
@@ -110,7 +117,9 @@ export default function TarjetasClient() {
     total: 0,
     totalPages: 1,
   });
-  const [page, setPage] = useState(1);
+  const [page, setPage, pageHydrated] = usePersistentState("tarjetas:page", 1);
+  const filtersHydrated =
+    queryHydrated && statusHydrated && provinceHydrated && pageHydrated;
 
   async function fetchCards(pageArg = page) {
     setLoading(true);
@@ -134,8 +143,9 @@ export default function TarjetasClient() {
   }
 
   useEffect(() => {
+    if (!filtersHydrated) return;
     void fetchCards(page);
-  }, [page]);
+  }, [filtersHydrated, page]);
 
   const provincias = useMemo(() => {
     return Array.from(new Set(cards.map((card) => card.provincia))).sort();

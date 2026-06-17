@@ -50,7 +50,10 @@ export async function GET(request: NextRequest) {
       where,
       include: {
         approvedBy: true,
-        items: { include: { card: { include: { customer: true } } } },
+        items: {
+          include: { card: { include: { customer: true } } },
+          orderBy: [{ sequence: "asc" }, { createdAt: "asc" }, { id: "asc" }],
+        },
       },
       orderBy: { createdAt: "desc" },
       skip: (page - 1) * pageSize,
@@ -127,14 +130,17 @@ export async function PATCH(request: Request) {
     }
 
     const createdCount = toCreate.length;
+    const firstSequence =
+      redaction.items.reduce((max, item) => Math.max(max, item.sequence), 0) + 1;
     const updated = await prisma.$transaction(async (tx) => {
       await tx.redactionItem.createMany({
-        data: toCreate.map((item) => ({
+        data: toCreate.map((item, index) => ({
           redactionId: redaction.id,
           cardId: item.cardId,
           isRemote: item.isRemote ?? null,
           comentario: item.comentario ?? redaction.notas ?? null,
           appliedStatus,
+          sequence: firstSequence + index,
         })),
       });
 
@@ -199,7 +205,10 @@ export async function PATCH(request: Request) {
         where: { id: redaction.id },
         include: {
           approvedBy: true,
-          items: { include: { card: { include: { customer: true } } } },
+          items: {
+            include: { card: { include: { customer: true } } },
+            orderBy: [{ sequence: "asc" }, { createdAt: "asc" }, { id: "asc" }],
+          },
         },
       });
     });

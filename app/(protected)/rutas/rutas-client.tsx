@@ -4,6 +4,9 @@ import { FormEvent, KeyboardEvent, useEffect, useMemo, useState } from "react";
 import { PageHeader } from "@/components/ui/page-header";
 import { Panel } from "@/components/ui/panel";
 import { StatusBadge } from "@/components/ui/status-badge";
+import { WorkflowStatusBar } from "@/components/ui/workflow-status-bar";
+import { usePersistentState } from "@/lib/use-persistent-state";
+import { useWorkflowDraft } from "@/lib/use-workflow-draft";
 
 type Messenger = { id: string; nombre: string };
 type ProvinceRow = { id: string; nombre: string; zona: string; active: boolean };
@@ -76,6 +79,26 @@ type ScanResult = {
   nombre: string;
 };
 
+type RoutesDraft = {
+  moduleTab: ModuleTab;
+  lotTab: LotTab;
+  fecha: string;
+  messengerId: string;
+  identifiers: string;
+  selectedRouteId: string;
+  selectedRouteForLot: string | null;
+  selectedLotTrackingId: string | null;
+  scanInput: string;
+  scanResult: ScanResult | null;
+  scanStatus: "EN_RUTA" | "ACUSE_RECIBIDO" | "DEVUELTA_TIENDA";
+  scanComment: string;
+  showNewLot: boolean;
+  lotMessengerId: string;
+  lotDestinationProvince: string;
+  lotFechaEnvio: string;
+  lotIdentifiers: string;
+};
+
 type ModuleTab = "operativo" | "lotes";
 type LotTab = "lotes" | "seguimiento";
 
@@ -113,8 +136,11 @@ function toCsv(rows: Array<Record<string, string | number>>) {
 }
 
 export default function RutasClient() {
-  const [moduleTab, setModuleTab] = useState<ModuleTab>("operativo");
-  const [lotTab, setLotTab] = useState<LotTab>("lotes");
+  const [moduleTab, setModuleTab] = usePersistentState<ModuleTab>(
+    "rutas:module-tab",
+    "operativo",
+  );
+  const [lotTab, setLotTab] = usePersistentState<LotTab>("rutas:lot-tab", "lotes");
 
   const [messengers, setMessengers] = useState<Messenger[]>([]);
   const [provinces, setProvinces] = useState<ProvinceRow[]>([]);
@@ -133,29 +159,111 @@ export default function RutasClient() {
     total: 0,
     totalPages: 1,
   });
-  const [routePage, setRoutePage] = useState(1);
-  const [lotPage, setLotPage] = useState(1);
+  const [routePage, setRoutePage] = usePersistentState("rutas:route-page", 1);
+  const [lotPage, setLotPage] = usePersistentState("rutas:lot-page", 1);
 
-  const [fecha, setFecha] = useState(new Date().toISOString().slice(0, 10));
-  const [messengerId, setMessengerId] = useState("");
+  const [fecha, setFecha] = usePersistentState(
+    "rutas:fecha",
+    new Date().toISOString().slice(0, 10),
+  );
+  const [messengerId, setMessengerId] = usePersistentState("rutas:messenger", "");
   const [identifiers, setIdentifiers] = useState("");
-  const [selectedRouteId, setSelectedRouteId] = useState("");
-  const [selectedRouteForLot, setSelectedRouteForLot] = useState<string | null>(null);
-  const [selectedLotTrackingId, setSelectedLotTrackingId] = useState<string | null>(null);
+  const [selectedRouteId, setSelectedRouteId] = usePersistentState("rutas:selected-route", "");
+  const [selectedRouteForLot, setSelectedRouteForLot] = usePersistentState<string | null>(
+    "rutas:selected-route-lot",
+    null,
+  );
+  const [selectedLotTrackingId, setSelectedLotTrackingId] = usePersistentState<string | null>(
+    "rutas:selected-lot-tracking",
+    null,
+  );
 
   const [scanInput, setScanInput] = useState("");
   const [scanResult, setScanResult] = useState<ScanResult | null>(null);
-  const [scanStatus, setScanStatus] = useState<"EN_RUTA" | "ACUSE_RECIBIDO" | "DEVUELTA_TIENDA">("ACUSE_RECIBIDO");
+  const [scanStatus, setScanStatus] = usePersistentState<
+    "EN_RUTA" | "ACUSE_RECIBIDO" | "DEVUELTA_TIENDA"
+  >("rutas:scan-status", "ACUSE_RECIBIDO");
   const [scanComment, setScanComment] = useState("");
 
-  const [showNewLot, setShowNewLot] = useState(false);
-  const [lotMessengerId, setLotMessengerId] = useState("");
-  const [lotDestinationProvince, setLotDestinationProvince] = useState("");
-  const [lotFechaEnvio, setLotFechaEnvio] = useState(new Date().toISOString().slice(0, 10));
+  const [showNewLot, setShowNewLot] = usePersistentState("rutas:show-new-lot", false);
+  const [lotMessengerId, setLotMessengerId] = usePersistentState("rutas:lot-messenger", "");
+  const [lotDestinationProvince, setLotDestinationProvince] = usePersistentState(
+    "rutas:lot-province",
+    "",
+  );
+  const [lotFechaEnvio, setLotFechaEnvio] = usePersistentState(
+    "rutas:lot-date",
+    new Date().toISOString().slice(0, 10),
+  );
   const [lotIdentifiers, setLotIdentifiers] = useState("");
 
   const [message, setMessage] = useState("");
   const [savingNewLot, setSavingNewLot] = useState(false);
+
+  const draftPayload = useMemo<RoutesDraft>(
+    () => ({
+      moduleTab,
+      lotTab,
+      fecha,
+      messengerId,
+      identifiers,
+      selectedRouteId,
+      selectedRouteForLot,
+      selectedLotTrackingId,
+      scanInput,
+      scanResult,
+      scanStatus,
+      scanComment,
+      showNewLot,
+      lotMessengerId,
+      lotDestinationProvince,
+      lotFechaEnvio,
+      lotIdentifiers,
+    }),
+    [
+      fecha,
+      identifiers,
+      lotDestinationProvince,
+      lotFechaEnvio,
+      lotIdentifiers,
+      lotMessengerId,
+      lotTab,
+      messengerId,
+      moduleTab,
+      scanComment,
+      scanInput,
+      scanResult,
+      scanStatus,
+      selectedLotTrackingId,
+      selectedRouteForLot,
+      selectedRouteId,
+      showNewLot,
+    ],
+  );
+  const workflowDraft = useWorkflowDraft<RoutesDraft>({
+    module: "rutas",
+    payload: draftPayload,
+    shouldSave: Boolean(identifiers.trim() || scanInput.trim() || scanComment.trim() || lotIdentifiers.trim()),
+    onRestore: (draft) => {
+      setModuleTab(draft.moduleTab);
+      setLotTab(draft.lotTab);
+      setFecha(draft.fecha);
+      setMessengerId(draft.messengerId);
+      setIdentifiers(draft.identifiers);
+      setSelectedRouteId(draft.selectedRouteId);
+      setSelectedRouteForLot(draft.selectedRouteForLot);
+      setSelectedLotTrackingId(draft.selectedLotTrackingId);
+      setScanInput(draft.scanInput);
+      setScanResult(draft.scanResult);
+      setScanStatus(draft.scanStatus);
+      setScanComment(draft.scanComment);
+      setShowNewLot(draft.showNewLot);
+      setLotMessengerId(draft.lotMessengerId);
+      setLotDestinationProvince(draft.lotDestinationProvince);
+      setLotFechaEnvio(draft.lotFechaEnvio);
+      setLotIdentifiers(draft.lotIdentifiers);
+    },
+  });
 
   async function loadMessengers() {
     const res = await fetch("/api/mensajeros", { cache: "no-store" });
@@ -299,6 +407,7 @@ export default function RutasClient() {
     setRoutePage(1);
     await loadRoutes(1);
     setSelectedRouteId(data.route.id);
+    await workflowDraft.clearDraft();
   }
 
   async function exportRoute(format: "pdf" | "xlsx") {
@@ -358,6 +467,7 @@ export default function RutasClient() {
     setScanInput("");
     setScanComment("");
     setMessage(`Tarjeta ${data.scanned.tc} actualizada a ${scanStatus}`);
+    await workflowDraft.clearDraft();
     await Promise.all([loadRoutes(routePage), loadLots(lotPage)]);
   }
 
@@ -471,6 +581,7 @@ export default function RutasClient() {
     setShowNewLot(false);
     setLotIdentifiers("");
     setMessage(`Lote ${data.lot?.lotNumber ?? ""} creado`);
+    await workflowDraft.clearDraft();
     await loadLots(lotPage);
   }
 
@@ -531,6 +642,12 @@ export default function RutasClient() {
       <PageHeader
         title="Rutas"
         subtitle="Asignacion de rutas, lotes y gestion de acuses de mensajeros"
+      />
+      <WorkflowStatusBar
+        status={workflowDraft.status}
+        updatedAt={workflowDraft.updatedAt}
+        onUseRemote={workflowDraft.useRemoteVersion}
+        onOverwrite={workflowDraft.overwriteRemote}
       />
 
       <div className="mb-4 flex gap-2">

@@ -16,6 +16,16 @@ export async function GET(
     include: {
       customer: true,
       currentMessenger: true,
+      reassignedMessenger: true,
+      deliveryReassignments: {
+        include: {
+          byUser: true,
+          fromMessenger: true,
+          toMessenger: true,
+        },
+        orderBy: { createdAt: "desc" },
+        take: 120,
+      },
       logs: {
         include: { byUser: true },
         orderBy: { createdAt: "desc" },

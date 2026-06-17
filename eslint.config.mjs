@@ -19,6 +19,7 @@ const eslintConfig = defineConfig([
     "next-env.d.ts",
     "ui-references/**",
     "docs/**",
+    ".claude/**",
   ]),
 ]);
 

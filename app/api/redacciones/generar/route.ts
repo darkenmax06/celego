@@ -104,11 +104,12 @@ export async function POST(request: Request) {
           fecha: targetDate,
           notas: parsed.data.comentario,
           items: {
-            create: entregadas.map((item) => ({
+            create: entregadas.map((item, index) => ({
               cardId: item.cardId,
               isRemote: item.isRemote ?? null,
               comentario: item.comentario ?? parsed.data.comentario,
               appliedStatus: CardStatus.ENTREGADA,
+              sequence: index + 1,
             })),
           },
         },
@@ -131,11 +132,12 @@ export async function POST(request: Request) {
           fecha: targetDate,
           notas: parsed.data.comentario,
           items: {
-            create: retornadas.map((item) => ({
+            create: retornadas.map((item, index) => ({
               cardId: item.cardId,
               isRemote: item.isRemote ?? null,
               comentario: item.comentario ?? parsed.data.comentario,
               appliedStatus: CardStatus.RETORNADA,
+              sequence: index + 1,
             })),
           },
         },

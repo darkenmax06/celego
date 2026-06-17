@@ -55,23 +55,27 @@ enum SLAExtensionType {
 }
 
 model User {
-  id                         String            @id @default(cuid())
-  name                       String
-  email                      String            @unique
-  passwordHash               String
-  role                       UserRole          @default(OPERADOR)
-  active                     Boolean           @default(true)
-  createdAt                  DateTime          @default(now())
-  updatedAt                  DateTime          @updatedAt
-  cardStatusLogs             CardStatusLog[]
-  contactLogs                ContactLog[]
-  approvedRedactions         Redaction[]       @relation("RedactionApprovedBy")
-  createdRoutes              Route[]           @relation("RouteCreatedBy")
-  generatedMessengerReports  MessengerReport[] @relation("MessengerReportGeneratedBy")
-  updatedSlaConfigs          SLAConfig[]       @relation("SlaConfigUpdatedBy")
-  auditLogs                  AuditLog[]
-  createdUrgentCases         UrgentCase[]      @relation("UrgentCaseCreatedBy")
-  resolvedUrgentCases        UrgentCase[]      @relation("UrgentCaseResolvedBy")
+  id                        String                     @id @default(cuid())
+  name                      String
+  email                     String                     @unique
+  passwordHash              String
+  role                      UserRole                   @default(OPERADOR)
+  active                    Boolean                    @default(true)
+  createdAt                 DateTime                   @default(now())
+  updatedAt                 DateTime                   @updatedAt
+  cardStatusLogs            CardStatusLog[]
+  contactLogs               ContactLog[]
+  approvedRedactions        Redaction[]                @relation("RedactionApprovedBy")
+  createdRoutes             Route[]                    @relation("RouteCreatedBy")
+  generatedMessengerReports MessengerReport[]          @relation("MessengerReportGeneratedBy")
+  updatedSlaConfigs         SLAConfig[]                @relation("SlaConfigUpdatedBy")
+  auditLogs                 AuditLog[]                 @relation("AuditActor")
+  targetedAuditLogs         AuditLog[]                 @relation("AuditTargetUser")
+  createdUrgentCases        UrgentCase[]               @relation("UrgentCaseCreatedBy")
+  resolvedUrgentCases       UrgentCase[]               @relation("UrgentCaseResolvedBy")
+  deliveryReassignments     CardDeliveryReassignment[] @relation("ReassignmentByUser")
+  workflowDrafts            WorkflowDraft[]
+  generatedBizcochitos      BizcochitoBatch[]          @relation("BizcochitoGeneratedBy")
 }
 
 model Customer {
@@ -88,148 +92,162 @@ model Customer {
 }
 
 model Card {
-  id                String          @id @default(cuid())
-  tc                String
-  externalReference String?
-  customerId        String
-  customer          Customer        @relation(fields: [customerId], references: [id], onDelete: Restrict)
-  zona              String
-  provincia         String
-  dispatchDate      DateTime?
-  deliveryType      String?
-  emissionType      String?
-  supplier          String?
-  contractType      String?
-  status            CardStatus      @default(DESPACHADA)
-  isRemote          Boolean         @default(false)
-  urgent            Boolean         @default(false)
-  slaDueDate        DateTime?
-  slaExtensionDays  Int             @default(0)
-  returnReason      String?
-  currentMessengerId String?
-  currentMessenger  Messenger?      @relation("CurrentMessengerCards", fields: [currentMessengerId], references: [id], onDelete: SetNull)
-  metadata          Json?
-  createdAt         DateTime        @default(now())
-  updatedAt         DateTime        @updatedAt
-  logs              CardStatusLog[]
-  routeItems        RouteItem[]
-  redactionItems    RedactionItem[]
-  contacts          ContactLog[]
-  lotItems          LotItem[]
-  urgentCases       UrgentCase[]
+  id                    String                     @id @default(cuid())
+  tc                    String
+  externalReference     String?
+  customerId            String
+  customer              Customer                   @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  zona                  String
+  provincia             String
+  dispatchDate          DateTime?
+  deliveryType          String?
+  emissionType          String?
+  supplier              String?
+  contractType          String?
+  status                CardStatus                 @default(DESPACHADA)
+  isRemote              Boolean                    @default(false)
+  urgent                Boolean                    @default(false)
+  slaDueDate            DateTime?
+  slaExtensionDays      Int                        @default(0)
+  returnReason          String?
+  currentMessengerId    String?
+  currentMessenger      Messenger?                 @relation("CurrentMessengerCards", fields: [currentMessengerId], references: [id], onDelete: SetNull)
+  reassignedProvince    String?
+  reassignedZone        String?
+  reassignedAt          DateTime?
+  reassignedMessengerId String?
+  reassignedMessenger   Messenger?                 @relation("ReassignedMessengerCards", fields: [reassignedMessengerId], references: [id], onDelete: SetNull)
+  digitalDeliveryCycle  Int                        @default(0)
+  bizcochito            Boolean                    @default(false)
+  bizcochitoAt          DateTime?
+  metadata              Json?
+  createdAt             DateTime                   @default(now())
+  updatedAt             DateTime                   @updatedAt
+  logs                  CardStatusLog[]
+  routeItems            RouteItem[]
+  redactionItems        RedactionItem[]
+  contacts              ContactLog[]
+  lotItems              LotItem[]
+  urgentCases           UrgentCase[]
+  deliveryReassignments CardDeliveryReassignment[]
+  bizcochitoItems       BizcochitoItem[]
 
   @@index([tc])
   @@index([status])
   @@index([provincia, zona])
+  @@index([status, bizcochito, digitalDeliveryCycle])
 }
 
 model CardStatusLog {
-  id        String      @id @default(cuid())
-  cardId    String
-  card      Card        @relation(fields: [cardId], references: [id], onDelete: Cascade)
+  id         String      @id @default(cuid())
+  cardId     String
+  card       Card        @relation(fields: [cardId], references: [id], onDelete: Cascade)
   fromStatus CardStatus?
-  toStatus  CardStatus
-  note      String?
-  byUserId  String?
-  byUser    User?       @relation(fields: [byUserId], references: [id], onDelete: SetNull)
-  createdAt DateTime    @default(now())
+  toStatus   CardStatus
+  note       String?
+  byUserId   String?
+  byUser     User?       @relation(fields: [byUserId], references: [id], onDelete: SetNull)
+  createdAt  DateTime    @default(now())
 
   @@index([cardId, createdAt])
 }
 
 model Messenger {
-  id               String                @id @default(cuid())
-  nombre           String
-  telefono         String?
-  zonaPrincipal    String?
-  provinciaTrabajo String?
-  activo           Boolean               @default(true)
-  createdAt        DateTime              @default(now())
-  updatedAt        DateTime              @updatedAt
-  serviceRates     MessengerServiceRate[]
-  dailyRecords     MessengerDailyRecord[]
-  routes           Route[]
-  currentCards     Card[]                @relation("CurrentMessengerCards")
-  reports          MessengerReport[]
+  id                String                     @id @default(cuid())
+  nombre            String
+  telefono          String?
+  zonaPrincipal     String?
+  provinciaTrabajo  String?
+  activo            Boolean                    @default(true)
+  createdAt         DateTime                   @default(now())
+  updatedAt         DateTime                   @updatedAt
+  serviceRates      MessengerServiceRate[]
+  dailyRecords      MessengerDailyRecord[]
+  routes            Route[]
+  currentCards      Card[]                     @relation("CurrentMessengerCards")
+  reassignedCards   Card[]                     @relation("ReassignedMessengerCards")
+  reassignmentsFrom CardDeliveryReassignment[] @relation("ReassignmentFromMessenger")
+  reassignmentsTo   CardDeliveryReassignment[] @relation("ReassignmentToMessenger")
+  reports           MessengerReport[]
 }
 
 model MessengerServiceRate {
-  id               String               @id @default(cuid())
-  messengerId      String
-  messenger        Messenger            @relation(fields: [messengerId], references: [id], onDelete: Cascade)
-  serviceType      MessengerServiceType
-  amountCents      Int
+  id          String               @id @default(cuid())
+  messengerId String
+  messenger   Messenger            @relation(fields: [messengerId], references: [id], onDelete: Cascade)
+  serviceType MessengerServiceType
+  amountCents Int
 
   @@unique([messengerId, serviceType])
 }
 
 model MessengerDailyRecord {
-  id               String   @id @default(cuid())
+  id               String    @id @default(cuid())
   messengerId      String
   messenger        Messenger @relation(fields: [messengerId], references: [id], onDelete: Cascade)
   fecha            DateTime
-  entregasNormales Int      @default(0)
-  entregasRemotas  Int      @default(0)
-  recogidasBanco   Int      @default(0)
-  mandados         Int      @default(0)
-  totalCents       Int      @default(0)
+  entregasNormales Int       @default(0)
+  entregasRemotas  Int       @default(0)
+  recogidasBanco   Int       @default(0)
+  mandados         Int       @default(0)
+  totalCents       Int       @default(0)
   notas            String?
-  createdAt        DateTime @default(now())
+  createdAt        DateTime  @default(now())
 
   @@index([messengerId, fecha])
 }
 
 model MessengerReport {
-  id               String   @id @default(cuid())
-  messengerId      String
-  messenger        Messenger @relation(fields: [messengerId], references: [id], onDelete: Cascade)
-  fromDate         DateTime
-  toDate           DateTime
-  generatedAt      DateTime @default(now())
-  generatedById    String?
-  generatedBy      User?    @relation("MessengerReportGeneratedBy", fields: [generatedById], references: [id], onDelete: SetNull)
-  totalCents       Int      @default(0)
-  imagePath        String?
-  anulada          Boolean  @default(false)
+  id            String    @id @default(cuid())
+  messengerId   String
+  messenger     Messenger @relation(fields: [messengerId], references: [id], onDelete: Cascade)
+  fromDate      DateTime
+  toDate        DateTime
+  generatedAt   DateTime  @default(now())
+  generatedById String?
+  generatedBy   User?     @relation("MessengerReportGeneratedBy", fields: [generatedById], references: [id], onDelete: SetNull)
+  totalCents    Int       @default(0)
+  imagePath     String?
+  anulada       Boolean   @default(false)
 }
 
 model Route {
-  id            String      @id @default(cuid())
-  fecha         DateTime
-  messengerId   String
-  messenger     Messenger   @relation(fields: [messengerId], references: [id], onDelete: Restrict)
-  status        RouteStatus @default(PENDIENTE)
-  notas         String?
-  createdById   String?
-  createdBy     User?       @relation("RouteCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
-  createdAt     DateTime    @default(now())
-  items         RouteItem[]
+  id          String      @id @default(cuid())
+  fecha       DateTime
+  messengerId String
+  messenger   Messenger   @relation(fields: [messengerId], references: [id], onDelete: Restrict)
+  status      RouteStatus @default(PENDIENTE)
+  notas       String?
+  createdById String?
+  createdBy   User?       @relation("RouteCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt   DateTime    @default(now())
+  items       RouteItem[]
 
   @@index([fecha, messengerId])
 }
 
 model RouteItem {
-  id          String   @id @default(cuid())
-  routeId     String
-  route       Route    @relation(fields: [routeId], references: [id], onDelete: Cascade)
-  cardId      String
-  card        Card     @relation(fields: [cardId], references: [id], onDelete: Restrict)
-  sequence    Int      @default(0)
-  checkedAt   DateTime?
+  id        String    @id @default(cuid())
+  routeId   String
+  route     Route     @relation(fields: [routeId], references: [id], onDelete: Cascade)
+  cardId    String
+  card      Card      @relation(fields: [cardId], references: [id], onDelete: Restrict)
+  sequence  Int       @default(0)
+  checkedAt DateTime?
 
   @@unique([routeId, cardId])
 }
 
 model ContactLog {
-  id          String   @id @default(cuid())
-  cardId       String
-  card         Card     @relation(fields: [cardId], references: [id], onDelete: Cascade)
-  userId       String?
-  user         User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  id              String   @id @default(cuid())
+  cardId          String
+  card            Card     @relation(fields: [cardId], references: [id], onDelete: Cascade)
+  userId          String?
+  user            User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
   telefonosUsados String?
-  comentario   String?
-  contactado   Boolean  @default(false)
-  createdAt    DateTime @default(now())
+  comentario      String?
+  contactado      Boolean  @default(false)
+  createdAt       DateTime @default(now())
 
   @@index([cardId, createdAt])
 }
@@ -252,38 +270,78 @@ model Redaction {
 }
 
 model RedactionItem {
-  id           String     @id @default(cuid())
-  redactionId  String
-  redaction    Redaction  @relation(fields: [redactionId], references: [id], onDelete: Cascade)
-  cardId       String
-  card         Card       @relation(fields: [cardId], references: [id], onDelete: Restrict)
-  comentario   String?
+  id            String     @id @default(cuid())
+  redactionId   String
+  redaction     Redaction  @relation(fields: [redactionId], references: [id], onDelete: Cascade)
+  cardId        String
+  card          Card       @relation(fields: [cardId], references: [id], onDelete: Restrict)
+  comentario    String?
   appliedStatus CardStatus
-  isRemote     Boolean?
+  isRemote      Boolean?
+  sequence      Int        @default(0)
+  createdAt     DateTime   @default(now())
 
   @@unique([redactionId, cardId])
+  @@index([redactionId, sequence])
+}
+
+model CardDeliveryReassignment {
+  id                String     @id @default(cuid())
+  cardId            String
+  card              Card       @relation(fields: [cardId], references: [id], onDelete: Cascade)
+  fromProvince      String
+  fromZone          String
+  fromMessengerId   String?
+  fromMessenger     Messenger? @relation("ReassignmentFromMessenger", fields: [fromMessengerId], references: [id], onDelete: SetNull)
+  fromMessengerName String?
+  toProvince        String
+  toZone            String
+  toMessengerId     String
+  toMessenger       Messenger  @relation("ReassignmentToMessenger", fields: [toMessengerId], references: [id], onDelete: Restrict)
+  toMessengerName   String
+  note              String?
+  byUserId          String?
+  byUser            User?      @relation("ReassignmentByUser", fields: [byUserId], references: [id], onDelete: SetNull)
+  createdAt         DateTime   @default(now())
+
+  @@index([cardId, createdAt])
+}
+
+model WorkflowDraft {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  module     String
+  contextKey String   @default("default")
+  payload    Json
+  version    Int      @default(1)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([userId, module, contextKey])
+  @@index([userId, updatedAt])
 }
 
 model UrgentCase {
-  id                 String   @id @default(cuid())
+  id                 String    @id @default(cuid())
   cardId             String?
-  card               Card?    @relation(fields: [cardId], references: [id], onDelete: SetNull)
+  card               Card?     @relation(fields: [cardId], references: [id], onDelete: SetNull)
   tc                 String
   cedula             String
   provincia          String?
   telefono           String?
   status             String?
   direccion          String?
-  level              Int      @default(1)
+  level              Int       @default(1)
   createdById        String?
-  createdBy          User?    @relation("UrgentCaseCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdBy          User?     @relation("UrgentCaseCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
   resolvedAt         DateTime?
   resolvedById       String?
-  resolvedBy         User?    @relation("UrgentCaseResolvedBy", fields: [resolvedById], references: [id], onDelete: SetNull)
+  resolvedBy         User?     @relation("UrgentCaseResolvedBy", fields: [resolvedById], references: [id], onDelete: SetNull)
   lastNotifiedAt     DateTime?
   nextNotificationAt DateTime?
-  importedAt         DateTime @default(now())
-  updatedAt          DateTime @updatedAt
+  importedAt         DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
 
   @@index([cedula])
   @@index([tc])
@@ -293,99 +351,142 @@ model UrgentCase {
 }
 
 model Lot {
-  id          String   @id @default(cuid())
-  lotNumber   String   @unique
-  enviadoA    String
-  sentTo      String?
-  fechaEnvio  DateTime
+  id           String    @id @default(cuid())
+  lotNumber    String    @unique
+  enviadoA     String
+  sentTo       String?
+  fechaEnvio   DateTime
   fechaRetorno DateTime?
-  estatus     String
-  notas       String?
-  createdAt   DateTime @default(now())
-  items       LotItem[]
+  estatus      String
+  notas        String?
+  createdAt    DateTime  @default(now())
+  items        LotItem[]
 }
 
 model LotItem {
-  id          String   @id @default(cuid())
-  lotId       String
-  lot         Lot      @relation(fields: [lotId], references: [id], onDelete: Cascade)
-  cardId      String?
-  card        Card?    @relation(fields: [cardId], references: [id], onDelete: SetNull)
-  tc          String
-  cedula      String?
-  telefono    String?
-  recibida    String?
-  retornada   String?
+  id        String  @id @default(cuid())
+  lotId     String
+  lot       Lot     @relation(fields: [lotId], references: [id], onDelete: Cascade)
+  cardId    String?
+  card      Card?   @relation(fields: [cardId], references: [id], onDelete: SetNull)
+  tc        String
+  cedula    String?
+  telefono  String?
+  recibida  String?
+  retornada String?
 
   @@index([tc])
 }
 
 model ZoneTariff {
-  id          String            @id @default(cuid())
-  zona        String            @unique
-  baseCents   Int               @default(0)
-  active      Boolean           @default(true)
-  ranges      ZoneTariffRange[]
+  id        String            @id @default(cuid())
+  zona      String            @unique
+  baseCents Int               @default(0)
+  active    Boolean           @default(true)
+  ranges    ZoneTariffRange[]
 }
 
 model ZoneTariffRange {
-  id          String     @id @default(cuid())
+  id           String     @id @default(cuid())
   zoneTariffId String
-  zoneTariff  ZoneTariff @relation(fields: [zoneTariffId], references: [id], onDelete: Cascade)
-  minQty      Int
-  maxQty      Int?
+  zoneTariff   ZoneTariff @relation(fields: [zoneTariffId], references: [id], onDelete: Cascade)
+  minQty       Int
+  maxQty       Int?
   centsPerCard Int
 }
 
 model BillingConfig {
-  id                 String   @id @default("default")
-  remoteSurchargeCents Int    @default(0)
-  updatedAt          DateTime @updatedAt
+  id                   String   @id @default("default")
+  remoteSurchargeCents Int      @default(0)
+  updatedAt            DateTime @updatedAt
 }
 
 model SLAConfig {
-  id                 String   @id @default("default")
-  businessDays       Int      @default(5)
-  updatedAt          DateTime @updatedAt
-  updatedById        String?
-  updatedBy          User?    @relation("SlaConfigUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  id           String   @id @default("default")
+  businessDays Int      @default(5)
+  updatedAt    DateTime @updatedAt
+  updatedById  String?
+  updatedBy    User?    @relation("SlaConfigUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
 }
 
 model SLAExtension {
-  id            String            @id @default(cuid())
-  type          SLAExtensionType
-  matchValue    String
-  extraDays     Int
-  active        Boolean           @default(true)
-  createdAt     DateTime          @default(now())
+  id         String           @id @default(cuid())
+  type       SLAExtensionType
+  matchValue String
+  extraDays  Int
+  active     Boolean          @default(true)
+  createdAt  DateTime         @default(now())
 
   @@unique([type, matchValue])
 }
 
 model ReturnReason {
-  id          String   @id @default(cuid())
-  nombre      String   @unique
-  active      Boolean  @default(true)
-  createdAt   DateTime @default(now())
+  id        String   @id @default(cuid())
+  nombre    String   @unique
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
 }
 
 model ProvinceConfig {
-  id          String   @id @default(cuid())
-  nombre      String   @unique
-  zona        String
-  active      Boolean  @default(true)
-  createdAt   DateTime @default(now())
+  id        String   @id @default(cuid())
+  nombre    String   @unique
+  zona      String
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
 }
 
 model AuditLog {
-  id          String   @id @default(cuid())
-  entity      String
-  entityId    String
-  action      String
-  details     Json?
-  userId      String?
-  user        User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
-  createdAt   DateTime @default(now())
+  id           String   @id @default(cuid())
+  entity       String
+  entityId     String
+  action       String
+  result       String   @default("SUCCESS")
+  details      Json?
+  userId       String?
+  user         User?    @relation("AuditActor", fields: [userId], references: [id], onDelete: SetNull)
+  actorEmail   String?
+  targetUserId String?
+  targetUser   User?    @relation("AuditTargetUser", fields: [targetUserId], references: [id], onDelete: SetNull)
+  ipAddress    String?
+  userAgent    String?
+  createdAt    DateTime @default(now())
 
   @@index([entity, entityId])
+  @@index([userId, createdAt])
+  @@index([targetUserId, createdAt])
+  @@index([action, createdAt])
+  @@index([result, createdAt])
+}
+
+model BizcochitoBatch {
+  id               String           @id @default(cuid())
+  sequence         Int              @unique @default(autoincrement())
+  code             String           @unique
+  generatedById    String?
+  generatedBy      User?            @relation("BizcochitoGeneratedBy", fields: [generatedById], references: [id], onDelete: SetNull)
+  generatedAt      DateTime         @default(now())
+  itemCount        Int
+  originalFileName String
+  originalFile     Bytes
+  originalSha256   String
+  createdAt        DateTime         @default(now())
+  items            BizcochitoItem[]
+
+  @@index([generatedAt])
+}
+
+model BizcochitoItem {
+  id                   String          @id @default(cuid())
+  batchId              String
+  batch                BizcochitoBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  cardId               String
+  card                 Card            @relation(fields: [cardId], references: [id], onDelete: Restrict)
+  digitalDeliveryCycle Int
+  sequence             Int
+  snapshot             Json
+  createdAt            DateTime        @default(now())
+
+  @@unique([cardId, digitalDeliveryCycle])
+  @@index([batchId])
+  @@index([cardId])
 }

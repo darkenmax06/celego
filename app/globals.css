@@ -1,8 +1,13 @@
 @import "tailwindcss";
 
 :root {
-  --background: #f5f5f3;
+  --background: #f4f6f8;
   --foreground: #0f172a;
+  --surface: #ffffff;
+  --surface-subtle: #f8fafc;
+  --border: #dce2e8;
+  --focus: #2563eb;
+  --selection: #dbeafe;
 }
 
 @theme inline {
@@ -16,6 +21,7 @@ body {
   background: var(--background);
   color: var(--foreground);
   font-family: var(--font-dm-sans), sans-serif;
+  min-height: 100vh;
 }
 
 .font-display {
@@ -27,4 +33,37 @@ select,
 textarea,
 button {
   font: inherit;
+}
+
+input,
+select,
+textarea {
+  background-color: var(--surface);
+  transition:
+    border-color 150ms ease,
+    box-shadow 150ms ease,
+    background-color 150ms ease;
+}
+
+button,
+a {
+  -webkit-tap-highlight-color: transparent;
+}
+
+button:not(:disabled) {
+  cursor: pointer;
+}
+
+:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--focus) 28%, transparent);
+  outline-offset: 2px;
+}
+
+::selection {
+  background: var(--selection);
+  color: #172554;
+}
+
+::placeholder {
+  color: #94a3b8;
 }

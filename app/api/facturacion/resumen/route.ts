@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { CardStatus } from "@prisma/client";
 import { requireApiSession } from "@/lib/api-session";
 import { dedupeBillingCardsByCustomerAndDispatchDate } from "@/lib/billing";
+import { resolveBillableZone } from "@/lib/delivery-location";
 import { prisma } from "@/lib/prisma";
 
 function resolveCentsPerCard(
@@ -58,7 +59,13 @@ export async function GET(request: NextRequest) {
     };
   }
   if (zona && zona !== "ALL") {
-    where.zona = zona;
+    where.OR = [
+      { reassignedZone: zona },
+      {
+        reassignedZone: null,
+        zona,
+      },
+    ];
   }
 
   const [cards, tariffs] = await Promise.all([
@@ -67,6 +74,9 @@ export async function GET(request: NextRequest) {
       select: {
         id: true,
         zona: true,
+        provincia: true,
+        reassignedProvince: true,
+        reassignedZone: true,
         isRemote: true,
         dispatchDate: true,
         customer: {
@@ -84,7 +94,7 @@ export async function GET(request: NextRequest) {
   const billableCards = dedupeBillingCardsByCustomerAndDispatchDate(
     cards.map((card) => ({
       id: card.id,
-      zona: card.zona,
+      zona: resolveBillableZone(card),
       isRemote: card.isRemote,
       dispatchDate: card.dispatchDate,
       customerCedula: card.customer.cedula,

@@ -13,7 +13,12 @@ export function Panel({
   className?: string;
 }) {
   return (
-    <section className={cn("rounded-xl border border-[#ebebea] bg-white p-5 shadow-[0_1px_0_rgba(0,0,0,0.02)]", className)}>
+    <section
+      className={cn(
+        "rounded-2xl border border-slate-200/90 bg-white p-5 shadow-[0_1px_2px_rgba(15,23,42,0.04),0_10px_30px_rgba(15,23,42,0.025)]",
+        className,
+      )}
+    >
       {title ? (
         <header className="mb-4">
           <h2 className="font-display text-lg font-semibold text-slate-900">{title}</h2>

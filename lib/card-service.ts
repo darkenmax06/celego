@@ -6,7 +6,10 @@ import { toCardStatus } from "@/lib/card-status";
 import { type ParsedCardRow } from "@/lib/importers/cards";
 import { resolveZone } from "@/lib/zone-map";
 import { normalizeText } from "@/lib/utils";
-import { clearUrgencyOnCardClosure } from "@/lib/urgent-alerts";
+import {
+  applyCardTransition,
+  initialDigitalCycle,
+} from "@/lib/card-transition";
 
 async function getSlaDaysForRow(cedula: string, reference: string) {
   const config = await prisma.sLAConfig.upsert({
@@ -98,8 +101,12 @@ export async function upsertCardsFromImport(rows: ParsedCardRow[], byUserId?: st
 
     if (existing) {
       await prisma.$transaction(async (tx) => {
-        const nextCard = await tx.card.update({
-          where: { id: existing.id },
+        return applyCardTransition({
+          tx,
+          card: existing,
+          nextStatus: status,
+          byUserId,
+          note: "Actualizacion por importacion",
           data: {
             zona,
             provincia,
@@ -109,7 +116,6 @@ export async function upsertCardsFromImport(rows: ParsedCardRow[], byUserId?: st
             supplier: item.supplier,
             contractType: item.contractType,
             externalReference: item.externalReference || null,
-            status,
             urgent: existing.urgent,
             slaDueDate,
             slaExtensionDays: Math.max(0, sla.totalDays - sla.businessDays),
@@ -118,25 +124,6 @@ export async function upsertCardsFromImport(rows: ParsedCardRow[], byUserId?: st
             } as Prisma.InputJsonValue,
           },
         });
-
-        await clearUrgencyOnCardClosure({
-          tx,
-          cardId: existing.id,
-          nextStatus: status,
-          byUserId,
-        });
-
-        await tx.cardStatusLog.create({
-          data: {
-            cardId: nextCard.id,
-            fromStatus: existing.status,
-            toStatus: status,
-            note: "Actualizacion por importacion",
-            byUserId,
-          },
-        });
-
-        return nextCard;
       });
 
       result.updated += 1;
@@ -163,6 +150,7 @@ export async function upsertCardsFromImport(rows: ParsedCardRow[], byUserId?: st
         metadata: {
           tipoEntrega: item.tipoEntrega,
         } as Prisma.InputJsonValue,
+        ...initialDigitalCycle(status),
       },
     });
 
@@ -231,37 +219,22 @@ export async function batchUpdateCards(
         throw new Error("RETURN_REASON_REQUIRED");
       }
 
-      await tx.card.update({
-        where: { id: card.id },
+      await applyCardTransition({
+        tx,
+        card,
+        nextStatus,
+        byUserId,
+        note: changes.note,
+        returnReason: nextReturnReason,
         data: {
-          status: nextStatus,
           provincia: changes.provincia ?? undefined,
           zona: changes.zona ?? undefined,
           isRemote: changes.isRemote ?? undefined,
           currentMessengerId:
             changes.messengerId === undefined ? undefined : changes.messengerId,
-          returnReason: nextReturnReason,
         },
+        alwaysLog: shouldUpdateStatus,
       });
-
-      await clearUrgencyOnCardClosure({
-        tx,
-        cardId: card.id,
-        nextStatus,
-        byUserId,
-      });
-
-      if (shouldUpdateStatus || changes.note) {
-        await tx.cardStatusLog.create({
-          data: {
-            cardId: card.id,
-            fromStatus: card.status,
-            toStatus: nextStatus,
-            note: changes.note,
-            byUserId,
-          },
-        });
-      }
     }
   });
 

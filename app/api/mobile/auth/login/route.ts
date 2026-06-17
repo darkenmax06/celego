@@ -4,6 +4,7 @@ import { UserRole } from "@prisma/client";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { createMobileToken } from "@/lib/mobile-auth";
+import { tryWriteAuditEvent } from "@/lib/audit";
 
 const loginSchema = z.object({
   email: z.string().email(),
@@ -14,18 +15,47 @@ const loginSchema = z.object({
 export async function POST(request: Request) {
   const parsed = loginSchema.safeParse(await request.json());
   if (!parsed.success) {
+    await tryWriteAuditEvent({
+      entity: "AUTH_MOBILE",
+      entityId: "credentials",
+      action: "LOGIN",
+      result: "FAILURE",
+      details: { reason: "INVALID_PAYLOAD" },
+      request,
+    });
     return NextResponse.json({ error: "Payload invalido" }, { status: 400 });
   }
 
+  const email = parsed.data.email.trim().toLowerCase();
   const user = await prisma.user.findUnique({
-    where: { email: parsed.data.email },
+    where: { email },
   });
   if (!user || !user.active) {
+    await tryWriteAuditEvent({
+      entity: "AUTH_MOBILE",
+      entityId: user?.id ?? "unknown",
+      action: "LOGIN",
+      result: "FAILURE",
+      actorEmail: email,
+      targetUserId: user?.id,
+      details: { reason: user ? "INACTIVE_USER" : "USER_NOT_FOUND" },
+      request,
+    });
     return NextResponse.json({ error: "Credenciales invalidas" }, { status: 401 });
   }
 
   const isValid = await compare(parsed.data.password, user.passwordHash);
   if (!isValid) {
+    await tryWriteAuditEvent({
+      entity: "AUTH_MOBILE",
+      entityId: user.id,
+      action: "LOGIN",
+      result: "FAILURE",
+      actorEmail: email,
+      targetUserId: user.id,
+      details: { reason: "INVALID_PASSWORD" },
+      request,
+    });
     return NextResponse.json({ error: "Credenciales invalidas" }, { status: 401 });
   }
 
@@ -61,6 +91,17 @@ export async function POST(request: Request) {
     email: user.email,
     name: user.name,
     messengerId,
+  });
+
+  await tryWriteAuditEvent({
+    entity: "AUTH_MOBILE",
+    entityId: user.id,
+    action: "LOGIN",
+    userId: user.id,
+    actorEmail: email,
+    targetUserId: user.id,
+    details: { messengerId },
+    request,
   });
 
   return NextResponse.json({

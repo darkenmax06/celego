@@ -1,9 +1,15 @@
-import { ensureBaseCatalogs } from "../lib/bootstrap";
+import {
+  ensureBaseCatalogs,
+  normalizeDigitalDeliveryCycles,
+  normalizeLegacyRedactionSequences,
+} from "../lib/bootstrap";
 import { prisma } from "../lib/prisma";
 
 async function main() {
   await ensureBaseCatalogs();
-  console.log("Catalogos base creados/validados.");
+  await normalizeLegacyRedactionSequences();
+  await normalizeDigitalDeliveryCycles();
+  console.log("Catalogos base, secuencias y ciclos digitales creados/validados.");
 }
 
 main()

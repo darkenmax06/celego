@@ -14,7 +14,7 @@ RUN apt-get update -y && apt-get install -y \
 
 COPY package*.json ./
 COPY prisma ./prisma
-RUN npm ci --ignore-scripts --include=dev
+RUN npm ci --ignore-scripts --include=dev --include=optional
 
 COPY . .
 RUN npm run prisma:generate

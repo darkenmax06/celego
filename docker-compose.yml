@@ -29,6 +29,8 @@ services:
       NODE_ENV: production
       RUN_DB_PUSH: ${RUN_DB_PUSH:-true}
       RUN_DB_BOOTSTRAP: ${RUN_DB_BOOTSTRAP:-true}
+      RUN_DEMO_SEED: ${RUN_DEMO_SEED:-false}
+      DEMO_PASSWORD: ${DEMO_PASSWORD:-Demo12345!}
     depends_on:
       db:
         condition: service_healthy

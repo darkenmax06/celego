@@ -4,6 +4,9 @@ import { useMemo, useState } from "react";
 import { PageHeader } from "@/components/ui/page-header";
 import { Panel } from "@/components/ui/panel";
 import { StatusBadge } from "@/components/ui/status-badge";
+import { WorkflowStatusBar } from "@/components/ui/workflow-status-bar";
+import { usePersistentState } from "@/lib/use-persistent-state";
+import { useWorkflowDraft } from "@/lib/use-workflow-draft";
 
 type Row = {
   id: string;
@@ -31,6 +34,14 @@ type SearchResponse = {
   totalTokens: number;
   matches: number;
   rows: Row[];
+};
+
+type TrackingDraft = {
+  query: string;
+  rows: Row[];
+  visibleColumns: ColumnKey[];
+  exportColumns: ColumnKey[];
+  stats: { totalTokens: number; matches: number } | null;
 };
 
 const COLUMNS = [
@@ -115,9 +126,32 @@ export default function RastreoMasivoClient() {
   const [rows, setRows] = useState<Row[]>([]);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
-  const [visibleColumns, setVisibleColumns] = useState<ColumnKey[]>(DEFAULT_VISIBLE);
-  const [exportColumns, setExportColumns] = useState<ColumnKey[]>(DEFAULT_EXPORT);
+  const [visibleColumns, setVisibleColumns] = usePersistentState<ColumnKey[]>(
+    "rastreo-masivo:visible-columns",
+    DEFAULT_VISIBLE,
+  );
+  const [exportColumns, setExportColumns] = usePersistentState<ColumnKey[]>(
+    "rastreo-masivo:export-columns",
+    DEFAULT_EXPORT,
+  );
   const [stats, setStats] = useState<{ totalTokens: number; matches: number } | null>(null);
+
+  const draftPayload = useMemo<TrackingDraft>(
+    () => ({ query, rows, visibleColumns, exportColumns, stats }),
+    [exportColumns, query, rows, stats, visibleColumns],
+  );
+  const workflowDraft = useWorkflowDraft<TrackingDraft>({
+    module: "rastreo-masivo",
+    payload: draftPayload,
+    shouldSave: Boolean(query.trim()),
+    onRestore: (draft) => {
+      setQuery(draft.query);
+      setRows(draft.rows);
+      setVisibleColumns(draft.visibleColumns);
+      setExportColumns(draft.exportColumns);
+      setStats(draft.stats);
+    },
+  });
 
   const visibleDefs = useMemo(
     () => COLUMNS.filter((column) => visibleColumns.includes(column.key)),
@@ -208,6 +242,12 @@ export default function RastreoMasivoClient() {
       <PageHeader
         title="Rastreo masivo"
         subtitle="Busca por nombres, cedulas o tarjetas y controla columnas visibles/exportables"
+      />
+      <WorkflowStatusBar
+        status={workflowDraft.status}
+        updatedAt={workflowDraft.updatedAt}
+        onUseRemote={workflowDraft.useRemoteVersion}
+        onOverwrite={workflowDraft.overwriteRemote}
       />
 
       <Panel>

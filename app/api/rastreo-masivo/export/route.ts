@@ -8,6 +8,7 @@ import {
   searchTrackingCards,
 } from "@/lib/mass-tracking";
 import { exportRowsToCsv, exportRowsToPdf, exportRowsToXlsx } from "@/lib/reports/export";
+import { writeAuditEvent } from "@/lib/audit";
 
 const exportSchema = z.object({
   query: z.string().min(1).max(50000),
@@ -153,6 +154,14 @@ export async function POST(request: Request) {
   const today = new Date().toISOString().slice(0, 10);
   if (parsed.data.format === "csv") {
     const csv = exportRowsToCsv(exportRows);
+    await writeAuditEvent({
+      entity: "MASS_TRACKING_EXPORT",
+      entityId: today,
+      action: "EXPORT",
+      userId: auth.session.user.id,
+      details: { format: "csv", rowCount: exportRows.length, columns: validColumns },
+      request,
+    });
     return new NextResponse(csv, {
       headers: {
         "Content-Type": "text/csv; charset=utf-8",
@@ -163,6 +172,14 @@ export async function POST(request: Request) {
 
   if (parsed.data.format === "pdf") {
     const pdf = await exportRowsToPdf("Rastreo masivo", exportRows);
+    await writeAuditEvent({
+      entity: "MASS_TRACKING_EXPORT",
+      entityId: today,
+      action: "EXPORT",
+      userId: auth.session.user.id,
+      details: { format: "pdf", rowCount: exportRows.length, columns: validColumns },
+      request,
+    });
     return new NextResponse(Uint8Array.from(pdf), {
       headers: {
         "Content-Type": "application/pdf",
@@ -172,6 +189,14 @@ export async function POST(request: Request) {
   }
 
   const xlsx = await exportRowsToXlsx(exportRows, "Rastreo");
+  await writeAuditEvent({
+    entity: "MASS_TRACKING_EXPORT",
+    entityId: today,
+    action: "EXPORT",
+    userId: auth.session.user.id,
+    details: { format: "xlsx", rowCount: exportRows.length, columns: validColumns },
+    request,
+  });
   return new NextResponse(xlsx, {
     headers: {
       "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

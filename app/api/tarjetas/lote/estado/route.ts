@@ -3,6 +3,8 @@ import { z } from "zod";
 import { requireApiSession } from "@/lib/api-session";
 import { toCardStatus } from "@/lib/card-status";
 import { batchUpdateCards } from "@/lib/card-service";
+import { prisma } from "@/lib/prisma";
+import { ZONAS } from "@/lib/constants";
 
 const schema = z.object({
   cardIds: z.array(z.string().cuid()).min(1),
@@ -25,6 +27,21 @@ export async function POST(request: Request) {
   }
 
   const status = parsed.data.status ? toCardStatus(parsed.data.status) : undefined;
+  const provinceConfig = parsed.data.provincia
+    ? await prisma.provinceConfig.findUnique({
+        where: { nombre: parsed.data.provincia },
+        select: { active: true, zona: true },
+      })
+    : null;
+
+  if (parsed.data.provincia && !provinceConfig?.active) {
+    return NextResponse.json({ error: "Provincia inexistente o inactiva" }, { status: 400 });
+  }
+
+  const nextZone = parsed.data.zona ?? provinceConfig?.zona;
+  if (nextZone && !ZONAS.includes(nextZone as (typeof ZONAS)[number])) {
+    return NextResponse.json({ error: "Zona fuera del catalogo permitido" }, { status: 400 });
+  }
   if (
     status === undefined &&
     parsed.data.provincia === undefined &&
@@ -42,7 +59,7 @@ export async function POST(request: Request) {
       {
         status,
         provincia: parsed.data.provincia,
-        zona: parsed.data.zona,
+        zona: nextZone,
         isRemote: parsed.data.isRemote,
         messengerId: parsed.data.messengerId,
         returnReason: parsed.data.returnReason,

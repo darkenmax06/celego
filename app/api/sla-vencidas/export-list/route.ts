@@ -5,6 +5,7 @@ import { requireApiSession } from "@/lib/api-session";
 import { prisma } from "@/lib/prisma";
 import { remainingBusinessDays } from "@/lib/sla";
 import { exportRowsToCsv, exportRowsToPdf, exportRowsToXlsx } from "@/lib/reports/export";
+import { writeAuditEvent } from "@/lib/audit";
 
 const CLOSED_STATUSES: CardStatus[] = [
   CardStatus.ENTREGADA,
@@ -121,6 +122,14 @@ export async function POST(request: Request) {
   const todayTag = new Date().toISOString().slice(0, 10);
   if (parsed.data.format === "csv") {
     const csv = exportRowsToCsv(exportRows);
+    await writeAuditEvent({
+      entity: "SLA_EXPORT",
+      entityId: todayTag,
+      action: "EXPORT",
+      userId: auth.session.user.id,
+      details: { format: "csv", rowCount: exportRows.length, messengerId },
+      request,
+    });
     return new NextResponse(csv, {
       headers: {
         "Content-Type": "text/csv; charset=utf-8",
@@ -131,6 +140,14 @@ export async function POST(request: Request) {
 
   if (parsed.data.format === "pdf") {
     const pdf = await exportRowsToPdf("SLA vencidas", exportRows);
+    await writeAuditEvent({
+      entity: "SLA_EXPORT",
+      entityId: todayTag,
+      action: "EXPORT",
+      userId: auth.session.user.id,
+      details: { format: "pdf", rowCount: exportRows.length, messengerId },
+      request,
+    });
     return new NextResponse(Uint8Array.from(pdf), {
       headers: {
         "Content-Type": "application/pdf",
@@ -140,6 +157,14 @@ export async function POST(request: Request) {
   }
 
   const xlsx = await exportRowsToXlsx(exportRows, "SLA Vencidas");
+  await writeAuditEvent({
+    entity: "SLA_EXPORT",
+    entityId: todayTag,
+    action: "EXPORT",
+    userId: auth.session.user.id,
+    details: { format: "xlsx", rowCount: exportRows.length, messengerId },
+    request,
+  });
   return new NextResponse(xlsx, {
     headers: {
       "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

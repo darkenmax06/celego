@@ -5,6 +5,7 @@ import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 import { requireApiSession } from "@/lib/api-session";
 import { dedupeBillingCardsByCustomerAndDispatchDate } from "@/lib/billing";
 import { formatDateEs } from "@/lib/date";
+import { resolveBillableZone } from "@/lib/delivery-location";
 import { fromCents } from "@/lib/money";
 import { prisma } from "@/lib/prisma";
 import { exportRowsToCsv, exportRowsToPdf, exportRowsToXlsx } from "@/lib/reports/export";
@@ -100,6 +101,8 @@ type RedactionExportRows = {
     cedula: string;
     fecha: string;
     comentario: string;
+    provinciaReasignacion: string;
+    mensajeroReasignado: string;
   }>;
   entregadas: Array<{
     no: number;
@@ -108,6 +111,8 @@ type RedactionExportRows = {
     cedula: string;
     fecha: string;
     estatus: string;
+    provinciaReasignacion: string;
+    mensajeroReasignado: string;
   }>;
   zona: string;
   fecha: string;
@@ -145,9 +150,13 @@ async function buildRedactionExportRows(request: NextRequest): Promise<Redaction
       items: {
         include: {
           card: {
-            include: { customer: true },
+            include: {
+              customer: true,
+              reassignedMessenger: true,
+            },
           },
         },
+        orderBy: [{ sequence: "asc" }, { createdAt: "asc" }, { id: "asc" }],
       },
     },
     orderBy: [{ fecha: "asc" }, { createdAt: "asc" }],
@@ -176,6 +185,8 @@ async function buildRedactionExportRows(request: NextRequest): Promise<Redaction
       cedula: item.card.customer.cedula,
       fecha: formatDateEs(item.card.dispatchDate ?? red.fecha),
       comentario: item.comentario ?? "",
+      provinciaReasignacion: item.card.reassignedProvince ?? "",
+      mensajeroReasignado: item.card.reassignedMessenger?.nombre ?? "",
     }));
 
   const entregadas = source
@@ -188,6 +199,8 @@ async function buildRedactionExportRows(request: NextRequest): Promise<Redaction
       cedula: item.card.customer.cedula,
       fecha: formatDateEs(item.card.dispatchDate ?? red.fecha),
       estatus: "ENTREGADA",
+      provinciaReasignacion: item.card.reassignedProvince ?? "",
+      mensajeroReasignado: item.card.reassignedMessenger?.nombre ?? "",
     }));
 
   return {
@@ -214,8 +227,19 @@ async function exportRedactionToXlsx(rows: RedactionExportRows) {
   retornadas.columns = [
     ...baseColumns.map((column) => ({ key: column.key, width: column.width })),
     { key: "comentario", width: 30 },
+    { key: "provinciaReasignacion", width: 24 },
+    { key: "mensajeroReasignado", width: 28 },
   ];
-  retornadas.getRow(3).values = ["NO", "NUMERO TC", "NOMBRE", "CEDULA", "FECHA", "COMENTARIO"];
+  retornadas.getRow(3).values = [
+    "NO",
+    "NUMERO TC",
+    "NOMBRE",
+    "CEDULA",
+    "FECHA",
+    "COMENTARIO",
+    "PROVINCIA REASIGNACION",
+    "MENSAJERO REASIGNADO",
+  ];
   for (const row of rows.retornadas) {
     retornadas.addRow(row);
   }
@@ -226,8 +250,19 @@ async function exportRedactionToXlsx(rows: RedactionExportRows) {
   entregadas.columns = [
     ...baseColumns.map((column) => ({ key: column.key, width: column.width })),
     { key: "estatus", width: 18 },
+    { key: "provinciaReasignacion", width: 24 },
+    { key: "mensajeroReasignado", width: 28 },
   ];
-  entregadas.getRow(3).values = ["NO", "NUMERO TC", "NOMBRE", "CEDULA", "FECHA", "ESTATUS"];
+  entregadas.getRow(3).values = [
+    "NO",
+    "NUMERO TC",
+    "NOMBRE",
+    "CEDULA",
+    "FECHA",
+    "ESTATUS",
+    "PROVINCIA REASIGNACION",
+    "MENSAJERO REASIGNADO",
+  ];
   for (const row of rows.entregadas) {
     entregadas.addRow(row);
   }
@@ -245,67 +280,73 @@ async function exportRedactionToPdf(rows: RedactionExportRows) {
   const regular = await pdf.embedFont(StandardFonts.Helvetica);
   const bold = await pdf.embedFont(StandardFonts.HelveticaBold);
 
-  const drawPage = (input: {
+  const drawSection = (input: {
     title: string;
     headers: string[];
     dataRows: string[][];
   }) => {
-    const page = pdf.addPage([612, 792]);
-    page.drawText(input.title, {
-      x: 40,
-      y: 760,
-      size: 18,
-      font: bold,
-      color: rgb(0.06, 0.12, 0.24),
-    });
-    page.drawText(`Fecha: ${rows.fecha}`, { x: 40, y: 740, size: 10, font: regular });
-    page.drawText(`Zona: ${rows.zona}`, { x: 210, y: 740, size: 10, font: regular });
+    const rowsPerPage = 41;
+    const pageCount = Math.max(1, Math.ceil(input.dataRows.length / rowsPerPage));
+    const cols = [28, 52, 128, 270, 355, 420, 505, 625];
+    const maxLengths = [4, 14, 22, 14, 11, 18, 18, 20];
 
-    let y = 710;
-    page.drawText(input.title, {
-      x: 40,
-      y,
-      size: 12,
-      font: bold,
-      color: rgb(0.1, 0.15, 0.25),
-    });
-    y -= 16;
-
-    const cols = [40, 72, 170, 318, 408, 488];
-    input.headers.forEach((header, idx) => {
-      page.drawText(header, {
-        x: cols[idx] ?? 40 + idx * 90,
-        y,
-        size: 8,
+    for (let pageIndex = 0; pageIndex < pageCount; pageIndex += 1) {
+      const page = pdf.addPage([792, 612]);
+      const pageRows = input.dataRows.slice(
+        pageIndex * rowsPerPage,
+        (pageIndex + 1) * rowsPerPage,
+      );
+      page.drawText(input.title, {
+        x: 28,
+        y: 580,
+        size: 16,
         font: bold,
-        color: rgb(0.35, 0.35, 0.35),
+        color: rgb(0.06, 0.12, 0.24),
       });
-    });
-    y -= 10;
-
-    if (!input.dataRows.length) {
-      page.drawText("Sin registros para esta redaccion.", {
-        x: 40,
-        y,
-        size: 9,
+      page.drawText(`Fecha: ${rows.fecha}`, { x: 28, y: 562, size: 9, font: regular });
+      page.drawText(`Zona: ${rows.zona}`, { x: 180, y: 562, size: 9, font: regular });
+      page.drawText(`Pagina ${pageIndex + 1} de ${pageCount}`, {
+        x: 690,
+        y: 562,
+        size: 8,
         font: regular,
-        color: rgb(0.35, 0.35, 0.35),
       });
-      return;
-    }
 
-    for (const row of input.dataRows.slice(0, 52)) {
-      row.forEach((cell, idx) => {
-        page.drawText((cell ?? "").slice(0, idx === 2 ? 26 : 20), {
-          x: cols[idx] ?? 40 + idx * 90,
+      let y = 540;
+      input.headers.forEach((header, idx) => {
+        page.drawText(header, {
+          x: cols[idx],
           y,
-          size: 8,
-          font: regular,
-          color: rgb(0.2, 0.2, 0.2),
+          size: 7,
+          font: bold,
+          color: rgb(0.35, 0.35, 0.35),
         });
       });
       y -= 11;
-      if (y < 60) break;
+
+      if (!pageRows.length) {
+        page.drawText("Sin registros para esta redaccion.", {
+          x: 28,
+          y,
+          size: 9,
+          font: regular,
+          color: rgb(0.35, 0.35, 0.35),
+        });
+        continue;
+      }
+
+      for (const row of pageRows) {
+        row.forEach((cell, idx) => {
+          page.drawText((cell ?? "").slice(0, maxLengths[idx] ?? 18), {
+            x: cols[idx],
+            y,
+            size: 7,
+            font: regular,
+            color: rgb(0.2, 0.2, 0.2),
+          });
+        });
+        y -= 12;
+      }
     }
   };
 
@@ -316,6 +357,8 @@ async function exportRedactionToPdf(rows: RedactionExportRows) {
     row.cedula,
     row.fecha,
     row.comentario || "-",
+    row.provinciaReasignacion || "-",
+    row.mensajeroReasignado || "-",
   ]);
   const entregasRows = rows.entregadas.map((row) => [
     String(row.no),
@@ -324,17 +367,19 @@ async function exportRedactionToPdf(rows: RedactionExportRows) {
     row.cedula,
     row.fecha,
     row.estatus,
+    row.provinciaReasignacion || "-",
+    row.mensajeroReasignado || "-",
   ]);
 
-  drawPage({
+  drawSection({
     title: "TARJETAS RETORNADAS",
-    headers: ["NO", "TC", "NOMBRE", "CEDULA", "FECHA", "COMENTARIO"],
+    headers: ["NO", "TC", "NOMBRE", "CEDULA", "FECHA", "COMENT.", "PROV. REASIG.", "MENSAJERO"],
     dataRows: retornosRows,
   });
 
-  drawPage({
+  drawSection({
     title: "TARJETAS ENTREGADAS",
-    headers: ["NO", "TC", "NOMBRE", "CEDULA", "FECHA", "ESTATUS"],
+    headers: ["NO", "TC", "NOMBRE", "CEDULA", "FECHA", "ESTATUS", "PROV. REASIG.", "MENSAJERO"],
     dataRows: entregasRows,
   });
 
@@ -371,13 +416,25 @@ export async function GET(request: NextRequest) {
           }
         : null;
 
+    const cardWhere: Prisma.CardWhereInput = {
+      ...(status && status !== "ALL" ? { status: status as CardStatus } : {}),
+      ...(zone && zone !== "ALL"
+        ? {
+            OR: [
+              { reassignedZone: zone },
+              { reassignedZone: null, zona: zone },
+            ],
+          }
+        : {}),
+      ...(dispatchRange ? { dispatchDate: dispatchRange } : {}),
+    };
     const cards = await prisma.card.findMany({
-      where: {
-        ...(status && status !== "ALL" ? { status: status as CardStatus } : {}),
-        ...(zone && zone !== "ALL" ? { zona: zone } : {}),
-        ...(dispatchRange ? { dispatchDate: dispatchRange } : {}),
+      where: cardWhere,
+      include: {
+        customer: true,
+        currentMessenger: true,
+        reassignedMessenger: true,
       },
-      include: { customer: true, currentMessenger: true },
       take: 5000,
       orderBy: { updatedAt: "desc" },
     });
@@ -390,8 +447,11 @@ export async function GET(request: NextRequest) {
       numeroTarjeta: card.tc,
       cliente: card.customer.nombre,
       cedula: card.customer.cedula,
-      zona: card.zona,
-      provincia: card.provincia,
+      zonaOriginal: card.zona,
+      provinciaOriginal: card.provincia,
+      zonaFacturable: resolveBillableZone(card),
+      provinciaReasignacion: card.reassignedProvince ?? "",
+      mensajeroReasignado: card.reassignedMessenger?.nombre ?? "",
       remota: card.isRemote ? "SI" : "NO",
       estado: card.status,
       urgente: card.urgent ? "SI" : "NO",
@@ -412,7 +472,12 @@ export async function GET(request: NextRequest) {
     const contacts = await prisma.contactLog.findMany({
       where,
       include: {
-        card: { include: { customer: true } },
+        card: {
+          include: {
+            customer: true,
+            reassignedMessenger: true,
+          },
+        },
         user: true,
       },
       orderBy: { createdAt: "desc" },
@@ -428,8 +493,11 @@ export async function GET(request: NextRequest) {
       cliente: contact.card.customer.nombre,
       cedula: contact.card.customer.cedula,
       tc: contact.card.tc,
-      provincia: contact.card.provincia,
-      zona: contact.card.zona,
+      provinciaOriginal: contact.card.provincia,
+      zonaOriginal: contact.card.zona,
+      zonaFacturable: resolveBillableZone(contact.card),
+      provinciaReasignacion: contact.card.reassignedProvince ?? "",
+      mensajeroReasignado: contact.card.reassignedMessenger?.nombre ?? "",
       telefonosUsados: contact.telefonosUsados ?? "",
       comentario: contact.comentario ?? "",
       contactado: contact.contactado ? "SI" : "NO",
@@ -459,12 +527,22 @@ export async function GET(request: NextRequest) {
       prisma.card.findMany({
       where: {
         status: CardStatus.ENTREGADA,
-        ...(zone && zone !== "ALL" ? { zona: zone } : {}),
+        ...(zone && zone !== "ALL"
+          ? {
+              OR: [
+                { reassignedZone: zone },
+                { reassignedZone: null, zona: zone },
+              ],
+            }
+          : {}),
         ...(dispatchDate ? { dispatchDate } : {}),
       },
       select: {
         id: true,
         zona: true,
+        provincia: true,
+        reassignedProvince: true,
+        reassignedZone: true,
         isRemote: true,
         dispatchDate: true,
         customer: {
@@ -482,7 +560,7 @@ export async function GET(request: NextRequest) {
     const billableCards = dedupeBillingCardsByCustomerAndDispatchDate(
       cards.map((card) => ({
         id: card.id,
-        zona: card.zona,
+        zona: resolveBillableZone(card),
         isRemote: card.isRemote,
         dispatchDate: card.dispatchDate,
         customerCedula: card.customer.cedula,
@@ -574,6 +652,8 @@ export async function GET(request: NextRequest) {
         cedula: row.cedula,
         fecha: row.fecha,
         comentario: row.comentario,
+        provinciaReasignacion: row.provinciaReasignacion,
+        mensajeroReasignado: row.mensajeroReasignado,
       })),
       ...redactionRows.entregadas.map((row) => ({
         tipo: "ENTREGADA",
@@ -583,6 +663,8 @@ export async function GET(request: NextRequest) {
         cedula: row.cedula,
         fecha: row.fecha,
         comentario: row.estatus,
+        provinciaReasignacion: row.provinciaReasignacion,
+        mensajeroReasignado: row.mensajeroReasignado,
       })),
     ];
   } else {

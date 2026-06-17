@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { PageHeader } from "@/components/ui/page-header";
 import { Panel } from "@/components/ui/panel";
+import { usePersistentState } from "@/lib/use-persistent-state";
 
 const reportTypes = [
   { value: "tarjetas", label: "Tarjetas" },
@@ -14,11 +15,14 @@ const reportTypes = [
 const formats = ["xlsx", "csv", "pdf"] as const;
 
 export default function ReportesClient() {
-  const [type, setType] = useState<(typeof reportTypes)[number]["value"]>("tarjetas");
-  const [status, setStatus] = useState("ALL");
-  const [zona, setZona] = useState("ALL");
-  const [from, setFrom] = useState("");
-  const [to, setTo] = useState("");
+  const [type, setType] = usePersistentState<(typeof reportTypes)[number]["value"]>(
+    "reportes:type",
+    "tarjetas",
+  );
+  const [status, setStatus] = usePersistentState("reportes:status", "ALL");
+  const [zona, setZona] = usePersistentState("reportes:zone", "ALL");
+  const [from, setFrom] = usePersistentState("reportes:from", "");
+  const [to, setTo] = usePersistentState("reportes:to", "");
   const [message, setMessage] = useState("");
 
   async function exportFile(format: (typeof formats)[number]) {

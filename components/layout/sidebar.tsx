@@ -56,8 +56,8 @@ export function Sidebar({
   const visibleItems = NAV_ITEMS.filter((item) => allowedModules.includes(item.module));
 
   return (
-    <aside className="fixed inset-y-0 left-0 z-20 w-[230px] border-r border-slate-800/40 bg-gradient-to-b from-[#0f2544] to-[#0b1d36] px-4 py-6 text-slate-100">
-      <div className="mb-8 flex items-center gap-2 px-2">
+    <aside className="fixed inset-y-0 left-0 z-20 flex w-[230px] flex-col border-r border-slate-800/40 bg-gradient-to-b from-[#0f2544] to-[#0b1d36] px-4 py-6 text-slate-100">
+      <div className="mb-6 flex items-center gap-2 px-2">
         <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-white/10 text-sm font-bold shadow-inner">C</div>
         <div>
           <p className="font-display text-lg leading-none">celego</p>
@@ -65,7 +65,7 @@ export function Sidebar({
         </div>
       </div>
 
-      <nav className="space-y-1">
+      <nav className="min-h-0 flex-1 space-y-1 overflow-y-auto pr-1">
         {visibleItems.map((item) => {
           const Icon = item.icon;
           const active = pathname === item.href;
@@ -73,6 +73,7 @@ export function Sidebar({
             <Link
               key={item.href}
               href={item.href}
+              aria-current={active ? "page" : undefined}
               className={cn(
                 "flex items-center gap-3 rounded-xl px-3 py-2 text-sm transition",
                 active
@@ -87,7 +88,7 @@ export function Sidebar({
         })}
       </nav>
 
-      <div className="absolute inset-x-4 bottom-6 rounded-xl border border-white/10 bg-white/5 p-3">
+      <div className="mt-4 rounded-xl border border-white/10 bg-white/5 p-3">
         <p className="text-sm font-medium">{userName}</p>
         <p className="mb-3 text-xs text-slate-300">{roleLabel}</p>
         <button

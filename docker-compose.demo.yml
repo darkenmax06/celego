@@ -1,0 +1,42 @@
+services:
+  db:
+    image: postgres:16
+    container_name: celego-demo-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-celego}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-celego}
+      POSTGRES_DB: ${POSTGRES_DB:-celego}
+    volumes:
+      - celego_demo_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-celego} -d ${POSTGRES_DB:-celego}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  app:
+    image: celego-demo-app:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: celego-demo-app
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-celego}:${POSTGRES_PASSWORD:-celego}@db:5432/${POSTGRES_DB:-celego}?schema=public
+      NEXTAUTH_URL: http://localhost:${DEMO_APP_PORT:-3801}
+      NEXTAUTH_SECRET: ${NEXTAUTH_SECRET:-change-this-in-production}
+      BARCODE_ENCRYPTION_KEY: ${BARCODE_ENCRYPTION_KEY:-change-this-barcode-key}
+      NODE_ENV: production
+      RUN_DB_PUSH: "true"
+      RUN_DB_BOOTSTRAP: "true"
+      RUN_DEMO_SEED: "true"
+      DEMO_PASSWORD: ${DEMO_PASSWORD:-Demo12345!}
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "${DEMO_APP_PORT:-3801}:3000"
+
+volumes:
+  celego_demo_pgdata:

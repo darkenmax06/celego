@@ -4,6 +4,9 @@ import { KeyboardEvent, useEffect, useMemo, useState } from "react";
 import { PageHeader } from "@/components/ui/page-header";
 import { Panel } from "@/components/ui/panel";
 import { StatusBadge } from "@/components/ui/status-badge";
+import { WorkflowStatusBar } from "@/components/ui/workflow-status-bar";
+import { usePersistentState } from "@/lib/use-persistent-state";
+import { useWorkflowDraft } from "@/lib/use-workflow-draft";
 
 type CardLookup = {
   id: string;
@@ -46,6 +49,18 @@ type Redaction = {
 
 type Motivo = { id: string; nombre: string; active: boolean };
 type PaginationMeta = { page: number; pageSize: number; total: number; totalPages: number };
+type RedactionDraft = {
+  mode: "retorno" | "entrega";
+  scanInput: string;
+  zona: string;
+  fecha: string;
+  historyDate: string;
+  retornos: DraftRow[];
+  entregas: DraftRow[];
+  selectedRetornos: string[];
+  bulkMotivo: string;
+  historyPage: number;
+};
 
 const ZONAS = ["Metro", "Este", "Norte", "Sur"];
 
@@ -62,11 +77,20 @@ function toDisplayDate(value: string | null | undefined) {
 }
 
 export default function RedaccionClient() {
-  const [mode, setMode] = useState<"retorno" | "entrega">("retorno");
+  const [mode, setMode] = usePersistentState<"retorno" | "entrega">(
+    "redaccion:mode",
+    "retorno",
+  );
   const [scanInput, setScanInput] = useState("");
-  const [zona, setZona] = useState("Este");
-  const [fecha, setFecha] = useState(new Date().toISOString().slice(0, 10));
-  const [historyDate, setHistoryDate] = useState(new Date().toISOString().slice(0, 10));
+  const [zona, setZona] = usePersistentState("redaccion:zona", "Este");
+  const [fecha, setFecha] = usePersistentState(
+    "redaccion:fecha",
+    new Date().toISOString().slice(0, 10),
+  );
+  const [historyDate, setHistoryDate] = usePersistentState(
+    "redaccion:history-date",
+    new Date().toISOString().slice(0, 10),
+  );
   const [retornos, setRetornos] = useState<DraftRow[]>([]);
   const [entregas, setEntregas] = useState<DraftRow[]>([]);
   const [selectedRetornos, setSelectedRetornos] = useState<string[]>([]);
@@ -79,10 +103,56 @@ export default function RedaccionClient() {
     total: 0,
     totalPages: 1,
   });
-  const [historyPage, setHistoryPage] = useState(1);
+  const [historyPage, setHistoryPage] = usePersistentState("redaccion:history-page", 1);
   const [editingRedactionId, setEditingRedactionId] = useState<string | null>(null);
   const [processing, setProcessing] = useState(false);
   const [message, setMessage] = useState("");
+
+  const draftPayload = useMemo<RedactionDraft>(
+    () => ({
+      mode,
+      scanInput,
+      zona,
+      fecha,
+      historyDate,
+      retornos,
+      entregas,
+      selectedRetornos,
+      bulkMotivo,
+      historyPage,
+    }),
+    [
+      bulkMotivo,
+      entregas,
+      fecha,
+      historyDate,
+      historyPage,
+      mode,
+      retornos,
+      scanInput,
+      selectedRetornos,
+      zona,
+    ],
+  );
+  const workflowDraft = useWorkflowDraft<RedactionDraft>({
+    module: "redaccion",
+    payload: draftPayload,
+    shouldSave: retornos.length > 0 || entregas.length > 0,
+    onRestore: (draft) => {
+      setMode(draft.mode);
+      setScanInput(draft.scanInput);
+      setZona(draft.zona);
+      setFecha(draft.fecha);
+      setHistoryDate(draft.historyDate);
+      setRetornos(draft.retornos);
+      setEntregas(draft.entregas);
+      setSelectedRetornos(draft.selectedRetornos);
+      setBulkMotivo(draft.bulkMotivo);
+      setHistoryPage(draft.historyPage);
+    },
+  });
+  const workflowDraftStatus = workflowDraft.status;
+  const clearWorkflowDraft = workflowDraft.clearDraft;
 
   const listaActiva = mode === "retorno" ? retornos : entregas;
   const allRetornosSelected = retornos.length > 0 && selectedRetornos.length === retornos.length;
@@ -121,6 +191,21 @@ export default function RedaccionClient() {
   useEffect(() => {
     void loadCatalogs();
   }, [historyDate, zona, historyPage]);
+
+  useEffect(() => {
+    if (
+      !retornos.length &&
+      !entregas.length &&
+      (workflowDraftStatus === "saved" || workflowDraftStatus === "restored")
+    ) {
+      void clearWorkflowDraft();
+    }
+  }, [
+    clearWorkflowDraft,
+    entregas.length,
+    retornos.length,
+    workflowDraftStatus,
+  ]);
 
   const allScannedCardIds = useMemo(
     () => new Set([...retornos.map((item) => item.cardId), ...entregas.map((item) => item.cardId)]),
@@ -290,6 +375,7 @@ export default function RedaccionClient() {
     setHistoryPage(1);
     setMessage(`Redaccion aprobada: ${approveData.updatedItems} tarjetas actualizadas`);
     setProcessing(false);
+    await workflowDraft.clearDraft();
     await loadCatalogs();
   }
 
@@ -368,6 +454,12 @@ export default function RedaccionClient() {
       <PageHeader
         title="Redaccion"
         subtitle="Pistoleo y aprobacion de entregas/retornos con actualizacion de estados"
+      />
+      <WorkflowStatusBar
+        status={workflowDraft.status}
+        updatedAt={workflowDraft.updatedAt}
+        onUseRemote={workflowDraft.useRemoteVersion}
+        onOverwrite={workflowDraft.overwriteRemote}
       />
 
       <Panel>

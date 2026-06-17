@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { PageHeader } from "@/components/ui/page-header";
 import { Panel } from "@/components/ui/panel";
 import { notifyInBrowser } from "@/lib/browser-notifications";
+import { usePersistentState } from "@/lib/use-persistent-state";
 
 type OperativeTab = "activos" | "urgentes";
 type ExportFormat = "xlsx" | "csv" | "pdf";
@@ -183,14 +184,17 @@ function formatUrgentClock(value: string | null) {
 
 export default function OperativoClient() {
   const [cards, setCards] = useState<OperativeCard[]>([]);
-  const [tab, setTab] = useState<OperativeTab>("activos");
-  const [provincia, setProvincia] = useState("ALL");
-  const [status, setStatus] = useState("ALL");
-  const [search, setSearch] = useState("");
-  const [days, setDays] = useState(3);
+  const [tab, setTab] = usePersistentState<OperativeTab>("operativo:tab", "activos");
+  const [provincia, setProvincia] = usePersistentState("operativo:province", "ALL");
+  const [status, setStatus] = usePersistentState("operativo:status", "ALL");
+  const [search, setSearch] = usePersistentState("operativo:search", "");
+  const [days, setDays] = usePersistentState("operativo:days", 3);
   const [loading, setLoading] = useState(false);
-  const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
-  const [showReport, setShowReport] = useState(false);
+  const [selectedCardId, setSelectedCardId] = usePersistentState<string | null>(
+    "operativo:selected-card",
+    null,
+  );
+  const [showReport, setShowReport] = usePersistentState("operativo:report-modal", false);
   const [tabCounts, setTabCounts] = useState<{ activos: number; urgentes: number }>({
     activos: 0,
     urgentes: 0,
@@ -201,7 +205,7 @@ export default function OperativoClient() {
     total: 0,
     totalPages: 1,
   });
-  const [page, setPage] = useState(1);
+  const [page, setPage] = usePersistentState("operativo:page", 1);
   const [message, setMessage] = useState("");
   const [urgentNotifications, setUrgentNotifications] = useState<UrgentNotification[]>([]);
 
@@ -249,7 +253,7 @@ export default function OperativoClient() {
 
     if (keepSelectedId) {
       const keepIndex = nextCards.findIndex((item) => item.id === keepSelectedId);
-      setSelectedIndex(keepIndex >= 0 ? keepIndex : null);
+      setSelectedCardId(keepIndex >= 0 ? keepSelectedId : null);
     }
 
     setLoading(false);
@@ -258,7 +262,6 @@ export default function OperativoClient() {
   useEffect(() => {
     setPage(1);
     setPagination((prev) => ({ ...prev, page: 1 }));
-    setSelectedIndex(null);
   }, [tab, provincia, status, search, days]);
 
   useEffect(() => {
@@ -283,7 +286,10 @@ export default function OperativoClient() {
 
   const provincias = useMemo(() => Array.from(new Set(cards.map((c) => c.provincia))).sort(), [cards]);
   const contactadas = useMemo(() => cards.filter((card) => card.contactado).length, [cards]);
-  const current = selectedIndex !== null ? cards[selectedIndex] : undefined;
+  const selectedIndex = selectedCardId
+    ? cards.findIndex((card) => card.id === selectedCardId)
+    : -1;
+  const current = selectedIndex >= 0 ? cards[selectedIndex] : undefined;
 
   async function saveContact(payload: {
     telefonos: PhoneState[];
@@ -532,7 +538,7 @@ export default function OperativoClient() {
 
       <Panel className="mt-5" title={tab === "activos" ? "Cola de clientes" : "Casos urgentes"}>
         <div className="space-y-2">
-          {cards.map((card, index) => (
+          {cards.map((card) => (
             <div
               key={card.id}
               className={`rounded-xl border px-3 py-3 ${
@@ -581,7 +587,7 @@ export default function OperativoClient() {
                   ) : null}
                   <button
                     type="button"
-                    onClick={() => setSelectedIndex(index)}
+                    onClick={() => setSelectedCardId(card.id)}
                     className="rounded-md bg-[#0f2544] px-3 py-1.5 text-xs font-semibold text-white"
                   >
                     Contactar
@@ -628,15 +634,15 @@ export default function OperativoClient() {
 
       {message ? <p className="mt-4 text-sm text-emerald-700">{message}</p> : null}
 
-      {selectedIndex !== null && current ? (
+      {selectedIndex >= 0 && current ? (
         <ContactModal
           card={current}
           index={selectedIndex}
           total={cards.length}
-          onClose={() => setSelectedIndex(null)}
-          onPrev={() => setSelectedIndex((prev) => (prev !== null ? Math.max(prev - 1, 0) : prev))}
+          onClose={() => setSelectedCardId(null)}
+          onPrev={() => setSelectedCardId(cards[Math.max(selectedIndex - 1, 0)]?.id ?? null)}
           onNext={() =>
-            setSelectedIndex((prev) => (prev !== null ? Math.min(prev + 1, cards.length - 1) : prev))
+            setSelectedCardId(cards[Math.min(selectedIndex + 1, cards.length - 1)]?.id ?? null)
           }
           onSave={saveContact}
           onUrgencyChange={saveUrgency}

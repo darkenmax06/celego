@@ -3,6 +3,7 @@ import { CardStatus, Prisma } from "@prisma/client";
 import { z } from "zod";
 import { requireApiSession } from "@/lib/api-session";
 import { prisma } from "@/lib/prisma";
+import { applyCardTransition } from "@/lib/card-transition";
 
 const itemSchema = z.object({
   fileName: z.string().min(1),
@@ -208,6 +209,7 @@ export async function POST(request: Request) {
       status: true,
       isRemote: true,
       returnReason: true,
+      digitalDeliveryCycle: true,
       createdAt: true,
       updatedAt: true,
       dispatchDate: true,
@@ -250,6 +252,7 @@ export async function POST(request: Request) {
         status: true,
         isRemote: true,
         returnReason: true,
+        digitalDeliveryCycle: true,
         createdAt: true,
         updatedAt: true,
         dispatchDate: true,
@@ -548,25 +551,14 @@ export async function POST(request: Request) {
             : "zona remota sin cambio",
         ];
 
-        await tx.card.update({
-          where: { id: plan.card.id },
+        await applyCardTransition({
+          tx,
+          card: plan.card,
+          nextStatus: plan.nextStatus,
+          byUserId: auth.session.user.id,
+          note: noteParts.join(" | "),
           data: {
-            status: plan.nextStatus,
             isRemote: plan.nextRemote,
-            returnReason:
-              plan.nextStatus === CardStatus.RETORNADA || plan.nextStatus === CardStatus.DEVUELTA_TIENDA
-                ? plan.card.returnReason
-                : null,
-          },
-        });
-
-        await tx.cardStatusLog.create({
-          data: {
-            cardId: plan.card.id,
-            fromStatus: plan.card.status,
-            toStatus: plan.nextStatus,
-            note: noteParts.join(" | "),
-            byUserId: auth.session.user.id,
           },
         });
       }

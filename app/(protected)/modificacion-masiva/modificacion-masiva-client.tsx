@@ -5,8 +5,11 @@ import { CardStatus } from "@prisma/client";
 import { PageHeader } from "@/components/ui/page-header";
 import { Panel } from "@/components/ui/panel";
 import { StatusBadge } from "@/components/ui/status-badge";
+import { WorkflowStatusBar } from "@/components/ui/workflow-status-bar";
+import { useWorkflowDraft } from "@/lib/use-workflow-draft";
 
 type Motivo = { id: string; nombre: string; active: boolean };
+type Provincia = { id: string; nombre: string; zona: string; active: boolean };
 
 type CardRow = {
   id: string;
@@ -16,6 +19,17 @@ type CardRow = {
   isRemote: boolean;
   status: string;
   customer: { nombre: string; cedula: string };
+};
+
+type MassUpdateDraft = {
+  scanInput: string;
+  scannedCards: CardRow[];
+  selectedCardIds: string[];
+  batchStatus: string;
+  batchProvincia: string;
+  batchZona: string;
+  batchRemote: string;
+  batchReturnReason: string;
 };
 
 const statuses: CardStatus[] = [
@@ -40,7 +54,46 @@ export default function ModificacionMasivaClient() {
   const [batchRemote, setBatchRemote] = useState("UNCHANGED");
   const [batchReturnReason, setBatchReturnReason] = useState("");
   const [motivos, setMotivos] = useState<Motivo[]>([]);
+  const [provincias, setProvincias] = useState<Provincia[]>([]);
   const [message, setMessage] = useState("");
+
+  const draftPayload = useMemo<MassUpdateDraft>(
+    () => ({
+      scanInput,
+      scannedCards,
+      selectedCardIds,
+      batchStatus,
+      batchProvincia,
+      batchZona,
+      batchRemote,
+      batchReturnReason,
+    }),
+    [
+      batchProvincia,
+      batchRemote,
+      batchReturnReason,
+      batchStatus,
+      batchZona,
+      scanInput,
+      scannedCards,
+      selectedCardIds,
+    ],
+  );
+  const workflowDraft = useWorkflowDraft<MassUpdateDraft>({
+    module: "modificacion-masiva",
+    payload: draftPayload,
+    shouldSave: scannedCards.length > 0,
+    onRestore: (draft) => {
+      setScanInput(draft.scanInput);
+      setScannedCards(draft.scannedCards);
+      setSelectedCardIds(draft.selectedCardIds);
+      setBatchStatus(draft.batchStatus);
+      setBatchProvincia(draft.batchProvincia);
+      setBatchZona(draft.batchZona);
+      setBatchRemote(draft.batchRemote);
+      setBatchReturnReason(draft.batchReturnReason);
+    },
+  });
 
   function needsReturnReason(status: string) {
     return status === CardStatus.RETORNADA || status === CardStatus.DEVUELTA_TIENDA;
@@ -48,9 +101,18 @@ export default function ModificacionMasivaClient() {
 
   useEffect(() => {
     void (async () => {
-      const res = await fetch("/api/config/motivos-retorno", { cache: "no-store" });
-      const json = await res.json();
-      setMotivos((json.motivos ?? []).filter((item: Motivo) => item.active));
+      const [motivosRes, provinciasRes] = await Promise.all([
+        fetch("/api/config/motivos-retorno", { cache: "no-store" }),
+        fetch("/api/config/provincias", { cache: "no-store" }),
+      ]);
+      const [motivosJson, provinciasJson] = await Promise.all([
+        motivosRes.json(),
+        provinciasRes.json(),
+      ]);
+      setMotivos((motivosJson.motivos ?? []).filter((item: Motivo) => item.active));
+      setProvincias(
+        ((provinciasJson.provincias ?? []) as Provincia[]).filter((item) => item.active),
+      );
     })();
   }, []);
 
@@ -58,10 +120,6 @@ export default function ModificacionMasivaClient() {
     setSelectedCardIds((prev) => prev.filter((id) => scannedCards.some((card) => card.id === id)));
   }, [scannedCards]);
 
-  const provincias = useMemo(
-    () => Array.from(new Set(scannedCards.map((card) => card.provincia))).sort(),
-    [scannedCards],
-  );
   const allSelected = scannedCards.length > 0 && selectedCardIds.length === scannedCards.length;
 
   async function findCard(identifier: string) {
@@ -169,6 +227,7 @@ export default function ModificacionMasivaClient() {
     setBatchZona("UNCHANGED");
     setBatchRemote("UNCHANGED");
     setBatchReturnReason("");
+    await workflowDraft.clearDraft();
   }
 
   function toggleSelectCard(cardId: string, checked: boolean) {
@@ -194,6 +253,12 @@ export default function ModificacionMasivaClient() {
       <PageHeader
         title="Actualizacion masiva"
         subtitle="Pistolea tarjetas y aplica cambios de estado, provincia o zona en lote"
+      />
+      <WorkflowStatusBar
+        status={workflowDraft.status}
+        updatedAt={workflowDraft.updatedAt}
+        onUseRemote={workflowDraft.useRemoteVersion}
+        onOverwrite={workflowDraft.overwriteRemote}
       />
 
       <Panel>
@@ -236,13 +301,22 @@ export default function ModificacionMasivaClient() {
           </select>
           <select
             value={batchProvincia}
-            onChange={(event) => setBatchProvincia(event.target.value)}
+            onChange={(event) => {
+              const nextProvince = event.target.value;
+              setBatchProvincia(nextProvince);
+              if (nextProvince === "UNCHANGED") {
+                setBatchZona("UNCHANGED");
+                return;
+              }
+              const province = provincias.find((item) => item.nombre === nextProvince);
+              if (province) setBatchZona(province.zona);
+            }}
             className="rounded-xl border border-slate-300 px-3 py-2"
           >
             <option value="UNCHANGED">Provincia: sin cambio</option>
             {provincias.map((item) => (
-              <option key={item} value={item}>
-                Provincia: {item}
+              <option key={item.id} value={item.nombre}>
+                Provincia: {item.nombre}
               </option>
             ))}
           </select>
@@ -299,6 +373,7 @@ export default function ModificacionMasivaClient() {
             onClick={() => {
               setScannedCards([]);
               setSelectedCardIds([]);
+              void workflowDraft.clearDraft();
             }}
             className="rounded-xl border border-slate-300 px-4 py-2 text-sm"
           >

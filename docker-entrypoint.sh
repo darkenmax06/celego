@@ -18,5 +18,10 @@ if is_true "${RUN_DB_BOOTSTRAP:-true}"; then
   npm run db:bootstrap
 fi
 
+if is_true "${RUN_DEMO_SEED:-false}"; then
+  echo "==> Cargando datos de prueba DEMO"
+  npm run db:seed-demo
+fi
+
 echo "==> Iniciando app"
 exec npm run start

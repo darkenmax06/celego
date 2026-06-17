@@ -6,7 +6,9 @@ import { PDFDocument, type PDFFont, type PDFPage, StandardFonts, rgb } from "pdf
 import { z } from "zod";
 import { requireApiSession } from "@/lib/api-session";
 import { dedupeBillingCardsByCustomerAndDispatchDate } from "@/lib/billing";
+import { resolveBillableZone } from "@/lib/delivery-location";
 import { prisma } from "@/lib/prisma";
+import { writeAuditEvent } from "@/lib/audit";
 
 const schema = z.object({
   from: z.string(),
@@ -152,6 +154,9 @@ export async function POST(request: Request) {
       select: {
         id: true,
         zona: true,
+        provincia: true,
+        reassignedProvince: true,
+        reassignedZone: true,
         isRemote: true,
         dispatchDate: true,
         customer: {
@@ -168,7 +173,7 @@ export async function POST(request: Request) {
   const billableCards = dedupeBillingCardsByCustomerAndDispatchDate(
     cards.map((card) => ({
       id: card.id,
-      zona: card.zona,
+      zona: resolveBillableZone(card),
       isRemote: card.isRemote,
       dispatchDate: card.dispatchDate,
       customerCedula: card.customer.cedula,
@@ -411,6 +416,21 @@ export async function POST(request: Request) {
 
   const pdfBytes = await pdf.save();
   const safeInvoice = parsed.data.invoiceNumber.replace(/[^\w.-]+/g, "_");
+  await writeAuditEvent({
+    entity: "BILLING_EXPORT",
+    entityId: parsed.data.invoiceNumber,
+    action: "EXPORT_INVOICE",
+    userId: auth.session.user.id,
+    details: {
+      from: parsed.data.from,
+      to: parsed.data.to,
+      invoiceNumber: parsed.data.invoiceNumber,
+      billableCards: billableCards.length,
+      totalUsdCents,
+      totalDopCents,
+    },
+    request,
+  });
   return new NextResponse(Buffer.from(pdfBytes), {
     headers: {
       "Content-Type": "application/pdf",

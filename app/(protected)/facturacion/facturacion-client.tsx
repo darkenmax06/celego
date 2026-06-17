@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { fromCents, formatCurrencyDOP, formatCurrencyUSD, toCents } from "@/lib/money";
 import { PageHeader } from "@/components/ui/page-header";
 import { Panel } from "@/components/ui/panel";
+import { usePersistentState } from "@/lib/use-persistent-state";
 
 type ZoneRange = {
   id?: string;
@@ -66,13 +67,27 @@ export default function FacturacionClient() {
   const [summary, setSummary] = useState<SummaryRow[]>([]);
   const [totalUsdCents, setTotalUsdCents] = useState(0);
   const [totalDopCents, setTotalDopCents] = useState(0);
-  const [fxRate, setFxRate] = useState("60");
+  const [fxRate, setFxRate, fxRateHydrated] = usePersistentState(
+    "facturacion:fx-rate",
+    "60",
+  );
   const [message, setMessage] = useState("");
-  const [showInvoiceModal, setShowInvoiceModal] = useState(false);
+  const [showInvoiceModal, setShowInvoiceModal] = usePersistentState(
+    "facturacion:invoice-modal",
+    false,
+  );
   const [generatingInvoice, setGeneratingInvoice] = useState(false);
-  const [from, setFrom] = useState(new Date().toISOString().slice(0, 10));
-  const [to, setTo] = useState(new Date().toISOString().slice(0, 10));
-  const [invoiceForm, setInvoiceForm] = useState<InvoiceFormState>(() => ({
+  const [from, setFrom, fromHydrated] = usePersistentState(
+    "facturacion:from",
+    new Date().toISOString().slice(0, 10),
+  );
+  const [to, setTo, toHydrated] = usePersistentState(
+    "facturacion:to",
+    new Date().toISOString().slice(0, 10),
+  );
+  const [invoiceForm, setInvoiceForm] = usePersistentState<InvoiceFormState>(
+    "facturacion:invoice-form",
+    () => ({
     invoiceNumber: buildDefaultInvoiceNumber(),
     ncf: "",
     issueDate: new Date().toISOString().slice(0, 10),
@@ -84,7 +99,9 @@ export default function FacturacionClient() {
     representative: "",
     fob: "",
     paymentTerms: "Credito 30 dias.",
-  }));
+    }),
+  );
+  const billingFiltersHydrated = fxRateHydrated && fromHydrated && toHydrated;
 
   async function loadTarifas() {
     const res = await fetch("/api/facturacion/tarifas", { cache: "no-store" });
@@ -102,8 +119,9 @@ export default function FacturacionClient() {
   }
 
   useEffect(() => {
+    if (!billingFiltersHydrated) return;
     void Promise.all([loadTarifas(), loadSummary()]);
-  }, []);
+  }, [billingFiltersHydrated]);
 
   async function saveZona(zone: ZoneTariff) {
     const ranges = zone.ranges

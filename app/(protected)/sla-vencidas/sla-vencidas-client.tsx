@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { PageHeader } from "@/components/ui/page-header";
 import { Panel } from "@/components/ui/panel";
 import { StatusBadge } from "@/components/ui/status-badge";
+import { usePersistentState } from "@/lib/use-persistent-state";
 
 type MessengerOption = {
   id: string;
@@ -71,12 +72,15 @@ function dateLabel(value: string | null) {
 }
 
 export default function SlaVencidasClient() {
-  const [messengerId, setMessengerId] = useState("ALL");
+  const [messengerId, setMessengerId] = usePersistentState("sla-vencidas:messenger", "ALL");
   const [messengers, setMessengers] = useState<MessengerOption[]>([]);
   const [rows, setRows] = useState<Row[]>([]);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
-  const [exportColumns, setExportColumns] = useState<ExportColumnKey[]>(DEFAULT_EXPORT_COLUMNS);
+  const [exportColumns, setExportColumns] = usePersistentState<ExportColumnKey[]>(
+    "sla-vencidas:columns",
+    DEFAULT_EXPORT_COLUMNS,
+  );
 
   async function loadData(nextMessengerId = messengerId) {
     setLoading(true);
@@ -103,8 +107,8 @@ export default function SlaVencidasClient() {
   }
 
   useEffect(() => {
-    void loadData("ALL");
-  }, []);
+    void loadData(messengerId);
+  }, [messengerId]);
 
   async function exportJpgZip() {
     const params = new URLSearchParams();

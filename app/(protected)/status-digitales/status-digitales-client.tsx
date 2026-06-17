@@ -4,6 +4,10 @@ import { type ChangeEvent, useMemo, useState } from "react";
 import { PageHeader } from "@/components/ui/page-header";
 import { Panel } from "@/components/ui/panel";
 import { StatusBadge } from "@/components/ui/status-badge";
+import { WorkflowStatusBar } from "@/components/ui/workflow-status-bar";
+import { useWorkflowDraft } from "@/lib/use-workflow-draft";
+import { usePersistentState } from "@/lib/use-persistent-state";
+import { BizcochitosPanel } from "@/components/status-digitales/bizcochitos-panel";
 
 type ParsedImageRow = {
   fileName: string;
@@ -34,6 +38,12 @@ type Summary = {
   unchanged: number;
 };
 
+type StatusDigitalDraft = {
+  images: ParsedImageRow[];
+  rows: ProcessedRow[];
+  summary: Summary | null;
+};
+
 function parseImageFileName(fileName: string) {
   const noExt = fileName.replace(/\.[^/.]+$/, "").trim();
   const hasRemoteTag = /\(\s*zr\s*\)/i.test(noExt);
@@ -46,13 +56,38 @@ function parseImageFileName(fileName: string) {
 }
 
 export default function StatusDigitalesClient() {
+  const [activeTab, setActiveTab] = usePersistentState<"PROCESAR" | "BIZCOCHITOS">(
+    "status-digitales:tab",
+    "PROCESAR",
+  );
   const [images, setImages] = useState<ParsedImageRow[]>([]);
   const [rows, setRows] = useState<ProcessedRow[]>([]);
   const [summary, setSummary] = useState<Summary | null>(null);
   const [processing, setProcessing] = useState(false);
   const [message, setMessage] = useState("");
+  const [needsReselection, setNeedsReselection] = useState(false);
 
   const notFound = useMemo(() => rows.filter((row) => !row.found).length, [rows]);
+  const draftPayload = useMemo<StatusDigitalDraft>(
+    () => ({ images, rows, summary }),
+    [images, rows, summary],
+  );
+  const workflowDraft = useWorkflowDraft<StatusDigitalDraft>({
+    module: "status-digitales",
+    payload: draftPayload,
+    shouldSave: Boolean(images.length || rows.length),
+    onRestore: (draft) => {
+      setImages(draft.images);
+      setRows(draft.rows);
+      setSummary(draft.summary);
+      setNeedsReselection(Boolean(draft.images.length));
+      setMessage(
+        draft.rows.length
+          ? "Resultados recuperados. Vuelve a seleccionar los archivos solo si deseas reprocesarlos."
+          : "Progreso recuperado. Vuelve a seleccionar los archivos antes de procesar.",
+      );
+    },
+  });
 
   function onSelectFiles(event: ChangeEvent<HTMLInputElement>) {
     const files = Array.from(event.target.files ?? []);
@@ -70,12 +105,17 @@ export default function StatusDigitalesClient() {
     setImages(parsed);
     setRows([]);
     setSummary(null);
+    setNeedsReselection(false);
     setMessage(parsed.length ? `${parsed.length} imagen(es) listas para procesar` : "No se detectaron nombres validos");
   }
 
   async function processImages() {
     if (!images.length) {
       setMessage("Selecciona imagenes primero");
+      return;
+    }
+    if (needsReselection) {
+      setMessage("Vuelve a seleccionar los archivos para autorizar su procesamiento.");
       return;
     }
 
@@ -100,11 +140,31 @@ export default function StatusDigitalesClient() {
     setProcessing(false);
   }
 
+  if (activeTab === "BIZCOCHITOS") {
+    return (
+      <div>
+        <PageHeader
+          title="Entregas digitales"
+          subtitle="Procesamiento por imágenes y lotes bancarios Bizcochito"
+        />
+        <DigitalTabs activeTab={activeTab} onChange={setActiveTab} />
+        <BizcochitosPanel />
+      </div>
+    );
+  }
+
   return (
     <div>
       <PageHeader
-        title="Entrega digital por imagenes"
-        subtitle="Sube imagenes, detecta numero de tarjeta por nombre de archivo y aplica ENTREGA DIGITAL"
+        title="Entregas digitales"
+        subtitle="Procesamiento por imágenes y lotes bancarios Bizcochito"
+      />
+      <DigitalTabs activeTab={activeTab} onChange={setActiveTab} />
+      <WorkflowStatusBar
+        status={workflowDraft.status}
+        updatedAt={workflowDraft.updatedAt}
+        onUseRemote={workflowDraft.useRemoteVersion}
+        onOverwrite={workflowDraft.overwriteRemote}
       />
 
       <Panel>
@@ -121,6 +181,11 @@ export default function StatusDigitalesClient() {
             Reglas: <code>(ZR)</code> marca zona remota. <code>(ADICIONAL)</code> y <code>(ADICIONAL 2)</code> al final
             seleccionan tarjetas adicionales por nombre/cédula y fecha de despacho.
           </p>
+          {needsReselection ? (
+            <p className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+              Los navegadores no restauran archivos locales por seguridad. Selecciónalos otra vez para reprocesar.
+            </p>
+          ) : null}
         </div>
 
         <div className="mb-3 flex flex-wrap items-center gap-2">
@@ -138,7 +203,9 @@ export default function StatusDigitalesClient() {
               setImages([]);
               setRows([]);
               setSummary(null);
+              setNeedsReselection(false);
               setMessage("");
+              void workflowDraft.clearDraft();
             }}
             className="rounded-xl border border-slate-300 px-4 py-2 text-sm"
           >
@@ -202,6 +269,49 @@ export default function StatusDigitalesClient() {
           </table>
         </div>
       </Panel>
+    </div>
+  );
+}
+
+function DigitalTabs({
+  activeTab,
+  onChange,
+}: {
+  activeTab: "PROCESAR" | "BIZCOCHITOS";
+  onChange: (tab: "PROCESAR" | "BIZCOCHITOS") => void;
+}) {
+  return (
+    <div
+      className="mb-5 inline-flex rounded-xl border border-slate-200 bg-white p-1 shadow-sm"
+      role="tablist"
+      aria-label="Secciones de entregas digitales"
+    >
+      <button
+        type="button"
+        role="tab"
+        aria-selected={activeTab === "PROCESAR"}
+        onClick={() => onChange("PROCESAR")}
+        className={`rounded-lg px-4 py-2 text-sm font-semibold transition ${
+          activeTab === "PROCESAR"
+            ? "bg-[#0f2544] text-white"
+            : "text-slate-600 hover:bg-slate-50"
+        }`}
+      >
+        Procesar imágenes
+      </button>
+      <button
+        type="button"
+        role="tab"
+        aria-selected={activeTab === "BIZCOCHITOS"}
+        onClick={() => onChange("BIZCOCHITOS")}
+        className={`rounded-lg px-4 py-2 text-sm font-semibold transition ${
+          activeTab === "BIZCOCHITOS"
+            ? "bg-amber-100 text-amber-950"
+            : "text-slate-600 hover:bg-amber-50"
+        }`}
+      >
+        Bizcochitos
+      </button>
     </div>
   );
 }

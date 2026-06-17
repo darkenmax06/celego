@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { MessengerServiceType } from "@prisma/client";
+import { MessengerServiceType, Prisma } from "@prisma/client";
 import { z } from "zod";
 import { requireApiSession } from "@/lib/api-session";
 import { prisma } from "@/lib/prisma";
@@ -30,6 +30,7 @@ export async function GET(request: NextRequest) {
   const pageParam = request.nextUrl.searchParams.get("page");
   const pageSizeParam = request.nextUrl.searchParams.get("pageSize");
   const onlyActive = request.nextUrl.searchParams.get("onlyActive") === "1";
+  const province = request.nextUrl.searchParams.get("province")?.trim();
 
   if (id) {
     const messenger = await prisma.messenger.findUnique({
@@ -48,7 +49,17 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ messenger });
   }
 
-  const where = onlyActive ? { activo: true } : undefined;
+  const where: Prisma.MessengerWhereInput = {
+    ...(onlyActive ? { activo: true } : {}),
+    ...(province
+      ? {
+          provinciaTrabajo: {
+            equals: province,
+            mode: "insensitive",
+          },
+        }
+      : {}),
+  };
 
   if (!pageParam && !pageSizeParam) {
     const messengers = await prisma.messenger.findMany({

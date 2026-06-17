@@ -3,6 +3,7 @@ import { type NextAuthOptions, getServerSession } from "next-auth";
 import CredentialsProvider from "next-auth/providers/credentials";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
+import { tryWriteAuditEvent } from "@/lib/audit";
 
 const credentialsSchema = z.object({
   email: z.string().email(),
@@ -21,13 +22,56 @@ export const authOptions: NextAuthOptions = {
       },
       async authorize(rawCredentials) {
         const parsed = credentialsSchema.safeParse(rawCredentials);
-        if (!parsed.success) return null;
+        if (!parsed.success) {
+          await tryWriteAuditEvent({
+            entity: "AUTH",
+            entityId: "credentials",
+            action: "LOGIN",
+            result: "FAILURE",
+            actorEmail:
+              typeof rawCredentials?.email === "string" ? rawCredentials.email : null,
+            details: { reason: "INVALID_PAYLOAD" },
+          });
+          return null;
+        }
 
-        const user = await prisma.user.findUnique({ where: { email: parsed.data.email } });
-        if (!user || !user.active) return null;
+        const email = parsed.data.email.trim().toLowerCase();
+        const user = await prisma.user.findUnique({ where: { email } });
+        if (!user || !user.active) {
+          await tryWriteAuditEvent({
+            entity: "AUTH",
+            entityId: user?.id ?? "unknown",
+            action: "LOGIN",
+            result: "FAILURE",
+            actorEmail: email,
+            targetUserId: user?.id,
+            details: { reason: user ? "INACTIVE_USER" : "USER_NOT_FOUND" },
+          });
+          return null;
+        }
 
         const valid = await compare(parsed.data.password, user.passwordHash);
-        if (!valid) return null;
+        if (!valid) {
+          await tryWriteAuditEvent({
+            entity: "AUTH",
+            entityId: user.id,
+            action: "LOGIN",
+            result: "FAILURE",
+            actorEmail: email,
+            targetUserId: user.id,
+            details: { reason: "INVALID_PASSWORD" },
+          });
+          return null;
+        }
+
+        await tryWriteAuditEvent({
+          entity: "AUTH",
+          entityId: user.id,
+          action: "LOGIN",
+          userId: user.id,
+          actorEmail: email,
+          targetUserId: user.id,
+        });
 
         return {
           id: user.id,

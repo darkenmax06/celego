@@ -6,6 +6,7 @@ import { PageHeader } from "@/components/ui/page-header";
 import { Panel } from "@/components/ui/panel";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { notificationFailureMessage, notifyInBrowser } from "@/lib/browser-notifications";
+import { usePersistentState } from "@/lib/use-persistent-state";
 
 type DashboardPayload = {
   range?: { from: string; to: string };
@@ -104,9 +105,12 @@ export default function DashboardClient() {
   const defaults = monthDefaults();
   const [data, setData] = useState<DashboardPayload>(emptyData);
   const [loading, setLoading] = useState(true);
-  const [selectedCardId, setSelectedCardId] = useState<string | null>(null);
-  const [from, setFrom] = useState(defaults.from);
-  const [to, setTo] = useState(defaults.to);
+  const [selectedCardId, setSelectedCardId] = usePersistentState<string | null>(
+    "dashboard:selected-card",
+    null,
+  );
+  const [from, setFrom] = usePersistentState("dashboard:from", defaults.from);
+  const [to, setTo] = usePersistentState("dashboard:to", defaults.to);
   const [urgentNotifications, setUrgentNotifications] = useState<UrgentNotification[]>([]);
   const [notificationIssue, setNotificationIssue] = useState("");
   const seenNotificationKeys = useRef(new Set<string>());

@@ -4,6 +4,7 @@ import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 import { requireApiSession } from "@/lib/api-session";
 import { addBusinessDaysStrict } from "@/lib/sla";
 import { prisma } from "@/lib/prisma";
+import { writeAuditEvent } from "@/lib/audit";
 
 function parsePhones(raw: string | null | undefined) {
   if (!raw) return "";
@@ -107,6 +108,14 @@ export async function GET(request: NextRequest) {
     ];
 
     const buffer = await workbook.xlsx.writeBuffer();
+    await writeAuditEvent({
+      entity: "ROUTE_EXPORT",
+      entityId: route.id,
+      action: "EXPORT",
+      userId: auth.session.user.id,
+      details: { format: "xlsx", itemCount: route.items.length },
+      request,
+    });
     return new NextResponse(Buffer.from(buffer), {
       headers: fileHeaders(
         `ruta-lote-${lotLabel}.xlsx`,
@@ -116,56 +125,97 @@ export async function GET(request: NextRequest) {
   }
 
   const pdf = await PDFDocument.create();
-  const page = pdf.addPage([612, 792]);
   const font = await pdf.embedFont(StandardFonts.Helvetica);
   const bold = await pdf.embedFont(StandardFonts.HelveticaBold);
 
-  page.drawText(`LOTE ${lotLabel}`, {
-    x: 40,
-    y: 760,
-    size: 18,
-    font: bold,
-    color: rgb(0.1, 0.15, 0.3),
-  });
-  page.drawText(`Mensajero: ${route.messenger.nombre}`, { x: 40, y: 740, size: 10, font });
-  page.drawText(`Fecha ruta: ${formatDate(route.fecha)}`, { x: 40, y: 726, size: 10, font });
-
   const headers = ["NO", "TC", "NOMBRE", "CEDULA", "TELEFONOS", "DEVUELTA"];
   const x = [40, 66, 156, 306, 394, 540];
+  const rowsPerPage = 42;
+  const pageCount = Math.max(1, Math.ceil(rows.length / rowsPerPage));
 
-  let y = 700;
-  headers.forEach((header, index) => {
-    page.drawText(header, { x: x[index], y, size: 8, font: bold, color: rgb(0.25, 0.25, 0.25) });
-  });
+  for (let pageIndex = 0; pageIndex < pageCount; pageIndex += 1) {
+    const page = pdf.addPage([612, 792]);
+    const pageRows = rows.slice(
+      pageIndex * rowsPerPage,
+      (pageIndex + 1) * rowsPerPage,
+    );
 
-  y -= 12;
-  for (const row of rows.slice(0, 42)) {
-    page.drawText(String(row.no), { x: x[0], y, size: 8, font });
-    page.drawText(row.tc.slice(0, 16), { x: x[1], y, size: 8, font });
-    page.drawText(row.nombre.slice(0, 24), { x: x[2], y, size: 8, font });
-    page.drawText(row.cedula.slice(0, 13), { x: x[3], y, size: 8, font });
-    page.drawText(row.telefonos.slice(0, 20), { x: x[4], y, size: 8, font });
-    page.drawRectangle({
-      x: x[5] + 6,
-      y: y + 1,
-      width: 7,
-      height: 7,
-      borderColor: rgb(0.2, 0.2, 0.2),
-      borderWidth: 0.7,
+    page.drawText(`LOTE ${lotLabel}`, {
+      x: 40,
+      y: 760,
+      size: 18,
+      font: bold,
+      color: rgb(0.1, 0.15, 0.3),
     });
+    page.drawText(`Mensajero: ${route.messenger.nombre}`, {
+      x: 40,
+      y: 740,
+      size: 10,
+      font,
+    });
+    page.drawText(`Fecha ruta: ${formatDate(route.fecha)}`, {
+      x: 40,
+      y: 726,
+      size: 10,
+      font,
+    });
+    page.drawText(`Pagina ${pageIndex + 1} de ${pageCount}`, {
+      x: 500,
+      y: 740,
+      size: 8,
+      font,
+      color: rgb(0.35, 0.35, 0.35),
+    });
+
+    let y = 700;
+    headers.forEach((header, index) => {
+      page.drawText(header, {
+        x: x[index],
+        y,
+        size: 8,
+        font: bold,
+        color: rgb(0.25, 0.25, 0.25),
+      });
+    });
+
     y -= 12;
-    if (y < 80) break;
+    for (const row of pageRows) {
+      page.drawText(String(row.no), { x: x[0], y, size: 8, font });
+      page.drawText(row.tc.slice(0, 16), { x: x[1], y, size: 8, font });
+      page.drawText(row.nombre.slice(0, 24), { x: x[2], y, size: 8, font });
+      page.drawText(row.cedula.slice(0, 13), { x: x[3], y, size: 8, font });
+      page.drawText(row.telefonos.slice(0, 20), { x: x[4], y, size: 8, font });
+      page.drawRectangle({
+        x: x[5] + 6,
+        y: y + 1,
+        width: 7,
+        height: 7,
+        borderColor: rgb(0.2, 0.2, 0.2),
+        borderWidth: 0.7,
+      });
+      y -= 12;
+    }
+
+    if (pageIndex === pageCount - 1) {
+      page.drawText(`Fecha limite de devolucion del lote: ${formatDate(returnDateForMessenger)}`, {
+        x: 40,
+        y: 48,
+        size: 11,
+        font: bold,
+        color: rgb(0.2, 0.2, 0.2),
+      });
+    }
   }
 
-  page.drawText(`Fecha limite de devolucion del lote: ${formatDate(returnDateForMessenger)}`, {
-    x: 40,
-    y: 48,
-    size: 11,
-    font: bold,
-    color: rgb(0.2, 0.2, 0.2),
-  });
-
   const pdfBytes = await pdf.save();
+  await writeAuditEvent({
+    entity: "ROUTE_EXPORT",
+    entityId: route.id,
+    action: "EXPORT",
+    userId: auth.session.user.id,
+    details: { format: "pdf", itemCount: route.items.length },
+    request,
+  });
   return new NextResponse(Buffer.from(pdfBytes), {
     headers: fileHeaders(`ruta-lote-${lotLabel}.pdf`, "application/pdf"),
   });

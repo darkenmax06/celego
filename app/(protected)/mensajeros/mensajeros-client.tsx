@@ -5,6 +5,7 @@ import { MessengerServiceType } from "@prisma/client";
 import { formatCurrencyDOP, toCents } from "@/lib/money";
 import { PageHeader } from "@/components/ui/page-header";
 import { Panel } from "@/components/ui/panel";
+import { usePersistentState } from "@/lib/use-persistent-state";
 
 type Messenger = {
   id: string;
@@ -121,15 +122,27 @@ export default function MensajerosClient() {
     total: 0,
     totalPages: 1,
   });
-  const [messengerPage, setMessengerPage] = useState(1);
+  const [messengerPage, setMessengerPage] = usePersistentState("mensajeros:page", 1);
   const [records, setRecords] = useState<DailyRecord[]>([]);
   const [reports, setReports] = useState<MessengerReport[]>([]);
-  const [globalDate, setGlobalDate] = useState(new Date().toISOString().slice(0, 10));
-  const [globalReportFrom, setGlobalReportFrom] = useState(new Date().toISOString().slice(0, 10));
-  const [globalReportTo, setGlobalReportTo] = useState(new Date().toISOString().slice(0, 10));
+  const [globalDate, setGlobalDate] = usePersistentState(
+    "mensajeros:daily-date",
+    new Date().toISOString().slice(0, 10),
+  );
+  const [globalReportFrom, setGlobalReportFrom] = usePersistentState(
+    "mensajeros:report-from",
+    new Date().toISOString().slice(0, 10),
+  );
+  const [globalReportTo, setGlobalReportTo] = usePersistentState(
+    "mensajeros:report-to",
+    new Date().toISOString().slice(0, 10),
+  );
   const [globalCounts, setGlobalCounts] = useState<Record<string, Counts>>({});
-  const [selectedMessengerId, setSelectedMessengerId] = useState<string | null>(null);
-  const [showNew, setShowNew] = useState(false);
+  const [selectedMessengerId, setSelectedMessengerId] = usePersistentState<string | null>(
+    "mensajeros:selected",
+    null,
+  );
+  const [showNew, setShowNew] = usePersistentState("mensajeros:new-modal", false);
   const [message, setMessage] = useState("");
   const [busyGlobalSaveById, setBusyGlobalSaveById] = useState<Record<string, boolean>>({});
   const [busyGlobalZip, setBusyGlobalZip] = useState(false);
