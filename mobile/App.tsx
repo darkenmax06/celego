@@ -3,6 +3,8 @@ import {
   ActivityIndicator,
   Alert,
   Image,
+  NativeModules,
+  Platform,
   Pressable,
   SafeAreaView,
   ScrollView,
@@ -116,6 +118,7 @@ type PersistedState = {
   token: string;
   user: AuthUser | null;
   email: string;
+  messengerId?: string;
   routePackage: RoutePackageManifest | null;
   queue: QueuedEvidence[];
   incidents: QueuedIncident[];
@@ -123,6 +126,46 @@ type PersistedState = {
 
 const STORAGE_KEY = "celego_secure_mobile_v1";
 const DEFAULT_PUBLIC_KEY = "";
+const CORE_API_PORT = 3800;
+const RELAY_API_PORT = 3900;
+
+function getExpoDevelopmentHost() {
+  const sourceCode = NativeModules.SourceCode as { scriptURL?: string } | undefined;
+  const scriptUrl = sourceCode?.scriptURL;
+  const match = scriptUrl?.match(/^[a-z]+:\/\/([^/:]+)/i);
+  return match?.[1];
+}
+
+function isDeviceOnlyLoopbackHost(host: string) {
+  return host === "10.0.2.2" || host === "127.0.0.1" || host === "localhost";
+}
+
+function isLanHost(host: string | undefined) {
+  return Boolean(host && !isDeviceOnlyLoopbackHost(host));
+}
+
+const EXPO_DEVELOPMENT_HOST = getExpoDevelopmentHost();
+const DEFAULT_LOCAL_HOST = isLanHost(EXPO_DEVELOPMENT_HOST)
+  ? EXPO_DEVELOPMENT_HOST
+  : Platform.OS === "android"
+    ? "10.0.2.2"
+    : "localhost";
+
+function buildLocalUrl(port: number) {
+  return `http://${DEFAULT_LOCAL_HOST}:${port}`;
+}
+
+function extractHost(value: string | undefined) {
+  return value?.match(/^[a-z]+:\/\/([^/:]+)/i)?.[1];
+}
+
+function normalizeDevelopmentUrl(value: string | undefined, port: number) {
+  const savedHost = extractHost(value);
+  if (!value || (isLanHost(EXPO_DEVELOPMENT_HOST) && savedHost && isDeviceOnlyLoopbackHost(savedHost))) {
+    return buildLocalUrl(port);
+  }
+  return value;
+}
 
 function nowIso() {
   return new Date().toISOString();
@@ -147,8 +190,8 @@ function toRelayManifest(item: QueuedEvidence) {
 }
 
 export default function App() {
-  const [baseUrl, setBaseUrl] = useState("http://10.0.2.2:3800");
-  const [relayUrl, setRelayUrl] = useState("http://10.0.2.2:3900");
+  const [baseUrl, setBaseUrl] = useState(() => buildLocalUrl(CORE_API_PORT));
+  const [relayUrl, setRelayUrl] = useState(() => buildLocalUrl(RELAY_API_PORT));
   const [publicKeyPem, setPublicKeyPem] = useState(DEFAULT_PUBLIC_KEY);
   const [deviceId, setDeviceId] = useState("");
   const [email, setEmail] = useState("");
@@ -177,13 +220,14 @@ export default function App() {
       if (!raw) return;
       try {
         const parsed = JSON.parse(raw) as PersistedState;
-        setBaseUrl(parsed.baseUrl);
-        setRelayUrl(parsed.relayUrl);
+        setBaseUrl(normalizeDevelopmentUrl(parsed.baseUrl, CORE_API_PORT));
+        setRelayUrl(normalizeDevelopmentUrl(parsed.relayUrl, RELAY_API_PORT));
         setDeviceId(parsed.deviceId);
         setPublicKeyPem(parsed.publicKeyPem);
         setToken(parsed.token);
         setUser(parsed.user);
         setEmail(parsed.email);
+        setMessengerId(parsed.messengerId ?? "");
         setRoutePackage(parsed.routePackage);
         setQueue(parsed.queue ?? []);
         setIncidents(parsed.incidents ?? []);
@@ -206,12 +250,13 @@ export default function App() {
       token,
       user,
       email,
+      messengerId,
       routePackage,
       queue,
       incidents,
     };
     void AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-  }, [baseUrl, relayUrl, deviceId, publicKeyPem, token, user, email, routePackage, queue, incidents]);
+  }, [baseUrl, relayUrl, deviceId, publicKeyPem, token, user, email, messengerId, routePackage, queue, incidents]);
 
   const activeItem = useMemo(() => {
     if (!routePackage) return null;
@@ -562,6 +607,22 @@ export default function App() {
           </View>
           <TextInput style={styles.input} value={baseUrl} onChangeText={setBaseUrl} placeholder="Core API URL" autoCapitalize="none" />
           <TextInput style={styles.input} value={relayUrl} onChangeText={setRelayUrl} placeholder="Relay URL" autoCapitalize="none" />
+          {isLanHost(EXPO_DEVELOPMENT_HOST) ? (
+            <View style={styles.connectionHint}>
+              <Text style={styles.hintText}>
+                Expo Go detecto esta PC como {EXPO_DEVELOPMENT_HOST}. En telefono fisico usa {buildLocalUrl(CORE_API_PORT)}.
+              </Text>
+              <Pressable
+                style={styles.hintButton}
+                onPress={() => {
+                  setBaseUrl(buildLocalUrl(CORE_API_PORT));
+                  setRelayUrl(buildLocalUrl(RELAY_API_PORT));
+                }}
+              >
+                <Text style={styles.hintButtonText}>Usar IP de esta PC</Text>
+              </Pressable>
+            </View>
+          ) : null}
           <TextInput style={styles.input} value={email} onChangeText={setEmail} placeholder="Email" autoCapitalize="none" keyboardType="email-address" />
           <TextInput style={styles.input} value={password} onChangeText={setPassword} placeholder="Password" secureTextEntry />
           <TextInput style={styles.input} value={messengerId} onChangeText={setMessengerId} placeholder="Messenger ID si aplica" autoCapitalize="none" />
@@ -735,6 +796,10 @@ const styles = StyleSheet.create({
   custodyStep: { backgroundColor: "#254762", color: "#f8ecd6", borderRadius: 999, paddingHorizontal: 10, paddingVertical: 6, fontSize: 11, fontWeight: "700" },
   statusLine: { color: "#cfe1ef", fontSize: 12 },
   input: { backgroundColor: "#fffaf2", borderRadius: 12, borderWidth: 1, borderColor: "#e0d2bf", paddingHorizontal: 12, paddingVertical: 10, color: "#17212b" },
+  connectionHint: { backgroundColor: "#173655", borderRadius: 14, borderWidth: 1, borderColor: "#315979", padding: 12, gap: 8 },
+  hintText: { color: "#d6e5ef", fontSize: 12, lineHeight: 18 },
+  hintButton: { alignSelf: "flex-start", backgroundColor: "#f7f1e6", borderRadius: 999, paddingHorizontal: 12, paddingVertical: 7 },
+  hintButtonText: { color: "#123a5d", fontSize: 12, fontWeight: "800" },
   multiline: { minHeight: 82, textAlignVertical: "top" },
   primaryBtn: { backgroundColor: "#123a5d", borderRadius: 12, paddingVertical: 11, paddingHorizontal: 14, alignItems: "center", justifyContent: "center", flex: 1 },
   secondaryBtn: { backgroundColor: "#5c6f7e", borderRadius: 12, paddingVertical: 11, alignItems: "center" },
