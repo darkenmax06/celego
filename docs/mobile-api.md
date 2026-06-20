@@ -150,3 +150,75 @@ Body JSON:
 El backend valida usuario, dispositivo, mensajero, estado y expiracion antes de
 entregar el manifiesto del paquete.
 
+## 9) Estado de sincronizacion movil
+
+`POST /api/mobile/sync/status`
+
+Header:
+
+`Authorization: Bearer <token>`
+
+Body JSON:
+
+```json
+{
+  "deviceId": "DEV-228",
+  "evidenceObjectIds": ["OBJ-ACUSE-001"],
+  "packageIds": ["PKG-ABC123"],
+  "incidentIds": ["INC-001"],
+  "clientQueueDepth": 2,
+  "lastClientSyncAt": "2026-06-20T10:00:00.000Z"
+}
+```
+
+El endpoint valida que el dispositivo exista, este `ACTIVE` y corresponda al
+mensajero autenticado. Devuelve estado de evidencias, paquetes, incidencias y
+hora del servidor.
+
+## 10) Reportar incidencia movil
+
+`POST /api/mobile/incidents`
+
+Header:
+
+`Authorization: Bearer <token>`
+
+Body JSON:
+
+```json
+{
+  "incidentId": "INC-LOCAL-001",
+  "deviceId": "DEV-228",
+  "routeItemId": "cuid-route-item",
+  "type": "CUSTOMER_ABSENT",
+  "severity": "MEDIUM",
+  "title": "Cliente ausente",
+  "description": "No hubo respuesta en la direccion indicada",
+  "reportedAt": "2026-06-20T10:00:00.000Z"
+}
+```
+
+No debe incluir cedula completa, tarjeta, telefono ni fotos. Si la incidencia
+esta asociada a `routeItemId`, el backend valida usuario + dispositivo + ruta.
+
+## 11) Procesamiento interno de evidencias cifradas
+
+`POST /api/internal/mobile/process-secure-evidence`
+
+Uso esperado: servidor fisico Celego o job interno.
+
+Opciones de autenticacion:
+
+- Header `x-celego-internal-secret` cuando `INTERNAL_SYNC_SECRET` este definido.
+- Token mobile de `ADMIN` u `OPERADOR` en ambientes de prueba.
+
+Tambien se puede ejecutar:
+
+```bash
+npm run mobile:process-evidence
+```
+
+En esta fase, si `RELAY_REAL_DOWNLOAD` no es `true`, el worker marca el
+procesamiento como descifrado local simulado. La integracion real con descarga
+de blobs del relay queda preparada para el worker fisico.
+

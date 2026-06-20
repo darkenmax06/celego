@@ -82,6 +82,38 @@ enum SecureEvidenceStatus {
   EXPIRED
 }
 
+enum MobileSyncJobKind {
+  ROUTE_PACKAGE_DOWNLOAD
+  EVIDENCE_UPLOAD
+  EVIDENCE_PROCESSING
+  INCIDENT_REPORT
+  RETENTION_PURGE
+  DEVICE_HEARTBEAT
+}
+
+enum MobileSyncJobStatus {
+  PENDING
+  RUNNING
+  SUCCEEDED
+  FAILED
+  RETRY_SCHEDULED
+  DEAD_LETTER
+}
+
+enum MobileIncidentSeverity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum MobileIncidentStatus {
+  OPEN
+  ACKNOWLEDGED
+  RESOLVED
+  CANCELED
+}
+
 model User {
   id                        String                     @id @default(cuid())
   name                      String
@@ -104,6 +136,7 @@ model User {
   deliveryReassignments     CardDeliveryReassignment[] @relation("ReassignmentByUser")
   workflowDrafts            WorkflowDraft[]
   generatedBizcochitos      BizcochitoBatch[]          @relation("BizcochitoGeneratedBy")
+  reportedMobileIncidents   MobileIncident[]           @relation("MobileIncidentCreatedBy")
 }
 
 model Customer {
@@ -201,6 +234,8 @@ model Messenger {
   mobileDevices     MobileDevice[]
   mobilePackages    MobileRoutePackage[]
   secureEvidences   SecureEvidence[]
+  mobileIncidents   MobileIncident[]
+  mobileSyncJobs    MobileSyncJob[]
 }
 
 model MessengerServiceRate {
@@ -256,6 +291,8 @@ model Route {
   items           RouteItem[]
   mobilePackages  MobileRoutePackage[]
   secureEvidences SecureEvidence[]
+  mobileIncidents MobileIncident[]
+  mobileSyncJobs  MobileSyncJob[]
 
   @@index([fecha, messengerId])
 }
@@ -269,6 +306,8 @@ model RouteItem {
   sequence        Int              @default(0)
   checkedAt       DateTime?
   secureEvidences SecureEvidence[]
+  mobileIncidents MobileIncident[]
+  mobileSyncJobs  MobileSyncJob[]
 
   @@unique([routeId, cardId])
 }
@@ -288,6 +327,8 @@ model MobileDevice {
   updatedAt              DateTime             @updatedAt
   mobilePackages         MobileRoutePackage[]
   secureEvidences        SecureEvidence[]
+  mobileIncidents        MobileIncident[]
+  mobileSyncJobs         MobileSyncJob[]
 
   @@index([messengerId, status])
   @@index([status, updatedAt])
@@ -348,6 +389,7 @@ model SecureEvidence {
   manifest               Json?
   createdAt              DateTime             @default(now())
   updatedAt              DateTime             @updatedAt
+  mobileSyncJobs         MobileSyncJob[]
 
   @@index([messengerId, capturedAt])
   @@index([deviceId, status])
@@ -355,6 +397,91 @@ model SecureEvidence {
   @@index([cardId])
   @@index([routeItemId])
   @@index([status, expiresAt])
+}
+
+model MobileIncident {
+  id              String                 @id @default(cuid())
+  incidentId      String                 @unique
+  severity        MobileIncidentSeverity @default(MEDIUM)
+  status          MobileIncidentStatus   @default(OPEN)
+  type            String
+  title           String
+  description     String?
+  deviceId        String
+  mobileDeviceId  String?
+  mobileDevice    MobileDevice?          @relation(fields: [mobileDeviceId], references: [id], onDelete: SetNull)
+  messengerId     String?
+  messenger       Messenger?             @relation(fields: [messengerId], references: [id], onDelete: SetNull)
+  routeId         String?
+  route           Route?                 @relation(fields: [routeId], references: [id], onDelete: SetNull)
+  routeItemId     String?
+  routeItem       RouteItem?             @relation(fields: [routeItemId], references: [id], onDelete: SetNull)
+  cardId          String?
+  evidenceObjectId String?
+  gps             Json?
+  metadata        Json?
+  reportedAt      DateTime
+  acknowledgedAt  DateTime?
+  resolvedAt      DateTime?
+  resolutionNote  String?
+  createdByUserId String?
+  createdByUser   User?                  @relation("MobileIncidentCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  syncJobs        MobileSyncJob[]
+  createdAt       DateTime               @default(now())
+  updatedAt       DateTime               @updatedAt
+
+  @@index([status, severity, reportedAt])
+  @@index([deviceId, reportedAt])
+  @@index([messengerId, status])
+  @@index([routeItemId])
+}
+
+model MobileSyncJob {
+  id               String              @id @default(cuid())
+  kind             MobileSyncJobKind
+  status           MobileSyncJobStatus @default(PENDING)
+  deviceId         String?
+  mobileDeviceId   String?
+  mobileDevice     MobileDevice?       @relation(fields: [mobileDeviceId], references: [id], onDelete: SetNull)
+  messengerId      String?
+  messenger        Messenger?          @relation(fields: [messengerId], references: [id], onDelete: SetNull)
+  routeId          String?
+  route            Route?              @relation(fields: [routeId], references: [id], onDelete: SetNull)
+  routeItemId      String?
+  routeItem        RouteItem?          @relation(fields: [routeItemId], references: [id], onDelete: SetNull)
+  secureEvidenceId String?
+  secureEvidence   SecureEvidence?     @relation(fields: [secureEvidenceId], references: [id], onDelete: SetNull)
+  incidentId       String?
+  incident         MobileIncident?     @relation(fields: [incidentId], references: [id], onDelete: SetNull)
+  objectId         String?
+  attempts         Int                 @default(0)
+  maxAttempts      Int                 @default(5)
+  nextRunAt        DateTime            @default(now())
+  lastError        String?
+  payload          Json?
+  completedAt      DateTime?
+  attemptsLog      MobileSyncAttempt[]
+  createdAt        DateTime            @default(now())
+  updatedAt        DateTime            @updatedAt
+
+  @@index([status, nextRunAt])
+  @@index([kind, status])
+  @@index([deviceId, status])
+  @@index([secureEvidenceId])
+  @@index([incidentId])
+}
+
+model MobileSyncAttempt {
+  id            String              @id @default(cuid())
+  jobId         String
+  job           MobileSyncJob       @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  attemptNumber Int
+  status        MobileSyncJobStatus
+  error         String?
+  details       Json?
+  createdAt     DateTime            @default(now())
+
+  @@index([jobId, createdAt])
 }
 
 model ContactLog {
