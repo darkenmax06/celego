@@ -2,7 +2,11 @@ node_modules
 .next
 .git
 .devcontainer
+.claude
+.relay
 celego-app-temp
+output
+tmp
 .env
 .env.*
 !.env.example

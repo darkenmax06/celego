@@ -9,6 +9,7 @@
 | Servidor Celego | Segun contrato BPD y politica aprobada |
 | Backups | Segun politica aprobada |
 | Logs tecnicos | 6 a 12 meses, sin PII |
+| Snapshot VPS relay | Solo ventana operativa aprobada |
 
 ## Borrado
 
@@ -22,3 +23,11 @@
 - Confirmar retencion legal con BPD.
 - Definir job automatico de limpieza del relay.
 - Definir prueba trimestral de restauracion de backups.
+- Definir caducidad de snapshots manuales de Hostinger.
+
+## Regla para Fase 1
+
+En el VPS Relay, la retencion no debe perseguir valor historico. Su funcion es
+resiliencia temporal mientras el servidor fisico descarga, valida y confirma.
+Si una evidencia supera la expiracion sin descarga, debe investigarse como falla
+operativa y no extenderse silenciosamente.

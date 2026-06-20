@@ -26,6 +26,18 @@
 - Incluir nombre, direccion, telefono o tarjeta en metadata del relay.
 - Guardar evidencia legible en `public/uploads` para el flujo nuevo.
 - Compartir evidencia mediante apps externas.
+- Guardar llave privada maestra o credenciales core en el VPS Relay.
+- Exponer el puerto interno del relay directamente a internet.
+- Registrar cuerpos de requests con fotos o PII en logs.
+
+## Operacion en VPS Relay
+
+- El relay solo conserva blobs cifrados y metadata tecnica.
+- La retencion del relay debe ser corta: 24 a 72 horas como maximo tecnico.
+- El dominio publico debe apuntar a Caddy, no al proceso relay.
+- Los backups del VPS no deben convertirse en repositorio historico de
+  evidencias.
+- Toda excepcion debe aprobarse por Seguridad y, si afecta PII, por BPD/legal.
 
 ## Pendiente contractual
 

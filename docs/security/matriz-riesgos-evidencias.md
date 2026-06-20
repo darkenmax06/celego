@@ -11,8 +11,19 @@
 | Llave temporal expuesta | Alto | Llave temporal cifrada con llave publica del servidor fisico |
 | Retencion excesiva en relay | Medio | Expiracion por evidencia y limpieza programada pendiente |
 | Falta de auditoria | Alto | Registro core de evidencia y logs de estado de tarjeta |
+| SSH expuesto a internet | Alto | Hostinger firewall + UFW restringido por IP administrativa |
+| VPS contiene secretos core | Alto | `.env` separado y prohibicion de llave privada/base core en relay |
+| Restauracion no probada | Medio | Checklist trimestral de backups/snapshots |
+| DNS/HTTPS mal configurado | Medio | Caddy automatic HTTPS y healthcheck documentado |
 
 ## Criterio de aceptacion inicial
 
 El sistema base debe poder demostrar que un paquete con nombre, cedula,
 telefono, direccion o tarjeta es rechazado antes de persistirse en relay o core.
+
+## Riesgo residual aceptable para piloto
+
+El piloto puede iniciar solo si el relay sigue sin PII, los blobs estan cifrados,
+el firewall esta limitado, hay snapshot previo y existe aprobacion externa para
+la region y retencion. Si alguno de esos puntos falta, el piloto debe tratarse
+como prueba interna sin evidencias reales.

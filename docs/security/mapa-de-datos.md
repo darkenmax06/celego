@@ -15,6 +15,8 @@
 | Hash SHA-256 | Permitido | Permitido | Permitido |
 | Llave temporal cifrada | Permitido | Permitido | Permitido |
 | Llave privada maestra | No permitido | No permitido | Permitido |
+| Logs HTTP | Minimos | Sin PII | Permitido si hay auditoria |
+| IP publica de carga | No aplica | Permitido como auditoria tecnica | Permitido |
 
 ## Clasificacion
 
@@ -29,3 +31,9 @@
 Cada componente debe recibir solo los datos necesarios para su funcion. Si un
 campo no es necesario para el relay, se rechaza aunque venga cifrado en otra
 parte del paquete.
+
+## Regla para logs
+
+Los logs de Caddy, relay y core no deben imprimir cuerpos de requests, nombres,
+cedulas, telefonos, direcciones, tarjetas ni fotos en base64. Para diagnostico
+se permiten IDs tecnicos, estado HTTP, IP, tamano, hash y timestamps.
