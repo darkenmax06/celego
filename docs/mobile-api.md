@@ -49,9 +49,13 @@ Header:
 Para `MENSAJERO`, el `messengerId` viene del token.
 Para `ADMIN/OPERADOR`, se puede usar query opcional `messengerId`.
 
-## 4) Subir evidencia fotografica
+## 4) Subir evidencia fotografica legacy
 
 `POST /api/mobile/rutas/pruebas`
+
+> Estado: legacy. Este endpoint guarda imagenes legibles en `public/uploads` y
+> queda solo para compatibilidad del MVP actual. El flujo nuevo debe usar
+> evidencia cifrada antes de salir del dispositivo.
 
 Header:
 
@@ -65,4 +69,40 @@ Body `multipart/form-data`:
 - `markAs` (`EN_RUTA` | `ACUSE_RECIBIDO` | `DEVUELTA_TIENDA`, opcional)
 
 Las fotos se guardan en `public/uploads/proofs/YYYY/MM`.
+
+## 5) Registrar dispositivo movil
+
+`POST /api/mobile/devices`
+
+Header:
+
+`Authorization: Bearer <token>`
+
+Body JSON:
+
+```json
+{
+  "deviceId": "DEV-228",
+  "label": "Celego Android 228",
+  "platform": "ANDROID",
+  "publicKey": "-----BEGIN PUBLIC KEY-----...",
+  "certificateFingerprint": "sha256:..."
+}
+```
+
+Los mensajeros registran dispositivos en estado `PENDING`. Un `ADMIN` u
+`OPERADOR` puede registrar/actualizar un dispositivo con estado `ACTIVE`.
+
+## 6) Registrar manifiesto de evidencia cifrada
+
+`POST /api/mobile/evidencias/cifradas`
+
+Header:
+
+`Authorization: Bearer <token>`
+
+Body JSON: manifiesto tecnico sin PII. Debe incluir `deliveryId`, `deviceId`,
+`objectId`, `routeItemId`, tipo de evidencia, metadatos de cifrado AES-256-GCM,
+hash SHA-256 del blob cifrado y expiracion. No se aceptan nombres, cedulas,
+telefonos, direcciones, tarjetas ni fotos legibles.
 
