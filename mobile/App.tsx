@@ -147,7 +147,7 @@ function toRelayManifest(item: QueuedEvidence) {
 }
 
 export default function App() {
-  const [baseUrl, setBaseUrl] = useState("http://10.0.2.2:3000");
+  const [baseUrl, setBaseUrl] = useState("http://10.0.2.2:3800");
   const [relayUrl, setRelayUrl] = useState("http://10.0.2.2:3900");
   const [publicKeyPem, setPublicKeyPem] = useState(DEFAULT_PUBLIC_KEY);
   const [deviceId, setDeviceId] = useState("");
