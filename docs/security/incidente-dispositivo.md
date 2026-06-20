@@ -23,3 +23,11 @@
 - Auditoria de intentos rechazados.
 - Reporte de rutas afectadas.
 - Constancia de bloqueo/borrado remoto desde MDM.
+
+## Escalamiento
+
+Si el dispositivo perdido pudo contener evidencias sin sincronizar, Seguridad
+debe abrir incidente formal y determinar si aplica notificacion a BPD segun el
+protocolo aprobado. El relay por si solo no debe contener evidencia legible, por
+lo que la revision se enfoca en estado del dispositivo, tokens, ruta y ventana
+de exposicion.

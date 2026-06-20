@@ -1,0 +1,64 @@
+services:
+  relay:
+    build:
+      context: ../..
+      dockerfile: infra/hostinger/Dockerfile.relay
+    container_name: celego-relay
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      RELAY_PORT: ${RELAY_PORT:-3900}
+      RELAY_METADATA_FILE: ${RELAY_METADATA_FILE:-/data/metadata.json}
+    expose:
+      - "3900"
+    volumes:
+      - relay_metadata:/data
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:3900/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks:
+      - relay_private
+
+  caddy:
+    image: caddy:2
+    container_name: celego-relay-caddy
+    restart: unless-stopped
+    depends_on:
+      relay:
+        condition: service_healthy
+    environment:
+      RELAY_DOMAIN: ${RELAY_DOMAIN:-relay.celego.example}
+      ACME_EMAIL: ${ACME_EMAIL:-ti@celego.example}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+      - caddy_logs:/var/log/caddy
+    networks:
+      - relay_private
+      - public_edge
+
+networks:
+  relay_private:
+    internal: true
+  public_edge:
+
+volumes:
+  relay_metadata:
+  caddy_data:
+  caddy_config:
+  caddy_logs:
+

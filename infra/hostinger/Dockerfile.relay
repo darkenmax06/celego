@@ -1,0 +1,22 @@
+FROM node:20-bookworm-slim
+
+WORKDIR /app
+
+ENV NODE_ENV=production
+
+COPY package*.json ./
+RUN npm ci --ignore-scripts --include=dev
+
+COPY tsconfig.json ./
+COPY apps ./apps
+COPY packages ./packages
+
+RUN mkdir -p /data \
+  && chown -R node:node /app /data
+
+USER node
+
+EXPOSE 3900
+
+CMD ["npm", "run", "relay:dev"]
+
