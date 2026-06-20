@@ -106,3 +106,47 @@ Body JSON: manifiesto tecnico sin PII. Debe incluir `deliveryId`, `deviceId`,
 hash SHA-256 del blob cifrado y expiracion. No se aceptan nombres, cedulas,
 telefonos, direcciones, tarjetas ni fotos legibles.
 
+## 7) Crear paquete offline de ruta
+
+`POST /api/mobile/route-packages`
+
+Header:
+
+`Authorization: Bearer <token>`
+
+Roles: `ADMIN` u `OPERADOR`.
+
+Body JSON:
+
+```json
+{
+  "routeId": "cuid-ruta",
+  "deviceId": "DEV-228",
+  "expiresAt": "2026-06-21T23:59:59.999Z"
+}
+```
+
+El paquete se genera para un dispositivo `ACTIVE` asignado al mismo mensajero de
+la ruta. Incluye nombre/direccion operacional minima, pero no incluye TC ni
+cedula completa. La cedula se valida offline con `salt + hash + last4`.
+
+## 8) Descargar paquete offline de ruta
+
+`POST /api/mobile/route-packages/download`
+
+Header:
+
+`Authorization: Bearer <token>`
+
+Body JSON:
+
+```json
+{
+  "packageId": "PKG-ABC123",
+  "deviceId": "DEV-228"
+}
+```
+
+El backend valida usuario, dispositivo, mensajero, estado y expiracion antes de
+entregar el manifiesto del paquete.
+
