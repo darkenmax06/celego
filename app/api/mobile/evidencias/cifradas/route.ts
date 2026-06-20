@@ -12,6 +12,7 @@ import {
   SecureEvidenceRegistrationSchema,
 } from "@/packages/contracts/src";
 import { canRegisterEvidenceForRouteItem } from "@/lib/mobile-authorization";
+import { buildEvidenceProcessingJobData } from "@/lib/mobile-sync";
 import { requireMobileSession } from "@/lib/mobile-session";
 import { prisma } from "@/lib/prisma";
 import { clearUrgencyOnCardClosure } from "@/lib/urgent-alerts";
@@ -155,6 +156,23 @@ export async function POST(request: NextRequest) {
           : `Evidencia cifrada registrada (${manifest.objectId})`,
         byUserId: auth.session.user.id,
       },
+    });
+
+    await tx.mobileSyncJob.create({
+      data: buildEvidenceProcessingJobData({
+        secureEvidenceId: createdEvidence.id,
+        objectId: createdEvidence.objectId,
+        deviceId: createdEvidence.deviceId,
+        mobileDeviceId: createdEvidence.mobileDeviceId,
+        messengerId: createdEvidence.messengerId,
+        routeId: createdEvidence.routeId,
+        routeItemId: createdEvidence.routeItemId,
+        payload: {
+          deliveryId: createdEvidence.deliveryId,
+          evidenceKind: createdEvidence.evidenceKind,
+          sha256: createdEvidence.sha256,
+        },
+      }),
     });
 
     return createdEvidence;

@@ -19,6 +19,7 @@ BPD/legal ni configura un VPS real.
 - `procedimiento-incidentes-evidencias.md`: flujo integral de incidente.
 - `checklist-bpd-aprobacion.md`: paquete para aprobacion externa.
 - `cierre-fase-0.md`: criterio de cierre y decisiones pendientes.
+- `cierre-fase-2-3.md`: cierre backend + app movil MVP.
 
 ## Entregables de Fase 1
 
