@@ -32,6 +32,8 @@ yarn-error.log*
 
 # local temp
 celego-app-temp/
+.claude/
+.relay/
 mobile/.expo/
 mobile/dist/
 mobile/build-log.txt

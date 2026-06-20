@@ -73,6 +73,34 @@ enum SLAExtensionType {
   REFERENCIA
 }
 
+enum MobileDeviceStatus {
+  PENDING
+  ACTIVE
+  REVOKED
+  LOST
+}
+
+enum MobileRoutePackageStatus {
+  CREATED
+  DOWNLOADED
+  EXPIRED
+  REVOKED
+}
+
+enum SecureEvidenceKind {
+  ACUSE
+  CEDULA
+}
+
+enum SecureEvidenceStatus {
+  PENDING_RELAY
+  UPLOADED_RELAY
+  DOWNLOADED_CORE
+  DECRYPTED
+  REJECTED
+  EXPIRED
+}
+
 model User {
   id                        String                     @id @default(cuid())
   name                      String
@@ -158,6 +186,7 @@ model Card {
   deliveryReassignments CardDeliveryReassignment[]
   bizcochitoItems       BizcochitoItem[]
   debitStatusEvents     DebitStatusEvent[]
+  secureEvidences       SecureEvidence[]
 
   @@index([tc])
   @@index([productType, requestNumber])
@@ -201,6 +230,9 @@ model Messenger {
   reassignmentsFrom CardDeliveryReassignment[] @relation("ReassignmentFromMessenger")
   reassignmentsTo   CardDeliveryReassignment[] @relation("ReassignmentToMessenger")
   reports           MessengerReport[]
+  mobileDevices     MobileDevice[]
+  mobilePackages    MobileRoutePackage[]
+  secureEvidences   SecureEvidence[]
 }
 
 model DebitConsolidationRun {
@@ -310,30 +342,117 @@ model MessengerReport {
 }
 
 model Route {
-  id          String      @id @default(cuid())
-  fecha       DateTime
-  messengerId String
-  messenger   Messenger   @relation(fields: [messengerId], references: [id], onDelete: Restrict)
-  status      RouteStatus @default(PENDIENTE)
-  notas       String?
-  createdById String?
-  createdBy   User?       @relation("RouteCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
-  createdAt   DateTime    @default(now())
-  items       RouteItem[]
+  id              String               @id @default(cuid())
+  fecha           DateTime
+  messengerId     String
+  messenger       Messenger            @relation(fields: [messengerId], references: [id], onDelete: Restrict)
+  status          RouteStatus          @default(PENDIENTE)
+  notas           String?
+  createdById     String?
+  createdBy       User?                @relation("RouteCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt       DateTime             @default(now())
+  items           RouteItem[]
+  mobilePackages  MobileRoutePackage[]
+  secureEvidences SecureEvidence[]
 
   @@index([fecha, messengerId])
 }
 
 model RouteItem {
-  id        String    @id @default(cuid())
-  routeId   String
-  route     Route     @relation(fields: [routeId], references: [id], onDelete: Cascade)
-  cardId    String
-  card      Card      @relation(fields: [cardId], references: [id], onDelete: Restrict)
-  sequence  Int       @default(0)
-  checkedAt DateTime?
+  id              String           @id @default(cuid())
+  routeId         String
+  route           Route            @relation(fields: [routeId], references: [id], onDelete: Cascade)
+  cardId          String
+  card            Card             @relation(fields: [cardId], references: [id], onDelete: Restrict)
+  sequence        Int              @default(0)
+  checkedAt       DateTime?
+  secureEvidences SecureEvidence[]
 
   @@unique([routeId, cardId])
+}
+
+model MobileDevice {
+  id                     String               @id @default(cuid())
+  deviceId               String               @unique
+  label                  String?
+  platform               String               @default("ANDROID")
+  status                 MobileDeviceStatus   @default(PENDING)
+  messengerId            String?
+  messenger              Messenger?           @relation(fields: [messengerId], references: [id], onDelete: SetNull)
+  publicKey              String?
+  certificateFingerprint String?              @unique
+  lastSeenAt             DateTime?
+  createdAt              DateTime             @default(now())
+  updatedAt              DateTime             @updatedAt
+  mobilePackages         MobileRoutePackage[]
+  secureEvidences        SecureEvidence[]
+
+  @@index([messengerId, status])
+  @@index([status, updatedAt])
+}
+
+model MobileRoutePackage {
+  id             String                   @id @default(cuid())
+  packageId      String                   @unique
+  routeId        String
+  route          Route                    @relation(fields: [routeId], references: [id], onDelete: Cascade)
+  messengerId    String
+  messenger      Messenger                @relation(fields: [messengerId], references: [id], onDelete: Restrict)
+  mobileDeviceId String?
+  mobileDevice   MobileDevice?            @relation(fields: [mobileDeviceId], references: [id], onDelete: SetNull)
+  deliveryDate   DateTime
+  expiresAt      DateTime
+  status         MobileRoutePackageStatus @default(CREATED)
+  manifest       Json
+  downloadedAt   DateTime?
+  createdAt      DateTime                 @default(now())
+  updatedAt      DateTime                 @updatedAt
+
+  @@index([messengerId, deliveryDate])
+  @@index([mobileDeviceId, expiresAt])
+  @@index([status, expiresAt])
+}
+
+model SecureEvidence {
+  id                     String               @id @default(cuid())
+  deliveryId             String               @unique
+  objectId               String               @unique
+  evidenceKind           SecureEvidenceKind
+  routeId                String?
+  route                  Route?               @relation(fields: [routeId], references: [id], onDelete: SetNull)
+  routeItemId            String?
+  routeItem              RouteItem?           @relation(fields: [routeItemId], references: [id], onDelete: SetNull)
+  cardId                 String?
+  card                   Card?                @relation(fields: [cardId], references: [id], onDelete: SetNull)
+  messengerId            String
+  messenger              Messenger            @relation(fields: [messengerId], references: [id], onDelete: Restrict)
+  deviceId               String
+  mobileDeviceId         String?
+  mobileDevice           MobileDevice?        @relation(fields: [mobileDeviceId], references: [id], onDelete: SetNull)
+  status                 SecureEvidenceStatus @default(PENDING_RELAY)
+  sha256                 String
+  byteSize               Int
+  encryptionAlgorithm    String               @default("AES-256-GCM")
+  keyEncryptionAlgorithm String               @default("RSA-OAEP-SHA256")
+  encryptedKey           String
+  nonce                  String
+  authTag                String
+  capturedAt             DateTime
+  uploadedAt             DateTime?
+  relayReceivedAt        DateTime?
+  coreDownloadedAt       DateTime?
+  decryptedAt            DateTime?
+  expiresAt              DateTime?
+  manifest               Json?
+  createdAt              DateTime             @default(now())
+  updatedAt              DateTime             @updatedAt
+
+  @@index([messengerId, capturedAt])
+  @@index([deviceId, status])
+  @@index([mobileDeviceId, status])
+  @@index([cardId])
+  @@index([routeItemId])
+  @@index([status, expiresAt])
 }
 
 model ContactLog {
