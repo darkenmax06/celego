@@ -51,6 +51,7 @@ export const MODULES = [
   "rastreo_masivo",
   "sla_vencidas",
   "rutas",
+  "flota",
   "operativo",
   "redaccion",
   "mensajeros",
