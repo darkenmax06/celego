@@ -10,6 +10,7 @@ const ACCESS: Record<ModuleName, UserRole[]> = {
   rastreo_masivo: ["ADMIN", "OPERADOR", "FACTURACION"],
   sla_vencidas: ["ADMIN", "OPERADOR", "FACTURACION"],
   rutas: ["ADMIN", "OPERADOR"],
+  flota: ["ADMIN"],
   operativo: ["ADMIN", "OPERADOR"],
   redaccion: ["ADMIN", "OPERADOR"],
   mensajeros: ["ADMIN", "OPERADOR"],
