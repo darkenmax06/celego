@@ -1,0 +1,48 @@
+## contexto:
+
+Quiero desarrollar un sistema para una empresa que realiza mensajeria a nivel nacional de tarjetas de credito y debito para un banco dominicano. el sistema debe tener los siguientes criterios:
+
+* importacion de data critica (referencia externa, numero de cedula, nombre del cliente, direccion, numeros telefonicos, fecha de despacho, zona etc.)
+
+* el sistema debe permitir modificar de manera individual y masiva modificar los status del las tarjetas y su locacion (estas provincias estaran definidas como santo domingo, higuey, romana, san pedro, punta cana, santiago, san francisco, san cristobal, puerto plata y bani) . inicialmente los status que queremos implementar serian los siguientes: despachada (indica que el banco nos la envio para realizar la entrega) , enviada a interior (luego debe espesificarse la provincia ya que es importante para llevar la trazabilidad y saber donde se encuentra cada plastico) , en ruta (para espesificar que la tarjeta salio ese dia a la calle para entreg ) , entregada, retornada (a este status se le debe espesificar el motivo de devolucion.
+
+* el sistema debe crear un perfil del cliente, esto con el fin de que al acceder a dicho perfil muestre una bitacora de todos los cambios que ha tenido desde que se ingreso al sistema por primera vez, ya que los plasticos pueden despacharse varias veces, debe indicar todo los status que ha tenido en cada status.
+
+* el sistema a la hora de importar debe permitirte definir de que zona son las tarjetas ya que de esto depende la facturacion, por ejemplo, la zona metro vale 3 dolares, la zona este vale 5 dolares, este es un ejemplo del valor de cada entrega pero tambien esto varia de la cantidad, porque existe mayoreo variable, entonces debes permitirle a los usuarios tambien el poder definir rangos de precios por zona dependiendo de la cantidad de tarjetas con status entregada.
+
+* el sistema debe permitir generar reportes en formato de excel, csv y tambien en pdf dependiendo de ciertos parametros, como zona, fecha de inicio, fecha de conclucion etc. Estos reportes deben tener la misma estructura que los que te pase que tienen delante el nombre REPORTE_EXPORT, de igual manera debe permitirte tambien importar data, el tipo de data y los campos son los archivos que te pase como REPORTE_IMPORT
+
+* el sistema debe permitirte el poder crear mensajeros (no como usuarios sino para una gestion de nomina basica) debido a que la empresa le paga a los mensajeros por la cantidad de entregas que hagan, las tarifas dependen de:
+
+  * entregas (seria la cantidad de entregas normales
+
+  * entregas en zonas remotas (serian las entregas realizadas en zonas lejanas al centro de la ciudad)
+
+  * recogidas a banco (es la gestion de buscar los despachos del dia a banco)
+
+  * mandados (seria las gestiones extracurriculares que se hacen).
+
+- la idea es que dependiendo de cada gestion tienen un precio distinto y cada mensajero maneja tarifas distintas, por lo que se requiere crear un perfil con toda esta informacion por mensajero (el sistema debe definirte crear mas tipos de entrega por cada mensajero individual, osea, que juan puede tener entregas frailes pero no necesariamente pedro deba tenerlas) .
+
+- El sistema debe darte la opcion de poder emitir reportes en formato jpg de la cantidad de entregas de ese mensajero durante el periodo que definas, debido a que los pagos pueden ser en fechas irregulares y se calcularan periodos irregulares, estos reportes deben mostrar la informacion del mensajero y mostrar en una tabla todas las gestiones del mensajero por dia ej. el 01/01/2025 realizo 2 entregas normales, 2 entregas en zonas remotas, 1 recogida a banco y un mandado, que en una tabla se muestre eso en rango que se espesifica el reporte de ese mensajero individual y al fondo te mostrara en grande el total de lo que el mensajero genero en ese periodo para que se pueda proceder con el pago (aparte de dejar un registro de cuando se genero el reporte en una especie de historial del mensajero que diga que rango de fechas se tomo para el reporte y cuando se lanzo el mismo.
+
+- El sistema debe tener un apartado donde se puedan registrar la cantidad de entregas de todos los tipos de mensajero todos los dias. para que el personal pueda llevar el avance del dia a dia de todos los mensajeros y puedan asegurarse de registrar todo.
+
+- El sistema debe mostar alertas de las tarjetas que estan en nuestra posecion y estan proximo por vencer (el admistrador debe tener la posibilidad de modificar el SLA que es la metrica que mide el tiempor que tiene la empresa para poder entregar la tarjeta) en este caso es de 5 dias laborables (lo que implica que el sabado y el domingo no entran dentro del tiempo de entrega) debe mostrarte alertas de que tarjetas se encuentran proximo a vencer en sla (tambien debe permitir el extender el mismo de algun grupo de tarjetas que se identifiquen tanto por cedula o por referencia externa.
+
+- el sistema debe permitirte el poder asignarle una ruta de manera diara a un mensajero usando los numeros de cedula o la referencia externa, esto debe reflejarse a la hora de buscar una tarjeta en individual o en el apartado de rutas el cual debe tener un filtro por dia y mostrarte la de cada mensajero
+
+- El sistema debe tener un apartado para realizar operativos de llamadas en el que te aparezcan las tarjetas dependiendo de unos filtros como: provincia, tiempo de sla (si le quedan 3, 2 o un dia de sla). obviamente aca no apareceran tarjeras que esten marcadas como entregadas o retornadas. luego de aplicar los filtros debe aparecerte (en cards o en listas, dependiendo de el gusto de usuario) para poder acceder a la primera y que te muestre un modal con la informacion en general el cliente, su nombre, su cedula, donde se encuentra la tc, los numeros (estos deben tener un check para que el usuario pueda marcar a cual numero se comunico con el cliente y debe darle la opcion de anadir otro numero telefonico) de telefonos y un textarea para poder anadirle comentarios. y un check de "contactado", y arriba del todo la opcion de poder pasar al siguente cliente. Luego de eso debe tener una apartado en la cual se pueda hacer un reporte de contactos que solo te diga el nombre del cliente, el numero marcado con el check del contacto y el comentario, que por lo general sera la direccion.
+
+- el sistema debe permitir el realizar una redaccion diaria de acuses de entrega (son los recibos firmados de los clientes (que suelen venir con el codigo de barras de la referencia)) y otra de devolucion, ambas detallada por zona (el sistema solo poseeria 4 zonas) metro, este, norte y sur. aparte, esta redaccion se realiza tanto para los acuses de entrega como para los retornos (los cuales se deben espesificar los motivos de cada una de las tarjetas a devolver) te pase los documentos que se llaman REDACCION DE ENTREGAS Y RETORNOS para que veas el formato de cada uno y los campos que tiene que generar el sistema, me interesa que a nivel de sistema cada vez que se pistolee una tarjeta el sistema te muestre la lista con toda la informacion como esta en los documentos que te pase y que para el apartado de los retornos te deje el poder seleccionar un grupo de tarjetas pistoleadas para poder ponerles los comentarios a las que tengan comentarios similares y asi no tener que escribirlos uno por uno. obviamente cuando se pistoleen para hacer una redaccion la idea es que luego de hacerla y aprobarla automaticamente actualice las tarjetas segun el status, por ejemplo los acuses que se envian deben cambiar la tarjeta asociada a la referencia como entregada y las retornadas como las mismas, tomando en cuenta que una tarjeta puede ser despachada mas de una vez es importante que a la hora de marcar status o generar reportes la tarjeta aparezca todas las veces que fue despachada a la empresa, solo que con el sstatus correspondiente al despacho (osea, si fue devuelta 4 veces y entregada a la 5ta el reporte debe contemplar eso) aparte de permitir exportar tanto en formato de excel, csv o en pdf listo para imprimir en 8.5x11 pulgadas
+
+- el sistema debe permitirte el poder basado en el numero de cedula o su referencia externa el importar de manera masiva casos urgentes con el formato del documento llamado URGENCIAS para resaltarlas en los operativos de llamadas.
+
+- el sistema debe permitirte generar lotes a la hora de enviar una tarjeta a una provincia con el formato indicado en el archivo llamado LOTES\
+  \
+  \
+  Cabe recalcar que todos los documentos de excel mencionados estan en la carpeta docs/excels
+
+Este sistema es para manejar la gestion en general de todo lo que engloba el manejo de tarjetas de credito y adaptar el desarrollo a como funciona la logistica del negocio.
+
+quiero que crees un roapmap extenso y bien detallado en cada seccion para poder completar este requerimiento, quiero que se use nextjs 16, taildwind, postgree y docker, ya que esto se instalara en un servidor local.

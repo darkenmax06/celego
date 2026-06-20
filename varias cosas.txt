@@ -1,0 +1,11 @@
+varias cosas
+
+
+el dashboard debería mostrar también la cantidad de tarjetas entregadas
+porque si el sla en el sistema son 5 días cuando importe tomo el sla de 3 días.
+las tarjetas de san pedro se pusieron como zona metro cuando es de zona este.
+a la hora de crear las redacciones debería dejarme pistolear cuales tarjetas serán las entregadas y cuales serán las retornadas, no tomar todas las de la zona, aparte, debe dejarme el poder exportar esa relación en todos los formatos usando el modelos del documento de Entregas y retornos que ya viste, 
+en el apartado de tarjetas debería dejarte modificar de las tarjetas seleccionadas, su estado, su provincia y su zona.
+el apartado de ruta esta incompleto, debe permitirte ver que tarjeta se pistolea en el momento y sobre todo permitirte hacer toda la gestion luego de recibir los acuses de entregas del mensajero y sus retornos.
+
+Quiero que te fijes del ui references y su estructura de como refleja a traves del diseño la funcionalidad y haz esa funcionalidad  1 a 1
