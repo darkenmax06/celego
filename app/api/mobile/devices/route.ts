@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { MobileDeviceStatus, UserRole } from "@prisma/client";
 import { z } from "zod";
+import { resolveMobileDeviceRegistrationStatus } from "@/lib/mobile-device";
 import { requireMobileSession } from "@/lib/mobile-session";
 import { prisma } from "@/lib/prisma";
 
@@ -119,11 +120,15 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Mensajero no valido o inactivo" }, { status: 400 });
   }
 
-  const requestedStatus = parsed.data.status;
-  const nextStatus =
-    role === UserRole.ADMIN || role === UserRole.OPERADOR
-      ? requestedStatus ?? MobileDeviceStatus.PENDING
-      : MobileDeviceStatus.PENDING;
+  const existingDevice = await prisma.mobileDevice.findUnique({
+    where: { deviceId: parsed.data.deviceId },
+    select: { status: true },
+  });
+  const nextStatus = resolveMobileDeviceRegistrationStatus({
+    role,
+    requestedStatus: parsed.data.status,
+    existingStatus: existingDevice?.status,
+  });
 
   const device = await prisma.mobileDevice.upsert({
     where: { deviceId: parsed.data.deviceId },
