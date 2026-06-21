@@ -119,6 +119,32 @@ export async function POST(request: NextRequest) {
   const now = new Date();
   const nextStatus = resolveNextCardStatus(manifest.markAs);
 
+  const existingEvidence = await prisma.secureEvidence.findFirst({
+    where: {
+      OR: [{ objectId: manifest.objectId }, { deliveryId: manifest.deliveryId }],
+    },
+    select: {
+      objectId: true,
+      deliveryId: true,
+      cardId: true,
+      deviceId: true,
+      sha256: true,
+    },
+  });
+  if (
+    existingEvidence &&
+    (existingEvidence.objectId !== manifest.objectId ||
+      existingEvidence.deliveryId !== manifest.deliveryId ||
+      existingEvidence.cardId !== card.id ||
+      existingEvidence.deviceId !== manifest.deviceId ||
+      existingEvidence.sha256.toLowerCase() !== manifest.blob.sha256.toLowerCase())
+  ) {
+    return NextResponse.json(
+      { error: "Evidencia duplicada con datos inconsistentes" },
+      { status: 409 },
+    );
+  }
+
   const evidence = await prisma.$transaction(async (tx) => {
     const createdEvidence = await tx.secureEvidence.upsert({
       where: { objectId: manifest.objectId },

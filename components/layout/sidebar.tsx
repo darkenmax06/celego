@@ -20,6 +20,7 @@ import {
   TimerOff,
   Upload,
   Smartphone,
+  ShieldCheck,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { type ModuleName } from "@/lib/constants";
@@ -39,6 +40,7 @@ const NAV_ITEMS: Array<{
   { module: "sla_vencidas", label: "Vencimientos", href: "/sla-vencidas", icon: TimerOff },
   { module: "rutas", label: "Rutas", href: "/rutas", icon: Route },
   { module: "flota", label: "Flota", href: "/flota", icon: Smartphone },
+  { module: "piloto_movil", label: "Piloto movil", href: "/piloto-movil", icon: ShieldCheck },
   { module: "operativo", label: "Operativo", href: "/operativo", icon: Phone },
   { module: "redaccion", label: "Redaccion", href: "/redaccion", icon: FileText },
   { module: "mensajeros", label: "Mensajeros", href: "/mensajeros", icon: Bike },

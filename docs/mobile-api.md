@@ -257,3 +257,28 @@ En esta fase, si `RELAY_REAL_DOWNLOAD` no es `true`, el worker marca el
 procesamiento como descifrado local simulado. La integracion real con descarga
 de blobs del relay queda preparada para el worker fisico.
 
+## 13) Piloto movil admin
+
+`GET /api/admin/mobile-pilot`
+
+Uso esperado: portal local Celego, solo usuarios `ADMIN`.
+
+Filtros opcionales:
+
+- `from`: fecha inicial.
+- `to`: fecha final.
+- `messengerId`: mensajero especifico.
+- `province`: provincia de trabajo.
+
+Devuelve metricas agregadas de dispositivos, asignaciones abiertas, evidencias,
+incidencias, cola de sincronizacion y checklist de salida. La respuesta esta
+sanitizada: no retorna TC, cedula completa, direccion del cliente, blobs,
+llaves ni fotos.
+
+Comandos de simulacion:
+
+```bash
+npm run pilot:seed-mobile
+npm run pilot:clear-mobile
+```
+

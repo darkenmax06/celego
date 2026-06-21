@@ -20,6 +20,11 @@ BPD/legal ni configura un VPS real.
 - `checklist-bpd-aprobacion.md`: paquete para aprobacion externa.
 - `cierre-fase-0.md`: criterio de cierre y decisiones pendientes.
 - `cierre-fase-2-3.md`: cierre backend + app movil MVP.
+- `fase-5-pruebas-seguridad.md`: pruebas internas ofensivas.
+- `pentest-checklist-movil.md`: checklist para pentest movil/API.
+- `fase-6-piloto-controlado.md`: criterios de piloto controlado.
+- `piloto-runbook-diario.md`: operacion diaria del piloto.
+- `cierre-fase-5-6.md`: cierre repo de seguridad + piloto.
 
 ## Entregables de Fase 1
 

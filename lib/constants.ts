@@ -53,6 +53,7 @@ export const MODULES = [
   "sla_vencidas",
   "rutas",
   "flota",
+  "piloto_movil",
   "operativo",
   "redaccion",
   "mensajeros",

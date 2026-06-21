@@ -80,7 +80,7 @@ describe("GET /api/mobile/assignments", () => {
   it("returns only minimum operational assignment data", async () => {
     const { GET } = await import("../../app/api/mobile/assignments/route");
 
-    const response = await GET(buildRequest());
+    const response = (await GET(buildRequest()))!;
     const json = await response.json();
     const serialized = JSON.stringify(json);
 
@@ -115,7 +115,7 @@ describe("GET /api/mobile/assignments", () => {
       status: MobileDeviceStatus.REVOKED,
     });
 
-    const response = await GET(buildRequest());
+    const response = (await GET(buildRequest()))!;
     const json = await response.json();
 
     expect(response.status).toBe(403);
