@@ -79,10 +79,20 @@ export const RelayEvidenceUploadSchema = z
   });
 
 export const SecureEvidenceRegistrationSchema = RelayEvidenceManifestSchema.extend({
-  routeItemId: z.string().cuid(),
+  cardId: z.string().cuid().optional(),
+  routeItemId: z.string().cuid().optional(),
   note: z.string().trim().max(300).optional(),
   markAs: z.enum(["ACUSE_RECIBIDO", "DEVUELTA_TIENDA", "EN_RUTA"]).optional(),
-}).strict();
+})
+  .strict()
+  .superRefine((value, context) => {
+    if (!value.cardId && !value.routeItemId) {
+      context.addIssue({
+        code: "custom",
+        message: "cardId o routeItemId es requerido",
+      });
+    }
+  });
 
 export type EvidenceKind = z.infer<typeof EvidenceKindSchema>;
 export type RelayEvidenceManifest = z.infer<typeof RelayEvidenceManifestSchema>;

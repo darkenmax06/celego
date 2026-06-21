@@ -3,8 +3,8 @@
 Aplicacion Expo para mensajeros:
 
 - Login contra `POST /api/mobile/auth/login`
-- Consulta de rutas asignadas en `GET /api/mobile/rutas`
-- Captura de foto con camara y subida de evidencia en `POST /api/mobile/rutas/pruebas`
+- Sincronizacion de tarjetas asignadas en `GET /api/mobile/assignments`
+- Captura de evidencia cifrada por tarjeta asignada
 
 ## Requisitos
 
@@ -55,8 +55,9 @@ Notas:
 
 ## Evidencias
 
-Las fotos se guardan en:
+La app usa una cartera offline automatica:
 
-- Disco: `public/uploads/proofs/YYYY/MM/...`
-- URL publica: `/<ruta-archivo>`
-- Metadata de tarjeta: `card.metadata.route.proofs[]`
+- Al iniciar sesion o sincronizar, descarga tarjetas abiertas asignadas al mensajero.
+- No descarga TC ni cedula completa.
+- Valida cedula localmente con `salt + hash + last4`.
+- Las fotos se cifran antes de salir del telefono y se suben via relay/core.
