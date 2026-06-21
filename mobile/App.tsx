@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -36,10 +36,11 @@ type CedulaVerification = {
   last4: string;
 };
 
-type RoutePackageItem = {
-  routeItemId: string;
-  deliveryId: string;
-  sequence: number;
+type AssignmentItem = {
+  cardId: string;
+  routeId?: string;
+  routeItemId?: string;
+  sequence?: number;
   status: string;
   recipientName: string;
   addressLine?: string;
@@ -47,17 +48,18 @@ type RoutePackageItem = {
   zone?: string;
   reference?: string;
   cedulaVerification: CedulaVerification;
+  updatedAt: string;
 };
 
-type RoutePackageManifest = {
-  packageId: string;
-  routeId: string;
-  messengerId: string;
+type AssignmentsResponse = {
   deviceId: string;
-  deliveryDate: string;
+  messengerId: string;
   generatedAt: string;
-  expiresAt: string;
-  items: RoutePackageItem[];
+  page: number;
+  pageSize: number;
+  total: number;
+  totalPages: number;
+  assignments: AssignmentItem[];
 };
 
 type EvidenceKind = "ACUSE" | "CEDULA";
@@ -73,7 +75,8 @@ type QueuedEvidence = {
     deviceId: string;
     objectId: string;
     evidenceKind: EvidenceKind;
-    routeItemId: string;
+    cardId: string;
+    routeItemId?: string;
     capturedAt: string;
     expiresAt: string;
     gps?: {
@@ -103,6 +106,7 @@ type QueuedEvidence = {
 type QueuedIncident = {
   incidentId: string;
   status: "pending" | "synced" | "failed";
+  cardId?: string;
   routeItemId?: string;
   title: string;
   description?: string;
@@ -119,7 +123,9 @@ type PersistedState = {
   user: AuthUser | null;
   email: string;
   messengerId?: string;
-  routePackage: RoutePackageManifest | null;
+  assignments: AssignmentItem[];
+  selectedAssignmentId?: string;
+  lastAssignmentsSyncAt?: string;
   queue: QueuedEvidence[];
   incidents: QueuedIncident[];
 };
@@ -171,6 +177,12 @@ function nowIso() {
   return new Date().toISOString();
 }
 
+function evidenceExpiresAt() {
+  const expiresAt = new Date();
+  expiresAt.setHours(expiresAt.getHours() + 72);
+  return expiresAt.toISOString();
+}
+
 function makeId(prefix: string) {
   return `${prefix}-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`.toUpperCase();
 }
@@ -197,11 +209,12 @@ export default function App() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [messengerId, setMessengerId] = useState("");
-  const [packageIdInput, setPackageIdInput] = useState("");
   const [token, setToken] = useState("");
   const [user, setUser] = useState<AuthUser | null>(null);
-  const [routePackage, setRoutePackage] = useState<RoutePackageManifest | null>(null);
-  const [selectedDeliveryId, setSelectedDeliveryId] = useState("");
+  const [assignments, setAssignments] = useState<AssignmentItem[]>([]);
+  const [selectedAssignmentId, setSelectedAssignmentId] = useState("");
+  const [assignmentSearch, setAssignmentSearch] = useState("");
+  const [lastAssignmentsSyncAt, setLastAssignmentsSyncAt] = useState("");
   const [cedulaInput, setCedulaInput] = useState("");
   const [cedulaVerified, setCedulaVerified] = useState(false);
   const [queue, setQueue] = useState<QueuedEvidence[]>([]);
@@ -228,7 +241,9 @@ export default function App() {
         setUser(parsed.user);
         setEmail(parsed.email);
         setMessengerId(parsed.messengerId ?? "");
-        setRoutePackage(parsed.routePackage);
+        setAssignments(parsed.assignments ?? []);
+        setSelectedAssignmentId(parsed.selectedAssignmentId ?? "");
+        setLastAssignmentsSyncAt(parsed.lastAssignmentsSyncAt ?? "");
         setQueue(parsed.queue ?? []);
         setIncidents(parsed.incidents ?? []);
       } catch {
@@ -251,17 +266,37 @@ export default function App() {
       user,
       email,
       messengerId,
-      routePackage,
+      assignments,
+      selectedAssignmentId,
+      lastAssignmentsSyncAt,
       queue,
       incidents,
     };
     void AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-  }, [baseUrl, relayUrl, deviceId, publicKeyPem, token, user, email, messengerId, routePackage, queue, incidents]);
+  }, [baseUrl, relayUrl, deviceId, publicKeyPem, token, user, email, messengerId, assignments, selectedAssignmentId, lastAssignmentsSyncAt, queue, incidents]);
 
   const activeItem = useMemo(() => {
-    if (!routePackage) return null;
-    return routePackage.items.find((item) => item.deliveryId === selectedDeliveryId) ?? routePackage.items[0] ?? null;
-  }, [routePackage, selectedDeliveryId]);
+    if (!assignments.length) return null;
+    return assignments.find((item) => item.cardId === selectedAssignmentId) ?? assignments[0] ?? null;
+  }, [assignments, selectedAssignmentId]);
+
+  const filteredAssignments = useMemo(() => {
+    const term = assignmentSearch.trim().toLowerCase();
+    if (!term) return assignments;
+    return assignments.filter((item) => {
+      return [
+        item.recipientName,
+        item.addressLine,
+        item.province,
+        item.zone,
+        item.reference,
+        item.status,
+        item.cedulaVerification.last4,
+      ]
+        .filter(Boolean)
+        .some((value) => String(value).toLowerCase().includes(term));
+    });
+  }, [assignments, assignmentSearch]);
 
   const queueSummary = useMemo(() => {
     const pending = queue.filter((item) => item.status === "pending" || item.status === "failed").length;
@@ -291,6 +326,7 @@ export default function App() {
       setToken(json.token);
       setUser(json.user);
       setStatusMessage("Sesion iniciada. Registra/valida el dispositivo.");
+      await syncAssignments(json.token, deviceId, true);
     } catch (error) {
       Alert.alert("Login", error instanceof Error ? error.message : "Error desconocido");
     } finally {
@@ -317,6 +353,9 @@ export default function App() {
       const json = await res.json();
       if (!res.ok) throw new Error(json.error ?? "No se pudo registrar dispositivo");
       setStatusMessage(`Dispositivo ${json.device.status}. Si esta PENDING, TI debe activarlo.`);
+      if (json.device.status === "ACTIVE") {
+        await syncAssignments(token, deviceId, true);
+      }
     } catch (error) {
       Alert.alert("Dispositivo", error instanceof Error ? error.message : "Error desconocido");
     } finally {
@@ -324,42 +363,54 @@ export default function App() {
     }
   }
 
-  async function listAndDownloadPackage() {
-    if (!token || !deviceId) return;
+  const syncAssignments = useCallback(async (authToken = token, targetDeviceId = deviceId, silent = false) => {
+    if (!authToken || !targetDeviceId) return;
     setLoading(true);
     try {
-      let packageId = packageIdInput.trim();
-      if (!packageId) {
-        const today = new Date().toISOString().slice(0, 10);
-        const res = await fetch(`${baseUrl}/api/mobile/route-packages?deviceId=${encodeURIComponent(deviceId)}&date=${today}`, {
-          headers: { Authorization: `Bearer ${token}` },
-        });
-        const json = await res.json();
-        if (!res.ok) throw new Error(json.error ?? "No se pudieron listar paquetes");
-        packageId = json.packages?.[0]?.packageId ?? "";
-      }
-      if (!packageId) throw new Error("No hay paquete offline para este dispositivo");
+      const allAssignments: AssignmentItem[] = [];
+      let page = 1;
+      let totalPages = 1;
 
-      const res = await fetch(`${baseUrl}/api/mobile/route-packages/download`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ packageId, deviceId }),
-      });
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.error ?? "No se pudo descargar paquete");
-      setRoutePackage(json.manifest);
-      setSelectedDeliveryId(json.manifest.items[0]?.deliveryId ?? "");
+      do {
+        const params = new URLSearchParams({
+          deviceId: targetDeviceId,
+          page: String(page),
+          pageSize: "100",
+        });
+        const res = await fetch(`${baseUrl}/api/mobile/assignments?${params.toString()}`, {
+          headers: { Authorization: `Bearer ${authToken}` },
+        });
+        const json = (await res.json()) as AssignmentsResponse & { error?: string };
+        if (!res.ok) throw new Error(json.error ?? "No se pudieron sincronizar asignaciones");
+        allAssignments.push(...(json.assignments ?? []));
+        totalPages = json.totalPages ?? 1;
+        page += 1;
+      } while (page <= totalPages);
+
+      setAssignments(allAssignments);
+      setSelectedAssignmentId((current) =>
+        allAssignments.some((item) => item.cardId === current)
+          ? current
+          : allAssignments[0]?.cardId ?? "",
+      );
       setCedulaVerified(false);
-      setStatusMessage(`Paquete ${json.manifest.packageId} descargado offline`);
+      setLastAssignmentsSyncAt(nowIso());
+      setStatusMessage(`${allAssignments.length} tarjetas asignadas sincronizadas`);
     } catch (error) {
-      Alert.alert("Paquete offline", error instanceof Error ? error.message : "Error desconocido");
+      if (!silent) {
+        Alert.alert("Asignaciones", error instanceof Error ? error.message : "Error desconocido");
+      } else {
+        setStatusMessage(error instanceof Error ? error.message : "No se pudieron sincronizar asignaciones");
+      }
     } finally {
       setLoading(false);
     }
-  }
+  }, [baseUrl, deviceId, token]);
+
+  useEffect(() => {
+    if (!token || !user || !deviceId) return;
+    void syncAssignments(token, deviceId, true);
+  }, [deviceId, syncAssignments, token, user]);
 
   function verifyCedula() {
     if (!activeItem) return;
@@ -369,7 +420,7 @@ export default function App() {
   }
 
   async function captureEvidence(evidenceKind: EvidenceKind) {
-    if (!activeItem || !routePackage || !token) return;
+    if (!activeItem || !token) return;
     if (!publicKeyPem.trim()) {
       Alert.alert("Llave publica requerida", "Pega la llave publica de Celego para cifrar en el telefono.");
       return;
@@ -405,6 +456,7 @@ export default function App() {
       });
       const capturedAt = nowIso();
       const objectId = makeId(`OBJ-${evidenceKind}`);
+      const expiresAt = evidenceExpiresAt();
       const queued: QueuedEvidence = {
         queueId: makeId("Q"),
         status: "pending",
@@ -413,13 +465,14 @@ export default function App() {
         localPreviewUri: asset.uri,
         createdAt: capturedAt,
         manifest: {
-          deliveryId: activeItem.deliveryId,
+          deliveryId: makeId("DLV"),
           deviceId,
           objectId,
           evidenceKind,
+          cardId: activeItem.cardId,
           routeItemId: activeItem.routeItemId,
           capturedAt,
-          expiresAt: routePackage.expiresAt,
+          expiresAt,
           gps: location
             ? {
                 latitude: location.coords.latitude,
@@ -515,7 +568,7 @@ export default function App() {
           body: JSON.stringify({
             incidentId: incident.incidentId,
             deviceId,
-            routeId: routePackage?.routeId,
+            cardId: incident.cardId,
             routeItemId: incident.routeItemId,
             type: "OTHER",
             severity: "MEDIUM",
@@ -552,7 +605,7 @@ export default function App() {
         body: JSON.stringify({
           deviceId,
           evidenceObjectIds: queue.map((item) => item.manifest.objectId),
-          packageIds: routePackage ? [routePackage.packageId] : [],
+          packageIds: [],
           incidentIds: incidents.map((item) => item.incidentId),
           clientQueueDepth: queue.filter((item) => item.status !== "synced").length,
           lastClientSyncAt: nowIso(),
@@ -575,6 +628,7 @@ export default function App() {
       {
         incidentId: makeId("INC"),
         status: "pending",
+        cardId: activeItem.cardId,
         routeItemId: activeItem.routeItemId,
         title: "Incidencia de entrega",
         description: incidentNote.trim(),
@@ -589,7 +643,8 @@ export default function App() {
     await AsyncStorage.removeItem(STORAGE_KEY);
     setToken("");
     setUser(null);
-    setRoutePackage(null);
+    setAssignments([]);
+    setSelectedAssignmentId("");
     setQueue([]);
     setIncidents([]);
     setPassword("");
@@ -602,8 +657,8 @@ export default function App() {
         <ScrollView contentContainerStyle={styles.loginContainer}>
           <View style={styles.hero}>
             <Text style={styles.eyebrow}>Celego Entregas</Text>
-            <Text style={styles.heroTitle}>Ruta segura, evidencia cifrada</Text>
-            <Text style={styles.heroText}>Inicia sesion, valida tu equipo y descarga tu paquete offline.</Text>
+            <Text style={styles.heroTitle}>Cartera segura, evidencia cifrada</Text>
+            <Text style={styles.heroText}>Inicia sesion, valida tu equipo y sincroniza tus tarjetas asignadas.</Text>
           </View>
           <TextInput style={styles.input} value={baseUrl} onChangeText={setBaseUrl} placeholder="Core API URL" autoCapitalize="none" />
           <TextInput style={styles.input} value={relayUrl} onChangeText={setRelayUrl} placeholder="Relay URL" autoCapitalize="none" />
@@ -652,7 +707,7 @@ export default function App() {
           <Text style={styles.cardTitle}>Barra de custodia</Text>
           <View style={styles.custodyRail}>
             <Text style={styles.custodyStep}>Dispositivo</Text>
-            <Text style={styles.custodyStep}>Paquete</Text>
+            <Text style={styles.custodyStep}>Asignadas</Text>
             <Text style={styles.custodyStep}>Cedula</Text>
             <Text style={styles.custodyStep}>Evidencia</Text>
             <Text style={styles.custodyStep}>Sync</Text>
@@ -676,31 +731,44 @@ export default function App() {
         </View>
 
         <View style={styles.card}>
-          <Text style={styles.cardTitle}>2. Paquete offline</Text>
-          <TextInput style={styles.input} value={packageIdInput} onChangeText={setPackageIdInput} placeholder="Package ID opcional" autoCapitalize="none" />
-          <Pressable style={styles.primaryBtn} onPress={() => void listAndDownloadPackage()} disabled={loading}>
-            <Text style={styles.btnText}>Descargar ruta del dia</Text>
+          <Text style={styles.cardTitle}>2. Mis tarjetas asignadas</Text>
+          <View style={styles.syncStats}>
+            <Text style={styles.stat}>{assignments.length} activas</Text>
+            <Text style={styles.stat}>{filteredAssignments.length} visibles</Text>
+          </View>
+          <TextInput
+            style={styles.input}
+            value={assignmentSearch}
+            onChangeText={setAssignmentSearch}
+            placeholder="Buscar nombre, zona, referencia o ultimos 4"
+            autoCapitalize="none"
+          />
+          <Pressable style={styles.primaryBtn} onPress={() => void syncAssignments()} disabled={loading}>
+            <Text style={styles.btnText}>Sincronizar asignadas</Text>
           </Pressable>
-          {routePackage ? (
-            <Text style={styles.muted}>{routePackage.items.length} entregas | vence {new Date(routePackage.expiresAt).toLocaleString()}</Text>
+          {lastAssignmentsSyncAt ? (
+            <Text style={styles.muted}>Ultima sync: {new Date(lastAssignmentsSyncAt).toLocaleString()}</Text>
+          ) : null}
+          {!assignments.length ? (
+            <Text style={styles.muted}>No hay tarjetas abiertas asignadas a este mensajero.</Text>
           ) : null}
         </View>
 
-        {routePackage ? (
+        {assignments.length ? (
           <View style={styles.card}>
-            <Text style={styles.cardTitle}>3. Entrega activa</Text>
+            <Text style={styles.cardTitle}>3. Tarjeta activa</Text>
             <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.deliveryPills}>
-              {routePackage.items.map((item) => (
+              {filteredAssignments.map((item, index) => (
                 <Pressable
-                  key={item.deliveryId}
-                  style={[styles.deliveryPill, activeItem?.deliveryId === item.deliveryId && styles.deliveryPillActive]}
+                  key={item.cardId}
+                  style={[styles.deliveryPill, activeItem?.cardId === item.cardId && styles.deliveryPillActive]}
                   onPress={() => {
-                    setSelectedDeliveryId(item.deliveryId);
+                    setSelectedAssignmentId(item.cardId);
                     setCedulaVerified(false);
                   }}
                 >
-                  <Text style={activeItem?.deliveryId === item.deliveryId ? styles.deliveryPillTextActive : styles.deliveryPillText}>
-                    #{item.sequence} {item.cedulaVerification.last4}
+                  <Text style={activeItem?.cardId === item.cardId ? styles.deliveryPillTextActive : styles.deliveryPillText}>
+                    #{item.sequence ?? index + 1} {item.cedulaVerification.last4}
                   </Text>
                 </Pressable>
               ))}
@@ -709,6 +777,7 @@ export default function App() {
               <View style={styles.activeBox}>
                 <Text style={styles.itemMain}>{activeItem.recipientName}</Text>
                 <Text style={styles.muted}>{activeItem.addressLine ?? "Sin direccion"} | {activeItem.zone ?? "Zona"}</Text>
+                <Text style={styles.muted}>{activeItem.status} | {activeItem.reference ?? "Sin referencia"}</Text>
                 <TextInput style={styles.input} value={cedulaInput} onChangeText={setCedulaInput} placeholder={`Cedula termina en ${activeItem.cedulaVerification.last4}`} keyboardType="number-pad" />
                 <Pressable style={cedulaVerified ? styles.successBtn : styles.secondaryBtn} onPress={verifyCedula}>
                   <Text style={styles.btnText}>{cedulaVerified ? "Cedula verificada" : "Verificar cedula local"}</Text>

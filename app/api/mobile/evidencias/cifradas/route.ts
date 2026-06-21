@@ -11,7 +11,7 @@ import {
   findPiiViolation,
   SecureEvidenceRegistrationSchema,
 } from "@/packages/contracts/src";
-import { canRegisterEvidenceForRouteItem } from "@/lib/mobile-authorization";
+import { canAccessMobileAssignedCard } from "@/lib/mobile-authorization";
 import { buildEvidenceProcessingJobData } from "@/lib/mobile-sync";
 import { requireMobileSession } from "@/lib/mobile-session";
 import { prisma } from "@/lib/prisma";
@@ -47,7 +47,7 @@ export async function POST(request: NextRequest) {
   }
 
   const manifest = parsed.data;
-  const [device, item] = await Promise.all([
+  const [device, item, cardById] = await Promise.all([
     prisma.mobileDevice.findUnique({
       where: { deviceId: manifest.deviceId },
       select: {
@@ -57,13 +57,20 @@ export async function POST(request: NextRequest) {
         status: true,
       },
     }),
-    prisma.routeItem.findUnique({
-      where: { id: manifest.routeItemId },
-      include: {
-        route: true,
-        card: true,
-      },
-    }),
+    manifest.routeItemId
+      ? prisma.routeItem.findUnique({
+          where: { id: manifest.routeItemId },
+          include: {
+            route: true,
+            card: true,
+          },
+        })
+      : Promise.resolve(null),
+    manifest.cardId
+      ? prisma.card.findUnique({
+          where: { id: manifest.cardId },
+        })
+      : Promise.resolve(null),
   ]);
 
   if (!device) {
@@ -72,19 +79,41 @@ export async function POST(request: NextRequest) {
   if (device.status !== MobileDeviceStatus.ACTIVE) {
     return NextResponse.json({ error: "Dispositivo no activo" }, { status: 403 });
   }
-  if (!item) {
+  if (manifest.routeItemId && !item) {
     return NextResponse.json({ error: "Item de ruta no encontrado" }, { status: 404 });
   }
 
-  const access = canRegisterEvidenceForRouteItem({
+  const card = cardById ?? item?.card ?? null;
+  if (!card) {
+    return NextResponse.json({ error: "Tarjeta no encontrada" }, { status: 404 });
+  }
+  if (manifest.cardId && item && item.cardId !== manifest.cardId) {
+    return NextResponse.json(
+      { error: "routeItemId no corresponde a cardId" },
+      { status: 400 },
+    );
+  }
+  if (item && item.route.messengerId !== card.currentMessengerId) {
+    return NextResponse.json(
+      { error: "Item de ruta no corresponde al mensajero actual de la tarjeta" },
+      { status: 403 },
+    );
+  }
+
+  const access = canAccessMobileAssignedCard({
     role: auth.session.user.role,
     sessionMessengerId: auth.session.user.messengerId,
-    routeMessengerId: item.route.messengerId,
+    cardMessengerId: card.currentMessengerId,
     deviceMessengerId: device.messengerId,
     deviceStatus: device.status,
+    cardStatus: card.status,
   });
   if (!access.allowed) {
     return NextResponse.json({ error: "No autorizado", reason: access.reason }, { status: 403 });
+  }
+  const cardMessengerId = card.currentMessengerId;
+  if (!cardMessengerId) {
+    return NextResponse.json({ error: "Tarjeta sin mensajero asignado" }, { status: 403 });
   }
 
   const now = new Date();
@@ -102,10 +131,10 @@ export async function POST(request: NextRequest) {
         deliveryId: manifest.deliveryId,
         objectId: manifest.objectId,
         evidenceKind: manifest.evidenceKind as SecureEvidenceKind,
-        routeId: item.route.id,
-        routeItemId: item.id,
-        cardId: item.cardId,
-        messengerId: item.route.messengerId,
+        routeId: item?.route.id ?? null,
+        routeItemId: item?.id ?? null,
+        cardId: card.id,
+        messengerId: cardMessengerId,
         deviceId: manifest.deviceId,
         mobileDeviceId: device.id,
         status: SecureEvidenceStatus.UPLOADED_RELAY,
@@ -124,23 +153,25 @@ export async function POST(request: NextRequest) {
     });
 
     if (nextStatus) {
-      await tx.routeItem.update({
-        where: { id: item.id },
-        data: { checkedAt: nextStatus === CardStatus.EN_RUTA ? null : now },
-      });
+      if (item) {
+        await tx.routeItem.update({
+          where: { id: item.id },
+          data: { checkedAt: nextStatus === CardStatus.EN_RUTA ? null : now },
+        });
+      }
 
       await tx.card.update({
-        where: { id: item.cardId },
+        where: { id: card.id },
         data: {
           status: nextStatus,
-          currentMessengerId: item.route.messengerId,
+          currentMessengerId: cardMessengerId,
           returnReason: nextStatus === CardStatus.DEVUELTA_TIENDA ? manifest.note ?? null : null,
         },
       });
 
       await clearUrgencyOnCardClosure({
         tx,
-        cardId: item.cardId,
+        cardId: card.id,
         nextStatus,
         byUserId: auth.session.user.id,
       });
@@ -148,9 +179,9 @@ export async function POST(request: NextRequest) {
 
     await tx.cardStatusLog.create({
       data: {
-        cardId: item.cardId,
-        fromStatus: item.card.status,
-        toStatus: nextStatus ?? item.card.status,
+        cardId: card.id,
+        fromStatus: card.status,
+        toStatus: nextStatus ?? card.status,
         note: manifest.note
           ? `Evidencia cifrada registrada (${manifest.objectId}) - ${manifest.note}`
           : `Evidencia cifrada registrada (${manifest.objectId})`,

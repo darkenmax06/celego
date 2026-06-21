@@ -38,7 +38,38 @@ Header:
 
 `Authorization: Bearer <token>`
 
-## 3) Rutas del mensajero
+## 3) Asignaciones automaticas del mensajero
+
+`GET /api/mobile/assignments?deviceId=DEV-228&page=1&pageSize=100`
+
+Header:
+
+`Authorization: Bearer <token>`
+
+Para `MENSAJERO`, el `messengerId` viene del token y debe coincidir con el
+dispositivo activo. Devuelve solo tarjetas abiertas asignadas al mensajero por
+`Card.currentMessengerId`.
+
+Estados incluidos:
+
+- `DESPACHADA`
+- `ENVIADA_INTERIOR`
+- `EN_RUTA`
+
+Estados excluidos:
+
+- `ACUSE_RECIBIDO`
+- `DEVUELTA_TIENDA`
+- `ENTREGA_DIGITAL`
+- `ENTREGADA`
+- `RETORNADA`
+
+La respuesta incluye datos operativos minimos: `cardId`, `routeId?`,
+`routeItemId?`, nombre, direccion, provincia, zona, referencia, estado y token
+de verificacion de cedula (`salt + hash + last4`). No expone TC ni cedula
+completa.
+
+## 4) Rutas del mensajero (legacy)
 
 `GET /api/mobile/rutas?date=YYYY-MM-DD`
 
@@ -49,7 +80,7 @@ Header:
 Para `MENSAJERO`, el `messengerId` viene del token.
 Para `ADMIN/OPERADOR`, se puede usar query opcional `messengerId`.
 
-## 4) Subir evidencia fotografica legacy
+## 5) Subir evidencia fotografica legacy
 
 `POST /api/mobile/rutas/pruebas`
 
@@ -70,7 +101,7 @@ Body `multipart/form-data`:
 
 Las fotos se guardan en `public/uploads/proofs/YYYY/MM`.
 
-## 5) Registrar dispositivo movil
+## 6) Registrar dispositivo movil
 
 `POST /api/mobile/devices`
 
@@ -93,7 +124,7 @@ Body JSON:
 Los mensajeros registran dispositivos en estado `PENDING`. Un `ADMIN` u
 `OPERADOR` puede registrar/actualizar un dispositivo con estado `ACTIVE`.
 
-## 6) Registrar manifiesto de evidencia cifrada
+## 7) Registrar manifiesto de evidencia cifrada
 
 `POST /api/mobile/evidencias/cifradas`
 
@@ -102,11 +133,13 @@ Header:
 `Authorization: Bearer <token>`
 
 Body JSON: manifiesto tecnico sin PII. Debe incluir `deliveryId`, `deviceId`,
-`objectId`, `routeItemId`, tipo de evidencia, metadatos de cifrado AES-256-GCM,
+`objectId`, `cardId`, tipo de evidencia, metadatos de cifrado AES-256-GCM,
 hash SHA-256 del blob cifrado y expiracion. No se aceptan nombres, cedulas,
 telefonos, direcciones, tarjetas ni fotos legibles.
 
-## 7) Crear paquete offline de ruta
+`routeItemId` es opcional y se mantiene para compatibilidad con rutas legacy.
+
+## 8) Crear paquete offline de ruta (legacy)
 
 `POST /api/mobile/route-packages`
 
@@ -130,7 +163,7 @@ El paquete se genera para un dispositivo `ACTIVE` asignado al mismo mensajero de
 la ruta. Incluye nombre/direccion operacional minima, pero no incluye TC ni
 cedula completa. La cedula se valida offline con `salt + hash + last4`.
 
-## 8) Descargar paquete offline de ruta
+## 9) Descargar paquete offline de ruta (legacy)
 
 `POST /api/mobile/route-packages/download`
 
@@ -150,7 +183,7 @@ Body JSON:
 El backend valida usuario, dispositivo, mensajero, estado y expiracion antes de
 entregar el manifiesto del paquete.
 
-## 9) Estado de sincronizacion movil
+## 10) Estado de sincronizacion movil
 
 `POST /api/mobile/sync/status`
 
@@ -175,7 +208,7 @@ El endpoint valida que el dispositivo exista, este `ACTIVE` y corresponda al
 mensajero autenticado. Devuelve estado de evidencias, paquetes, incidencias y
 hora del servidor.
 
-## 10) Reportar incidencia movil
+## 11) Reportar incidencia movil
 
 `POST /api/mobile/incidents`
 
@@ -189,6 +222,7 @@ Body JSON:
 {
   "incidentId": "INC-LOCAL-001",
   "deviceId": "DEV-228",
+  "cardId": "cuid-tarjeta",
   "routeItemId": "cuid-route-item",
   "type": "CUSTOMER_ABSENT",
   "severity": "MEDIUM",
@@ -199,9 +233,10 @@ Body JSON:
 ```
 
 No debe incluir cedula completa, tarjeta, telefono ni fotos. Si la incidencia
-esta asociada a `routeItemId`, el backend valida usuario + dispositivo + ruta.
+esta asociada a `cardId` o `routeItemId`, el backend valida usuario +
+dispositivo + mensajero asignado + estado abierto.
 
-## 11) Procesamiento interno de evidencias cifradas
+## 12) Procesamiento interno de evidencias cifradas
 
 `POST /api/internal/mobile/process-secure-evidence`
 

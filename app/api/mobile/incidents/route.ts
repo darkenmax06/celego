@@ -12,7 +12,7 @@ import {
   findPiiViolation,
   ReportMobileIncidentSchema,
 } from "@/packages/contracts/src";
-import { canRegisterEvidenceForRouteItem } from "@/lib/mobile-authorization";
+import { canAccessMobileAssignedCard } from "@/lib/mobile-authorization";
 import { requireMobileSession } from "@/lib/mobile-session";
 import { prisma } from "@/lib/prisma";
 
@@ -110,7 +110,7 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const [device, item] = await Promise.all([
+  const [device, item, cardById] = await Promise.all([
     prisma.mobileDevice.findUnique({
       where: { deviceId: parsed.data.deviceId },
       select: {
@@ -123,7 +123,12 @@ export async function POST(request: NextRequest) {
     parsed.data.routeItemId
       ? prisma.routeItem.findUnique({
           where: { id: parsed.data.routeItemId },
-          include: { route: true },
+          include: { route: true, card: true },
+        })
+      : Promise.resolve(null),
+    parsed.data.cardId
+      ? prisma.card.findUnique({
+          where: { id: parsed.data.cardId },
         })
       : Promise.resolve(null),
   ]);
@@ -135,18 +140,46 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Dispositivo no activo" }, { status: 403 });
   }
 
-  if (item) {
-    const access = canRegisterEvidenceForRouteItem({
+  const card = cardById ?? item?.card ?? null;
+  if (parsed.data.routeItemId && !item) {
+    return NextResponse.json({ error: "Item de ruta no encontrado" }, { status: 404 });
+  }
+  if (parsed.data.cardId && !cardById) {
+    return NextResponse.json({ error: "Tarjeta no encontrada" }, { status: 404 });
+  }
+  if (parsed.data.cardId && item && item.cardId !== parsed.data.cardId) {
+    return NextResponse.json(
+      { error: "routeItemId no corresponde a cardId" },
+      { status: 400 },
+    );
+  }
+  if (item && item.route.messengerId !== item.card.currentMessengerId) {
+    return NextResponse.json(
+      { error: "Item de ruta no corresponde al mensajero actual de la tarjeta" },
+      { status: 403 },
+    );
+  }
+
+  if (card) {
+    const access = canAccessMobileAssignedCard({
       role: auth.session.user.role,
       sessionMessengerId: auth.session.user.messengerId,
-      routeMessengerId: item.route.messengerId,
+      cardMessengerId: card.currentMessengerId,
       deviceMessengerId: device.messengerId,
       deviceStatus: device.status,
+      cardStatus: card.status,
     });
     if (!access.allowed) {
       return NextResponse.json({ error: "No autorizado", reason: access.reason }, { status: 403 });
     }
+  } else if (
+    auth.session.user.role === UserRole.MENSAJERO &&
+    auth.session.user.messengerId !== device.messengerId
+  ) {
+    return NextResponse.json({ error: "Dispositivo no asignado al mensajero" }, { status: 403 });
   }
+
+  const incidentMessengerId = card?.currentMessengerId ?? device.messengerId;
 
   const incident = await prisma.$transaction(async (tx) => {
     const row = await tx.mobileIncident.upsert({
@@ -169,10 +202,10 @@ export async function POST(request: NextRequest) {
         description: parsed.data.description,
         deviceId: parsed.data.deviceId,
         mobileDeviceId: device.id,
-        messengerId: item?.route.messengerId ?? device.messengerId,
+        messengerId: incidentMessengerId,
         routeId: item?.routeId ?? parsed.data.routeId ?? null,
         routeItemId: item?.id ?? null,
-        cardId: item?.cardId ?? null,
+        cardId: card?.id ?? null,
         evidenceObjectId: parsed.data.evidenceObjectId,
         gps: parsed.data.gps as unknown as Prisma.InputJsonValue,
         metadata: parsed.data.technicalMetadata as unknown as Prisma.InputJsonValue,

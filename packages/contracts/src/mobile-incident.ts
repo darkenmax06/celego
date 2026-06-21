@@ -31,6 +31,7 @@ export const ReportMobileIncidentSchema = z
     deviceId: deviceIdSchema,
     routeId: z.string().cuid().optional(),
     routeItemId: z.string().cuid().optional(),
+    cardId: z.string().cuid().optional(),
     evidenceObjectId: deviceIdSchema.optional(),
     type: MobileIncidentTypeSchema,
     severity: MobileIncidentSeveritySchema.default("MEDIUM"),
