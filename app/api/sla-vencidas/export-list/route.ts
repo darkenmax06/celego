@@ -26,6 +26,9 @@ const COLUMN_LABELS = {
   mensajero: "Mensajero",
   provincia: "Provincia",
   zona: "Zona",
+  tipoTarjeta: "Tipo tarjeta",
+  adicional: "Adicional",
+  adicionalNumero: "No adicional",
   direccion: "Direccion",
   telefonos: "Contactos",
 } as const;
@@ -71,6 +74,8 @@ export async function POST(request: Request) {
       status: true,
       provincia: true,
       zona: true,
+      isAdditional: true,
+      additionalIndex: true,
       dispatchDate: true,
       slaDueDate: true,
       customer: {
@@ -106,6 +111,9 @@ export async function POST(request: Request) {
     mensajero: card.currentMessenger?.nombre ?? "",
     provincia: card.provincia,
     zona: card.zona,
+    tipoTarjeta: card.isAdditional ? "ADICIONAL" : "PRINCIPAL",
+    adicional: card.isAdditional ? "SI" : "NO",
+    adicionalNumero: card.additionalIndex,
     direccion: card.customer.direccionRaw ?? "",
     telefonos: card.customer.telefonosRaw ?? "",
   }));

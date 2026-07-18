@@ -30,6 +30,8 @@ type CardDetail = {
   reassignedProvince: string | null;
   reassignedZone: string | null;
   reassignedAt: string | null;
+  isAdditional: boolean;
+  additionalIndex: number;
   urgent: boolean;
   slaDueDate: string | null;
   returnReason: string | null;
@@ -549,6 +551,14 @@ export function CardDetailModal({ cardId, onClose, onUpdated }: Props) {
                 <InfoItem label="Cedula" value={card.customer.cedula} />
                 <InfoItem label="Zona original" value={card.zona} />
                 <InfoItem label="Zona remota" value={card.isRemote ? "SI" : "NO"} />
+                <InfoItem
+                  label="Tipo tarjeta"
+                  value={card.isAdditional ? "ADICIONAL" : "PRINCIPAL"}
+                />
+                <InfoItem
+                  label="No. adicional"
+                  value={card.isAdditional ? String(card.additionalIndex) : "-"}
+                />
                 <InfoItem label="Provincia original" value={card.provincia} />
                 <InfoItem label="Zona facturable" value={card.reassignedZone || card.zona} />
                 <InfoItem

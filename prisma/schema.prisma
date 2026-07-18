@@ -106,6 +106,8 @@ model Card {
   contractType          String?
   status                CardStatus                 @default(DESPACHADA)
   isRemote              Boolean                    @default(false)
+  isAdditional          Boolean                    @default(false)
+  additionalIndex       Int                        @default(0)
   urgent                Boolean                    @default(false)
   slaDueDate            DateTime?
   slaExtensionDays      Int                        @default(0)
@@ -136,6 +138,8 @@ model Card {
   @@index([status])
   @@index([provincia, zona])
   @@index([status, bizcochito, digitalDeliveryCycle])
+  @@index([customerId, dispatchDate, additionalIndex])
+  @@index([isAdditional])
 }
 
 model CardStatusLog {

@@ -78,6 +78,7 @@ export async function GET(request: NextRequest) {
         reassignedProvince: true,
         reassignedZone: true,
         isRemote: true,
+        isAdditional: true,
         dispatchDate: true,
         customer: {
           select: {
@@ -96,10 +97,12 @@ export async function GET(request: NextRequest) {
       id: card.id,
       zona: resolveBillableZone(card),
       isRemote: card.isRemote,
+      isAdditional: card.isAdditional,
       dispatchDate: card.dispatchDate,
       customerCedula: card.customer.cedula,
     })),
   );
+  const additionalExcluded = cards.filter((card) => card.isAdditional).length;
 
   const tariffMap = new Map(tariffs.map((tariff) => [tariff.zona, tariff]));
 
@@ -187,6 +190,7 @@ export async function GET(request: NextRequest) {
     fxRate,
     remoteSurchargeCents,
     remoteCount,
+    additionalExcluded,
     totalCents: totalUsdCents,
     totalUsdCents,
     totalDopCents,

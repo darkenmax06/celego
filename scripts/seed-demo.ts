@@ -15,6 +15,7 @@ import {
   createBizcochitoSnapshot,
 } from "../lib/bizcochito";
 import { ensureBaseCatalogs } from "../lib/bootstrap";
+import { recalculateAllCardAdditionals } from "../lib/card-additional";
 import { prisma } from "../lib/prisma";
 
 const DEMO_PASSWORD = process.env.DEMO_PASSWORD || "Demo12345!";
@@ -446,6 +447,27 @@ async function main() {
     });
   }
 
+  const additionalDemoDispatchDate = new Date("2026-06-10T12:00:00-04:00");
+  const additionalDemoCards: Array<{ tc: string }> = [];
+  for (let index = 1; index <= 3; index += 1) {
+    additionalDemoCards.push(
+      await upsertDemoCard(
+        {
+          reference: `DEMO-ADD-${String(index).padStart(3, "0")}`,
+          tc: `DEMO-ADD-${String(index).padStart(3, "0")}`,
+          cedula: "40231382629",
+          nombre: "Cliente Adicional Demo",
+          provincia: "Santo Domingo",
+          zona: "Metro",
+          status: CardStatus.ENTREGADA,
+          currentMessengerId: metroMessenger.id,
+          dispatchDate: additionalDemoDispatchDate,
+        },
+        operator.id,
+      ),
+    );
+  }
+
   const redactionNote = "DEMO: relación para validar orden de pistoleo";
   const existingRedaction = await prisma.redaction.findFirst({
     where: { notas: redactionNote },
@@ -534,6 +556,8 @@ async function main() {
     }
   }
 
+  const additionalRecalculation = await recalculateAllCardAdditionals();
+
   console.log(
     JSON.stringify(
       {
@@ -546,6 +570,8 @@ async function main() {
         massUpdateCards: massCards.map((card) => card.tc),
         pendingBizcochitos: pendingDigitalCards.length,
         historicalBizcochito: HISTORICAL_BATCH_CODE,
+        additionalDemoCards: additionalDemoCards.map((card) => card.tc),
+        additionalRecalculation,
         reassignedCard: reassignedCard.tc,
         redactionId: redaction.id,
       },

@@ -67,6 +67,7 @@ export default function FacturacionClient() {
   const [summary, setSummary] = useState<SummaryRow[]>([]);
   const [totalUsdCents, setTotalUsdCents] = useState(0);
   const [totalDopCents, setTotalDopCents] = useState(0);
+  const [additionalExcluded, setAdditionalExcluded] = useState(0);
   const [fxRate, setFxRate, fxRateHydrated] = usePersistentState(
     "facturacion:fx-rate",
     "60",
@@ -116,6 +117,7 @@ export default function FacturacionClient() {
     setSummary(json.rows ?? []);
     setTotalUsdCents(json.totalUsdCents ?? 0);
     setTotalDopCents(json.totalDopCents ?? 0);
+    setAdditionalExcluded(json.additionalExcluded ?? 0);
   }
 
   useEffect(() => {
@@ -341,6 +343,9 @@ export default function FacturacionClient() {
       <Panel className="mt-5" title="Total del periodo">
         <p className="font-display text-3xl font-bold text-slate-900">{formatCurrencyUSD(totalUsdCents)}</p>
         <p className="text-sm text-slate-600">{formatCurrencyDOP(totalDopCents)} (tasa: {fxRate || "1"})</p>
+        <p className="mt-1 text-xs text-slate-500">
+          Adicionales excluidas de facturacion: {additionalExcluded}
+        </p>
       </Panel>
 
       {message ? <p className="mt-4 text-sm text-emerald-700">{message}</p> : null}

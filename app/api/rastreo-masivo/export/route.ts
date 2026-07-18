@@ -29,6 +29,9 @@ const COLUMN_LABELS: Record<string, string> = {
   slaVence: "SLA vence",
   urgente: "Urgente",
   remota: "Remota",
+  tipoTarjeta: "Tipo tarjeta",
+  adicional: "Adicional",
+  adicionalNumero: "No adicional",
   tipoEntrega: "Tipo entrega",
   tipoEmision: "Tipo emision",
   telefonos: "Telefonos",
@@ -50,6 +53,9 @@ type OutputRow = {
   slaVence: string;
   urgente: string;
   remota: string;
+  tipoTarjeta: string;
+  adicional: string;
+  adicionalNumero: number;
   tipoEntrega: string;
   tipoEmision: string;
   telefonos: string;
@@ -70,6 +76,8 @@ function toOutputRow(input: {
   slaDueDate: Date | null;
   urgent: boolean;
   isRemote: boolean;
+  isAdditional: boolean;
+  additionalIndex: number;
   returnReason: string | null;
   deliveryType: string | null;
   emissionType: string | null;
@@ -98,6 +106,9 @@ function toOutputRow(input: {
     slaVence: formatDateEs(input.slaDueDate),
     urgente: input.urgent ? "SI" : "NO",
     remota: input.isRemote ? "SI" : "NO",
+    tipoTarjeta: input.isAdditional ? "ADICIONAL" : "PRINCIPAL",
+    adicional: input.isAdditional ? "SI" : "NO",
+    adicionalNumero: input.additionalIndex,
     tipoEntrega: input.deliveryType ?? "",
     tipoEmision: input.emissionType ?? "",
     telefonos: input.customer.telefonosRaw ?? "",

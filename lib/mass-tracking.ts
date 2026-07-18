@@ -11,6 +11,8 @@ export type MassTrackingCardResult = {
   slaDueDate: Date | null;
   urgent: boolean;
   isRemote: boolean;
+  isAdditional: boolean;
+  additionalIndex: number;
   returnReason: string | null;
   deliveryType: string | null;
   emissionType: string | null;
@@ -104,6 +106,8 @@ export async function searchTrackingCards(tokens: string[]) {
         slaDueDate: true,
         urgent: true,
         isRemote: true,
+        isAdditional: true,
+        additionalIndex: true,
         returnReason: true,
         deliveryType: true,
         emissionType: true,

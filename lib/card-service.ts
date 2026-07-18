@@ -6,6 +6,7 @@ import { toCardStatus } from "@/lib/card-status";
 import { type ParsedCardRow } from "@/lib/importers/cards";
 import { resolveZone } from "@/lib/zone-map";
 import { normalizeText } from "@/lib/utils";
+import { recalculateAdditionalCardsForGroups } from "@/lib/card-additional";
 import {
   applyCardTransition,
   initialDigitalCycle,
@@ -166,6 +167,13 @@ export async function upsertCardsFromImport(rows: ParsedCardRow[], byUserId?: st
 
     result.created += 1;
   }
+
+  await recalculateAdditionalCardsForGroups(
+    rows.map((row) => ({
+      customerCedula: row.cedula,
+      dispatchDate: row.fechaDespacho,
+    })),
+  );
 
   return result;
 }

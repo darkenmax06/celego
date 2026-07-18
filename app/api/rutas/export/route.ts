@@ -74,6 +74,8 @@ export async function GET(request: NextRequest) {
     tc: item.card.tc,
     nombre: item.card.customer.nombre,
     cedula: item.card.customer.cedula,
+    adicional: item.card.isAdditional ? "SI" : "NO",
+    adicionalNumero: item.card.additionalIndex,
     telefonos: parsePhones(item.card.customer.telefonosRaw),
     devuelta: "\u2610",
   }));
@@ -86,10 +88,19 @@ export async function GET(request: NextRequest) {
     sheet.addRow([`Mensajero: ${route.messenger.nombre}`]);
     sheet.addRow([`Fecha ruta: ${formatDate(route.fecha)}`]);
     sheet.addRow([]);
-    sheet.addRow(["NO", "NUMERO TC", "NOMBRE", "CEDULA", "TELEFONOS", "DEVUELTA"]);
+    sheet.addRow(["NO", "NUMERO TC", "NOMBRE", "CEDULA", "ADICIONAL", "NO ADIC.", "TELEFONOS", "DEVUELTA"]);
 
     rows.forEach((row) => {
-      sheet.addRow([row.no, row.tc, row.nombre, row.cedula, row.telefonos, row.devuelta]);
+      sheet.addRow([
+        row.no,
+        row.tc,
+        row.nombre,
+        row.cedula,
+        row.adicional,
+        row.adicionalNumero,
+        row.telefonos,
+        row.devuelta,
+      ]);
     });
 
     sheet.addRow([]);
@@ -103,6 +114,8 @@ export async function GET(request: NextRequest) {
       { width: 24 },
       { width: 32 },
       { width: 18 },
+      { width: 14 },
+      { width: 12 },
       { width: 24 },
       { width: 14 },
     ];
@@ -128,8 +141,8 @@ export async function GET(request: NextRequest) {
   const font = await pdf.embedFont(StandardFonts.Helvetica);
   const bold = await pdf.embedFont(StandardFonts.HelveticaBold);
 
-  const headers = ["NO", "TC", "NOMBRE", "CEDULA", "TELEFONOS", "DEVUELTA"];
-  const x = [40, 66, 156, 306, 394, 540];
+  const headers = ["NO", "TC", "NOMBRE", "CEDULA", "ADIC.", "NO.", "TELEFONOS", "DEVUELTA"];
+  const x = [40, 66, 146, 276, 354, 396, 430, 548];
   const rowsPerPage = 42;
   const pageCount = Math.max(1, Math.ceil(rows.length / rowsPerPage));
 
@@ -182,11 +195,13 @@ export async function GET(request: NextRequest) {
     for (const row of pageRows) {
       page.drawText(String(row.no), { x: x[0], y, size: 8, font });
       page.drawText(row.tc.slice(0, 16), { x: x[1], y, size: 8, font });
-      page.drawText(row.nombre.slice(0, 24), { x: x[2], y, size: 8, font });
+      page.drawText(row.nombre.slice(0, 20), { x: x[2], y, size: 8, font });
       page.drawText(row.cedula.slice(0, 13), { x: x[3], y, size: 8, font });
-      page.drawText(row.telefonos.slice(0, 20), { x: x[4], y, size: 8, font });
+      page.drawText(row.adicional, { x: x[4], y, size: 8, font });
+      page.drawText(String(row.adicionalNumero), { x: x[5], y, size: 8, font });
+      page.drawText(row.telefonos.slice(0, 18), { x: x[6], y, size: 8, font });
       page.drawRectangle({
-        x: x[5] + 6,
+        x: x[7] + 6,
         y: y + 1,
         width: 7,
         height: 7,

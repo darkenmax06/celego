@@ -158,6 +158,7 @@ export async function POST(request: Request) {
         reassignedProvince: true,
         reassignedZone: true,
         isRemote: true,
+        isAdditional: true,
         dispatchDate: true,
         customer: {
           select: {
@@ -175,10 +176,12 @@ export async function POST(request: Request) {
       id: card.id,
       zona: resolveBillableZone(card),
       isRemote: card.isRemote,
+      isAdditional: card.isAdditional,
       dispatchDate: card.dispatchDate,
       customerCedula: card.customer.cedula,
     })),
   );
+  const additionalExcluded = cards.filter((card) => card.isAdditional).length;
 
   if (!billableCards.length) {
     return NextResponse.json({ error: "No hay entregas en el periodo seleccionado" }, { status: 404 });
@@ -426,6 +429,7 @@ export async function POST(request: Request) {
       to: parsed.data.to,
       invoiceNumber: parsed.data.invoiceNumber,
       billableCards: billableCards.length,
+      additionalExcluded,
       totalUsdCents,
       totalDopCents,
     },

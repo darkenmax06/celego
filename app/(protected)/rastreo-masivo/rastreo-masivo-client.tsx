@@ -22,6 +22,9 @@ type Row = {
   slaVence: string | null;
   urgente: boolean;
   remota: boolean;
+  tipoTarjeta: string;
+  adicional: boolean;
+  adicionalNumero: number;
   tipoEntrega: string;
   tipoEmision: string;
   telefonos: string;
@@ -57,6 +60,9 @@ const COLUMNS = [
   { key: "slaVence", label: "SLA vence" },
   { key: "urgente", label: "Urgente" },
   { key: "remota", label: "Remota" },
+  { key: "tipoTarjeta", label: "Tipo tarjeta" },
+  { key: "adicional", label: "Adicional" },
+  { key: "adicionalNumero", label: "No adicional" },
   { key: "tipoEntrega", label: "Tipo entrega" },
   { key: "tipoEmision", label: "Tipo emision" },
   { key: "telefonos", label: "Telefonos" },
@@ -93,6 +99,9 @@ const DEFAULT_EXPORT: ColumnKey[] = [
   "slaVence",
   "urgente",
   "remota",
+  "tipoTarjeta",
+  "adicional",
+  "adicionalNumero",
   "tipoEntrega",
   "tipoEmision",
   "telefonos",
@@ -114,6 +123,8 @@ function cellValue(row: Row, key: ColumnKey) {
   }
   if (key === "urgente") return row.urgente ? "SI" : "NO";
   if (key === "remota") return row.remota ? "SI" : "NO";
+  if (key === "adicional") return row.adicional ? "SI" : "NO";
+  if (key === "adicionalNumero") return row.adicional ? String(row.adicionalNumero) : "-";
   if (key === "fechaDespacho") return dateLabel(row.fechaDespacho);
   if (key === "slaVence") return dateLabel(row.slaVence);
   if (key === "matchedBy") return row.matchedBy.join(", ") || "-";

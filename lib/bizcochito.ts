@@ -49,6 +49,9 @@ export type BizcochitoSnapshot = {
   mensajeroOriginalActual: string;
   mensajeroReasignado: string;
   zonaRemota: string;
+  tipoTarjeta: string;
+  adicional: string;
+  adicionalNumero: number;
   tipoEmision: string;
   tipoEntrega: string;
   suplidor: string;
@@ -97,6 +100,9 @@ export function createBizcochitoSnapshot(
       card.currentMessenger?.nombre ?? latestRouteMessenger(card) ?? "",
     mensajeroReasignado: card.reassignedMessenger?.nombre ?? "",
     zonaRemota: card.isRemote ? "SI" : "NO",
+    tipoTarjeta: card.isAdditional ? "ADICIONAL" : "PRINCIPAL",
+    adicional: card.isAdditional ? "SI" : "NO",
+    adicionalNumero: card.additionalIndex,
     tipoEmision: card.emissionType ?? "",
     tipoEntrega: card.deliveryType ?? metadataString(card.metadata, "tipoEntrega"),
     suplidor: card.supplier ?? "",
@@ -127,6 +133,9 @@ const excelColumns: Array<{
   { header: "Mensajero original / actual", key: "mensajeroOriginalActual", width: 28 },
   { header: "Mensajero reasignado", key: "mensajeroReasignado", width: 24 },
   { header: "Zona remota", key: "zonaRemota", width: 14 },
+  { header: "Tipo tarjeta", key: "tipoTarjeta", width: 16 },
+  { header: "Adicional", key: "adicional", width: 12 },
+  { header: "No adicional", key: "adicionalNumero", width: 14 },
   { header: "Tipo de emisión", key: "tipoEmision", width: 18 },
   { header: "Tipo de entrega", key: "tipoEntrega", width: 18 },
   { header: "Suplidor", key: "suplidor", width: 20 },

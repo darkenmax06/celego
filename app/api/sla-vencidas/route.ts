@@ -37,6 +37,8 @@ export async function GET(request: NextRequest) {
         dispatchDate: true,
         provincia: true,
         zona: true,
+        isAdditional: true,
+        additionalIndex: true,
         customer: {
           select: {
             nombre: true,
@@ -70,6 +72,9 @@ export async function GET(request: NextRequest) {
     dispatchDate: card.dispatchDate?.toISOString() ?? null,
     provincia: card.provincia,
     zona: card.zona,
+    tipoTarjeta: card.isAdditional ? "ADICIONAL" : "PRINCIPAL",
+    adicional: card.isAdditional,
+    adicionalNumero: card.additionalIndex,
     nombre: card.customer.nombre,
     cedula: card.customer.cedula,
     direccion: card.customer.direccionRaw ?? "",

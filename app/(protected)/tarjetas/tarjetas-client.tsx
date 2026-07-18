@@ -15,6 +15,8 @@ type CardRow = {
   provincia: string;
   zona: string;
   isRemote: boolean;
+  isAdditional: boolean;
+  additionalIndex: number;
   status: string;
   urgent: boolean;
   dispatchDate: string | null;
@@ -309,6 +311,7 @@ export default function TarjetasClient() {
                 <th className="pb-2">Provincia</th>
                 <th className="pb-2">Zona</th>
                 <th className="pb-2">Remota</th>
+                <th className="pb-2">Tipo</th>
                 <th className="pb-2">Estado</th>
                 <th className="pb-2">Urgente</th>
                 <th className="pb-2">Nivel</th>
@@ -335,6 +338,9 @@ export default function TarjetasClient() {
                   <td className="py-2">{card.provincia}</td>
                   <td className="py-2">{card.zona}</td>
                   <td className="py-2">{card.isRemote ? "SI" : "NO"}</td>
+                  <td className="py-2">
+                    {card.isAdditional ? `ADIC. ${card.additionalIndex}` : "PRINCIPAL"}
+                  </td>
                   <td className="py-2">
                     <StatusBadge value={card.status} />
                   </td>
@@ -371,7 +377,7 @@ export default function TarjetasClient() {
               ))}
               {!cards.length ? (
                 <tr>
-                  <td colSpan={11} className="py-4 text-sm text-slate-500">
+                  <td colSpan={12} className="py-4 text-sm text-slate-500">
                     {loading ? "Cargando..." : "No hay resultados"}
                   </td>
                 </tr>

@@ -19,6 +19,9 @@ type Row = {
   dispatchDate: string | null;
   provincia: string;
   zona: string;
+  tipoTarjeta: string;
+  adicional: boolean;
+  adicionalNumero: number;
   nombre: string;
   cedula: string;
   direccion: string;
@@ -46,6 +49,9 @@ const EXPORT_COLUMNS = [
   { key: "mensajero", label: "Mensajero" },
   { key: "provincia", label: "Provincia" },
   { key: "zona", label: "Zona" },
+  { key: "tipoTarjeta", label: "Tipo tarjeta" },
+  { key: "adicional", label: "Adicional" },
+  { key: "adicionalNumero", label: "No adicional" },
   { key: "direccion", label: "Direccion" },
   { key: "telefonos", label: "Contactos" },
 ] as const;
@@ -59,6 +65,9 @@ const DEFAULT_EXPORT_COLUMNS: ExportColumnKey[] = [
   "status",
   "slaDueDate",
   "diasVencidos",
+  "tipoTarjeta",
+  "adicional",
+  "adicionalNumero",
   "mensajero",
   "direccion",
   "telefonos",
@@ -270,6 +279,7 @@ export default function SlaVencidasClient() {
                 <th className="pb-2">TC / Cedula</th>
                 <th className="pb-2">Mensajero</th>
                 <th className="pb-2">Provincia</th>
+                <th className="pb-2">Tipo</th>
                 <th className="pb-2">Status</th>
                 <th className="pb-2">SLA</th>
                 <th className="pb-2">Vencida</th>
@@ -288,6 +298,9 @@ export default function SlaVencidasClient() {
                   <td className="py-2">{row.mensajero || "SIN ASIGNAR"}</td>
                   <td className="py-2">{row.provincia || row.zona}</td>
                   <td className="py-2">
+                    {row.adicional ? `ADIC. ${row.adicionalNumero}` : "PRINCIPAL"}
+                  </td>
+                  <td className="py-2">
                     <StatusBadge value={row.status} />
                   </td>
                   <td className="py-2">{dateLabel(row.slaDueDate)}</td>
@@ -298,7 +311,7 @@ export default function SlaVencidasClient() {
               ))}
               {!rows.length ? (
                 <tr>
-                  <td colSpan={9} className="py-6 text-center text-sm text-slate-500">
+                  <td colSpan={10} className="py-6 text-center text-sm text-slate-500">
                     {loading ? "Cargando..." : "No hay tarjetas SLA vencidas para este filtro."}
                   </td>
                 </tr>

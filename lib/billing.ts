@@ -2,6 +2,7 @@ type BillingCardKeyInput = {
   id: string;
   dispatchDate: Date | null;
   customerCedula: string;
+  isAdditional?: boolean;
 };
 
 function normalizeCedula(cedula: string) {
@@ -18,6 +19,10 @@ export function dedupeBillingCardsByCustomerAndDispatchDate<T extends BillingCar
   const unique: T[] = [];
 
   for (const card of cards) {
+    if (card.isAdditional) {
+      continue;
+    }
+
     if (!card.dispatchDate) {
       unique.push(card);
       continue;

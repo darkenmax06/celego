@@ -4,6 +4,7 @@ import { parseISO } from "date-fns";
 import { z } from "zod";
 import { requireApiSession } from "@/lib/api-session";
 import { prisma } from "@/lib/prisma";
+import { recalculateAdditionalCardsForGroups } from "@/lib/card-additional";
 import { toCardStatus } from "@/lib/card-status";
 import { applyCardTransition, RETURN_REASON_REQUIRED } from "@/lib/card-transition";
 
@@ -201,6 +202,13 @@ export async function POST(request: Request) {
       byUserId: auth.session.user.id,
     },
   });
+
+  await recalculateAdditionalCardsForGroups([
+    {
+      customerCedula: cedula,
+      dispatchDate: card.dispatchDate,
+    },
+  ]);
 
   return NextResponse.json({ card }, { status: 201 });
 }

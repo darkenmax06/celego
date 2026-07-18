@@ -7,6 +7,8 @@
     "build": "next build",
     "start": "next start -H 0.0.0.0",
     "lint": "eslint",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "prisma:generate": "prisma generate",
     "prisma:migrate-dev": "prisma migrate dev",
     "prisma:migrate-deploy": "prisma migrate deploy",
@@ -15,6 +17,7 @@
     "db:bootstrap": "tsx scripts/bootstrap.ts",
     "db:seed-demo": "tsx scripts/seed-demo.ts",
     "db:clear-demo": "tsx scripts/clear-demo.ts",
+    "cards:backfill-additionals": "tsx scripts/backfill-card-additionals.ts",
     "create-admin": "tsx scripts/create-admin.ts",
     "postinstall": "prisma generate"
   },
@@ -50,6 +53,7 @@
     "prisma": "^6.18.0",
     "tailwindcss": "^4",
     "tsx": "^4.21.0",
-    "typescript": "^5"
+    "typescript": "^5",
+    "vitest": "^4.1.9"
   }
 }

@@ -99,6 +99,8 @@ type RedactionExportRows = {
     numeroTc: string;
     nombre: string;
     cedula: string;
+    adicional: string;
+    adicionalNumero: number;
     fecha: string;
     comentario: string;
     provinciaReasignacion: string;
@@ -109,6 +111,8 @@ type RedactionExportRows = {
     numeroTc: string;
     nombre: string;
     cedula: string;
+    adicional: string;
+    adicionalNumero: number;
     fecha: string;
     estatus: string;
     provinciaReasignacion: string;
@@ -183,6 +187,8 @@ async function buildRedactionExportRows(request: NextRequest): Promise<Redaction
       numeroTc: item.card.tc,
       nombre: item.card.customer.nombre,
       cedula: item.card.customer.cedula,
+      adicional: item.card.isAdditional ? "SI" : "NO",
+      adicionalNumero: item.card.additionalIndex,
       fecha: formatDateEs(item.card.dispatchDate ?? red.fecha),
       comentario: item.comentario ?? "",
       provinciaReasignacion: item.card.reassignedProvince ?? "",
@@ -197,6 +203,8 @@ async function buildRedactionExportRows(request: NextRequest): Promise<Redaction
       numeroTc: item.card.tc,
       nombre: item.card.customer.nombre,
       cedula: item.card.customer.cedula,
+      adicional: item.card.isAdditional ? "SI" : "NO",
+      adicionalNumero: item.card.additionalIndex,
       fecha: formatDateEs(item.card.dispatchDate ?? red.fecha),
       estatus: "ENTREGADA",
       provinciaReasignacion: item.card.reassignedProvince ?? "",
@@ -218,6 +226,8 @@ async function exportRedactionToXlsx(rows: RedactionExportRows) {
     { header: "NUMERO TC", key: "numeroTc", width: 24 },
     { header: "NOMBRE", key: "nombre", width: 40 },
     { header: "CEDULA", key: "cedula", width: 18 },
+    { header: "ADICIONAL", key: "adicional", width: 14 },
+    { header: "NO ADICIONAL", key: "adicionalNumero", width: 16 },
     { header: "FECHA", key: "fecha", width: 14 },
   ] as const;
 
@@ -235,6 +245,8 @@ async function exportRedactionToXlsx(rows: RedactionExportRows) {
     "NUMERO TC",
     "NOMBRE",
     "CEDULA",
+    "ADICIONAL",
+    "NO ADICIONAL",
     "FECHA",
     "COMENTARIO",
     "PROVINCIA REASIGNACION",
@@ -258,6 +270,8 @@ async function exportRedactionToXlsx(rows: RedactionExportRows) {
     "NUMERO TC",
     "NOMBRE",
     "CEDULA",
+    "ADICIONAL",
+    "NO ADICIONAL",
     "FECHA",
     "ESTATUS",
     "PROVINCIA REASIGNACION",
@@ -287,8 +301,8 @@ async function exportRedactionToPdf(rows: RedactionExportRows) {
   }) => {
     const rowsPerPage = 41;
     const pageCount = Math.max(1, Math.ceil(input.dataRows.length / rowsPerPage));
-    const cols = [28, 52, 128, 270, 355, 420, 505, 625];
-    const maxLengths = [4, 14, 22, 14, 11, 18, 18, 20];
+    const cols = [28, 48, 112, 246, 326, 374, 423, 478, 585, 690];
+    const maxLengths = [4, 14, 18, 12, 7, 4, 10, 14, 16, 14];
 
     for (let pageIndex = 0; pageIndex < pageCount; pageIndex += 1) {
       const page = pdf.addPage([792, 612]);
@@ -355,6 +369,8 @@ async function exportRedactionToPdf(rows: RedactionExportRows) {
     row.numeroTc,
     row.nombre,
     row.cedula,
+    row.adicional,
+    String(row.adicionalNumero),
     row.fecha,
     row.comentario || "-",
     row.provinciaReasignacion || "-",
@@ -365,6 +381,8 @@ async function exportRedactionToPdf(rows: RedactionExportRows) {
     row.numeroTc,
     row.nombre,
     row.cedula,
+    row.adicional,
+    String(row.adicionalNumero),
     row.fecha,
     row.estatus,
     row.provinciaReasignacion || "-",
@@ -373,13 +391,13 @@ async function exportRedactionToPdf(rows: RedactionExportRows) {
 
   drawSection({
     title: "TARJETAS RETORNADAS",
-    headers: ["NO", "TC", "NOMBRE", "CEDULA", "FECHA", "COMENT.", "PROV. REASIG.", "MENSAJERO"],
+    headers: ["NO", "TC", "NOMBRE", "CEDULA", "ADIC.", "NO.", "FECHA", "COMENT.", "PROV. REASIG.", "MENSAJERO"],
     dataRows: retornosRows,
   });
 
   drawSection({
     title: "TARJETAS ENTREGADAS",
-    headers: ["NO", "TC", "NOMBRE", "CEDULA", "FECHA", "ESTATUS", "PROV. REASIG.", "MENSAJERO"],
+    headers: ["NO", "TC", "NOMBRE", "CEDULA", "ADIC.", "NO.", "FECHA", "ESTATUS", "PROV. REASIG.", "MENSAJERO"],
     dataRows: entregasRows,
   });
 
@@ -452,6 +470,9 @@ export async function GET(request: NextRequest) {
       zonaFacturable: resolveBillableZone(card),
       provinciaReasignacion: card.reassignedProvince ?? "",
       mensajeroReasignado: card.reassignedMessenger?.nombre ?? "",
+      tipoTarjeta: card.isAdditional ? "ADICIONAL" : "PRINCIPAL",
+      adicional: card.isAdditional ? "SI" : "NO",
+      adicionalNumero: card.additionalIndex,
       remota: card.isRemote ? "SI" : "NO",
       estado: card.status,
       urgente: card.urgent ? "SI" : "NO",
@@ -498,6 +519,9 @@ export async function GET(request: NextRequest) {
       zonaFacturable: resolveBillableZone(contact.card),
       provinciaReasignacion: contact.card.reassignedProvince ?? "",
       mensajeroReasignado: contact.card.reassignedMessenger?.nombre ?? "",
+      tipoTarjeta: contact.card.isAdditional ? "ADICIONAL" : "PRINCIPAL",
+      adicional: contact.card.isAdditional ? "SI" : "NO",
+      adicionalNumero: contact.card.additionalIndex,
       telefonosUsados: contact.telefonosUsados ?? "",
       comentario: contact.comentario ?? "",
       contactado: contact.contactado ? "SI" : "NO",
@@ -544,6 +568,7 @@ export async function GET(request: NextRequest) {
         reassignedProvince: true,
         reassignedZone: true,
         isRemote: true,
+        isAdditional: true,
         dispatchDate: true,
         customer: {
           select: {
@@ -562,6 +587,7 @@ export async function GET(request: NextRequest) {
         id: card.id,
         zona: resolveBillableZone(card),
         isRemote: card.isRemote,
+        isAdditional: card.isAdditional,
         dispatchDate: card.dispatchDate,
         customerCedula: card.customer.cedula,
       })),
@@ -570,6 +596,12 @@ export async function GET(request: NextRequest) {
     const grouped = new Map<string, number>();
     billableCards.forEach((card) => {
       grouped.set(card.zona, (grouped.get(card.zona) ?? 0) + 1);
+    });
+    const additionalByZone = new Map<string, number>();
+    cards.forEach((card) => {
+      if (!card.isAdditional) return;
+      const billableZone = resolveBillableZone(card);
+      additionalByZone.set(billableZone, (additionalByZone.get(billableZone) ?? 0) + 1);
     });
 
     const tariffMap = new Map(tariffs.map((tariff) => [tariff.zona, tariff]));
@@ -586,6 +618,7 @@ export async function GET(request: NextRequest) {
       return {
         zona,
         entregas: count,
+        adicionalesExcluidas: additionalByZone.get(zona) ?? 0,
         tasaDolar: fxRate.toFixed(4),
         tarifaPorTarjetaUSD: fromCents(centsPerCard),
         totalUSD: fromCents(totalUsdCents),
@@ -606,6 +639,7 @@ export async function GET(request: NextRequest) {
       rows.push({
         zona: "REMOTA",
         entregas: remoteCount,
+        adicionalesExcluidas: cards.filter((card) => card.isAdditional && card.isRemote).length,
         tasaDolar: fxRate.toFixed(4),
         tarifaPorTarjetaUSD: fromCents(remoteSurchargeCents),
         totalUSD: fromCents(totalUsdCents),
@@ -650,6 +684,8 @@ export async function GET(request: NextRequest) {
         numeroTc: row.numeroTc,
         nombre: row.nombre,
         cedula: row.cedula,
+        adicional: row.adicional,
+        adicionalNumero: row.adicionalNumero,
         fecha: row.fecha,
         comentario: row.comentario,
         provinciaReasignacion: row.provinciaReasignacion,
@@ -661,6 +697,8 @@ export async function GET(request: NextRequest) {
         numeroTc: row.numeroTc,
         nombre: row.nombre,
         cedula: row.cedula,
+        adicional: row.adicional,
+        adicionalNumero: row.adicionalNumero,
         fecha: row.fecha,
         comentario: row.estatus,
         provinciaReasignacion: row.provinciaReasignacion,
