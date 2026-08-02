@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { CardStatus, Prisma, RouteStatus } from "@prisma/client";
+import { CardProductType, CardStatus, Prisma, RouteStatus } from "@prisma/client";
 import { z } from "zod";
 import { requireApiSession } from "@/lib/api-session";
 import { prisma } from "@/lib/prisma";
@@ -8,8 +8,13 @@ import { clearUrgencyOnCardClosure } from "@/lib/urgent-alerts";
 const createSchema = z.object({
   fecha: z.string(),
   messengerId: z.string().cuid(),
-  identifiers: z.array(z.string().min(1)).min(1),
+  identifiers: z.array(z.string().min(1)).max(500).optional().default([]),
+  // Los cardIds se reciben solamente tras la previsualizacion. Esto evita que
+  // una cedula/solicitud ambigua cree una ruta con el despacho equivocado.
+  cardIds: z.array(z.string().cuid()).max(500).optional(),
   notas: z.string().optional(),
+}).refine((value) => value.identifiers.length > 0 || (value.cardIds?.length ?? 0) > 0, {
+  message: "Debes indicar identificadores o tarjetas seleccionadas",
 });
 
 const routeResultSchema = z.enum([
@@ -56,6 +61,29 @@ function parsePagination(request: NextRequest) {
 }
 
 type RouteLifecycleResult = "EN_RUTA" | "ACUSE_RECIBIDO" | "DEVUELTA_TIENDA";
+
+const TERMINAL_CARD_STATUSES: CardStatus[] = [
+  CardStatus.ENTREGADA,
+  CardStatus.ENTREGA_DIGITAL,
+  CardStatus.RETORNADA,
+  CardStatus.ACUSE_RECIBIDO,
+  CardStatus.DEVUELTA_TIENDA,
+];
+
+function cardMatchesIdentifier(
+  card: { id: string; tc: string | null; requestNumber: string | null; externalReference: string | null; customer: { cedula: string } },
+  identifier: string,
+) {
+  const digits = identifier.replace(/\D/g, "");
+  return (
+    card.id === identifier ||
+    card.tc === identifier ||
+    card.requestNumber === identifier ||
+    card.externalReference === identifier ||
+    card.customer.cedula === identifier ||
+    (digits.length > 0 && card.customer.cedula.replace(/\D/g, "") === digits)
+  );
+}
 
 function normalizeRouteResult(value: z.infer<typeof routeResultSchema>): RouteLifecycleResult {
   if (value === "ENTREGADA" || value === "ACUSE_RECIBIDO") return "ACUSE_RECIBIDO";
@@ -195,6 +223,7 @@ export async function GET(request: NextRequest) {
 
   const date = request.nextUrl.searchParams.get("date");
   const messengerId = request.nextUrl.searchParams.get("messengerId");
+  const productType = request.nextUrl.searchParams.get("productType");
   const { page, pageSize } = parsePagination(request);
 
   const where: Record<string, unknown> = {};
@@ -205,6 +234,9 @@ export async function GET(request: NextRequest) {
     where.fecha = { gte: start, lt: end };
   }
   if (messengerId) where.messengerId = messengerId;
+  if (productType && productType !== "ALL" && productType in CardProductType) {
+    where.items = { some: { card: { productType: productType as CardProductType } } };
+  }
 
   const [routes, total] = await Promise.all([
     prisma.route.findMany({
@@ -249,14 +281,17 @@ export async function POST(request: Request) {
   const uniqueIdentifiers = [...new Set(identifiers)];
 
   const cards = await prisma.card.findMany({
-    where: {
-      OR: uniqueIdentifiers.flatMap((identifier) => [
-        { id: identifier },
-        { tc: identifier },
-        { externalReference: identifier },
-        { customer: { cedula: identifier } },
-      ]),
-    },
+    where: parsed.data.cardIds?.length
+      ? { id: { in: [...new Set(parsed.data.cardIds)] } }
+      : {
+          OR: uniqueIdentifiers.flatMap((identifier) => [
+            { id: identifier },
+            { tc: identifier },
+            { requestNumber: identifier },
+            { externalReference: identifier },
+            { customer: { cedula: identifier } },
+          ]),
+        },
     include: { customer: true },
     orderBy: { updatedAt: "desc" },
   });
@@ -265,27 +300,57 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "No se encontraron tarjetas" }, { status: 404 });
   }
 
-  const usedCardIds = new Set<string>();
   const selectedCards: typeof cards = [];
-
-  for (const identifier of uniqueIdentifiers) {
-    const candidate = cards.find((card) => {
-      if (usedCardIds.has(card.id)) return false;
-      return (
-        card.id === identifier ||
-        card.tc === identifier ||
-        card.externalReference === identifier ||
-        card.customer.cedula === identifier
-      );
-    });
-    if (candidate) {
-      usedCardIds.add(candidate.id);
-      selectedCards.push(candidate);
+  if (parsed.data.cardIds?.length) {
+    const byId = new Map(cards.map((card) => [card.id, card]));
+    for (const cardId of parsed.data.cardIds) {
+      const card = byId.get(cardId);
+      if (card && !selectedCards.some((candidate) => candidate.id === card.id)) selectedCards.push(card);
+    }
+    if (selectedCards.length !== new Set(parsed.data.cardIds).size) {
+      return NextResponse.json({ error: "Una o más tarjetas seleccionadas ya no existen" }, { status: 409 });
+    }
+  } else {
+    for (const identifier of uniqueIdentifiers) {
+      const matches = cards.filter((card) => cardMatchesIdentifier(card, identifier));
+      if (matches.length !== 1) {
+        return NextResponse.json(
+          {
+            error: matches.length ? "Hay identificadores ambiguos; selecciona el despacho en la previsualizacion" : "Hay identificadores no encontrados",
+            requiresResolution: true,
+            identifier,
+          },
+          { status: 409 },
+        );
+      }
+      if (!selectedCards.some((candidate) => candidate.id === matches[0].id)) selectedCards.push(matches[0]);
     }
   }
 
   if (!selectedCards.length) {
     return NextResponse.json({ error: "No se encontraron tarjetas para la ruta" }, { status: 404 });
+  }
+
+  const unavailable = selectedCards.filter((card) => TERMINAL_CARD_STATUSES.includes(card.status));
+  if (unavailable.length) {
+    return NextResponse.json(
+      { error: "Hay tarjetas en estado terminal que no se pueden asignar", cardIds: unavailable.map((card) => card.id) },
+      { status: 409 },
+    );
+  }
+
+  const alreadyAssigned = await prisma.routeItem.findMany({
+    where: {
+      cardId: { in: selectedCards.map((card) => card.id) },
+      route: { status: { in: [RouteStatus.PENDIENTE, RouteStatus.EN_PROCESO] } },
+    },
+    select: { cardId: true },
+  });
+  if (alreadyAssigned.length) {
+    return NextResponse.json(
+      { error: "Hay tarjetas ya asignadas a una ruta activa", cardIds: alreadyAssigned.map((item) => item.cardId) },
+      { status: 409 },
+    );
   }
 
   const route = await prisma.route.create({
@@ -314,6 +379,7 @@ export async function POST(request: Request) {
         where: { id: card.id },
         data: {
           currentMessengerId: parsed.data.messengerId,
+          lastAssignedMessengerId: parsed.data.messengerId,
           status: CardStatus.EN_RUTA,
         },
       });
@@ -396,6 +462,7 @@ export async function PATCH(request: Request) {
         return (
           item.card.id === identifier ||
           item.card.tc === identifier ||
+          item.card.requestNumber === identifier ||
           item.card.externalReference === identifier ||
           item.card.customer.cedula === identifier ||
           item.card.customer.cedula.replace(/\D/g, "") === digits
@@ -422,7 +489,7 @@ export async function PATCH(request: Request) {
         return NextResponse.json({
           scanned: {
             itemId: foundItem.id,
-            tc: foundItem.card.tc,
+            tc: foundItem.card.tc ?? foundItem.card.requestNumber ?? "",
             cedula: foundItem.card.customer.cedula,
             nombre: foundItem.card.customer.nombre,
           },

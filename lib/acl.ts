@@ -4,6 +4,7 @@ import { type ModuleName } from "@/lib/constants";
 const ACCESS: Record<ModuleName, UserRole[]> = {
   dashboard: ["ADMIN", "OPERADOR", "FACTURACION", "MENSAJERO"],
   tarjetas: ["ADMIN", "OPERADOR"],
+  consolidado_debito: ["ADMIN", "OPERADOR"],
   modificacion_masiva: ["ADMIN", "OPERADOR"],
   status_digitales: ["ADMIN", "OPERADOR"],
   rastreo_masivo: ["ADMIN", "OPERADOR", "FACTURACION"],

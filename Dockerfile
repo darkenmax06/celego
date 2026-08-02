@@ -19,7 +19,7 @@ RUN npm ci --ignore-scripts --include=dev --include=optional
 COPY . .
 RUN npm run prisma:generate
 RUN npm run build
-RUN chmod +x ./docker-entrypoint.sh
+RUN sed -i 's/\r$//' ./docker-entrypoint.sh && chmod +x ./docker-entrypoint.sh
 
 EXPOSE 3000
 

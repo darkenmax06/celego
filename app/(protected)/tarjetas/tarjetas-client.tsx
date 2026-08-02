@@ -11,7 +11,9 @@ import { usePersistentState } from "@/lib/use-persistent-state";
 
 type CardRow = {
   id: string;
-  tc: string;
+  tc: string | null;
+  requestNumber: string | null;
+  productType: "CREDITO" | "DEBITO";
   provincia: string;
   zona: string;
   isRemote: boolean;
@@ -101,6 +103,7 @@ export default function TarjetasClient() {
   const [cards, setCards] = useState<CardRow[]>([]);
   const [q, setQ, queryHydrated] = usePersistentState("tarjetas:query", "");
   const [status, setStatus, statusHydrated] = usePersistentState("tarjetas:status", "ALL");
+  const [productType, setProductType, productHydrated] = usePersistentState("tarjetas:product", "ALL");
   const [provincia, setProvincia, provinceHydrated] = usePersistentState(
     "tarjetas:province",
     "ALL",
@@ -121,13 +124,14 @@ export default function TarjetasClient() {
   });
   const [page, setPage, pageHydrated] = usePersistentState("tarjetas:page", 1);
   const filtersHydrated =
-    queryHydrated && statusHydrated && provinceHydrated && pageHydrated;
+    queryHydrated && statusHydrated && productHydrated && provinceHydrated && pageHydrated;
 
   async function fetchCards(pageArg = page) {
     setLoading(true);
     const params = new URLSearchParams();
     if (q) params.set("q", q);
     if (status !== "ALL") params.set("status", status);
+    if (productType !== "ALL") params.set("productType", productType);
     if (provincia !== "ALL") params.set("provincia", provincia);
     params.set("page", String(pageArg));
     params.set("pageSize", String(pagination.pageSize));
@@ -262,7 +266,7 @@ export default function TarjetasClient() {
           <input
             value={q}
             onChange={(event) => setQ(event.target.value)}
-            placeholder="Buscar por TC, cedula o nombre"
+            placeholder="Buscar por tarjeta, solicitud, c\u00e9dula o nombre"
             className="rounded-xl border border-slate-300 px-3 py-2"
           />
           <select value={status} onChange={(event) => setStatus(event.target.value)} className="rounded-xl border border-slate-300 px-3 py-2">
@@ -272,6 +276,11 @@ export default function TarjetasClient() {
                 {item}
               </option>
             ))}
+          </select>
+          <select value={productType} onChange={(event) => setProductType(event.target.value)} className="rounded-xl border border-slate-300 px-3 py-2">
+            <option value="ALL">Todos los productos</option>
+            <option value="CREDITO">Cr\u00e9dito</option>
+            <option value="DEBITO">D\u00e9bito</option>
           </select>
           <select value={provincia} onChange={(event) => setProvincia(event.target.value)} className="rounded-xl border border-slate-300 px-3 py-2">
             <option value="ALL">Todas las provincias</option>
@@ -305,7 +314,8 @@ export default function TarjetasClient() {
           <table className="w-full text-left text-sm">
             <thead className="text-xs uppercase tracking-wide text-slate-500">
               <tr>
-                <th className="pb-2">TC</th>
+                <th className="pb-2">Producto</th>
+                <th className="pb-2">Identificador</th>
                 <th className="pb-2">Cliente</th>
                 <th className="pb-2">Cedula</th>
                 <th className="pb-2">Provincia</th>
@@ -326,7 +336,13 @@ export default function TarjetasClient() {
                     className="cursor-pointer py-2 font-medium text-blue-700 hover:underline"
                     onClick={() => setSelectedCardId(card.id)}
                   >
-                    {card.tc}
+                    <span className="mr-2 rounded bg-blue-50 px-1.5 py-0.5 text-[10px] font-bold text-blue-700">{card.productType === "DEBITO" ? "D\u00c9BITO" : "CR\u00c9DITO"}</span>
+                  </td>
+                  <td
+                    className="cursor-pointer py-2 font-medium text-blue-700 hover:underline"
+                    onClick={() => setSelectedCardId(card.id)}
+                  >
+                    {card.productType === "DEBITO" ? card.requestNumber : card.tc}
                   </td>
                   <td
                     className="cursor-pointer py-2 hover:underline"
@@ -377,7 +393,7 @@ export default function TarjetasClient() {
               ))}
               {!cards.length ? (
                 <tr>
-                  <td colSpan={12} className="py-4 text-sm text-slate-500">
+                  <td colSpan={13} className="py-4 text-sm text-slate-500">
                     {loading ? "Cargando..." : "No hay resultados"}
                   </td>
                 </tr>
@@ -502,7 +518,7 @@ function UrgencyModal({
           <div>
             <p className="text-xs font-semibold tracking-wide text-rose-700">Gestion de urgencia</p>
             <h3 className="text-lg font-bold text-slate-900">
-              {card.customer.nombre} - {card.tc}
+              {card.customer.nombre} - {card.productType === "DEBITO" ? card.requestNumber : card.tc}
             </h3>
             <p className="text-xs text-slate-500">{card.customer.cedula}</p>
           </div>

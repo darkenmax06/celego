@@ -76,6 +76,13 @@ export async function POST(request: Request) {
               nextStatus === CardStatus.DEVUELTA_TIENDA
                 ? null
                 : undefined,
+            lastAssignedMessengerId:
+              (nextStatus === CardStatus.ENTREGADA ||
+                nextStatus === CardStatus.RETORNADA ||
+                nextStatus === CardStatus.DEVUELTA_TIENDA) &&
+              card.currentMessengerId
+                ? card.currentMessengerId
+                : undefined,
           },
         });
 

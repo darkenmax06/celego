@@ -142,6 +142,7 @@ export async function POST(request: NextRequest) {
   if (nextStatus) {
     updateData.status = nextStatus;
     updateData.currentMessenger = { connect: { id: item.route.messengerId } };
+    updateData.lastAssignedMessenger = { connect: { id: item.route.messengerId } };
     updateData.returnReason =
       nextStatus === CardStatus.DEVUELTA_TIENDA ? note : null;
     await prisma.routeItem.update({

@@ -16,7 +16,9 @@ type Messenger = {
 
 type CardDetail = {
   id: string;
-  tc: string;
+  tc: string | null;
+  requestNumber: string | null;
+  productType: "CREDITO" | "DEBITO";
   externalReference: string | null;
   zona: string;
   provincia: string;
@@ -43,6 +45,7 @@ type CardDetail = {
     telefonosRaw: string | null;
   };
   currentMessenger: { nombre: string } | null;
+  lastAssignedMessenger: { nombre: string } | null;
   reassignedMessenger: { id: string; nombre: string } | null;
   deliveryReassignments: Array<{
     id: string;
@@ -142,6 +145,10 @@ function splitPhones(raw: string | null | undefined) {
 
 function requiresReturnReason(status: CardStatus) {
   return status === CardStatus.RETORNADA || status === CardStatus.DEVUELTA_TIENDA;
+}
+
+function cardIdentifier(card: Pick<CardDetail, "productType" | "tc" | "requestNumber">) {
+  return card.productType === "DEBITO" ? card.requestNumber || "-" : card.tc || "-";
 }
 
 function urgencyLabel(level: number) {
@@ -517,7 +524,9 @@ export function CardDetailModal({ cardId, onClose, onUpdated }: Props) {
       >
         <div className="flex items-start justify-between border-b border-slate-200 px-6 py-5">
           <div>
-            <p className="text-xs font-semibold tracking-wide text-blue-700">{card.tc}</p>
+            <p className="text-xs font-semibold tracking-wide text-blue-700">
+              {card.productType === "DEBITO" ? "D\u00c9BITO · Solicitud" : "CR\u00c9DITO · Tarjeta"} {cardIdentifier(card)}
+            </p>
             <h3 className="font-display text-xl font-bold text-slate-900">{card.customer.nombre}</h3>
           </div>
           <div className="flex items-center gap-2">
@@ -548,6 +557,8 @@ export function CardDetailModal({ cardId, onClose, onUpdated }: Props) {
           {tab === "info" ? (
             <div>
               <div className="grid gap-4 md:grid-cols-3">
+                <InfoItem label="Producto" value={card.productType === "DEBITO" ? "D\u00e9bito" : "Cr\u00e9dito"} />
+                <InfoItem label={card.productType === "DEBITO" ? "N\u00famero de solicitud" : "N\u00famero de tarjeta"} value={cardIdentifier(card)} />
                 <InfoItem label="Cedula" value={card.customer.cedula} />
                 <InfoItem label="Zona original" value={card.zona} />
                 <InfoItem label="Zona remota" value={card.isRemote ? "SI" : "NO"} />
@@ -573,7 +584,8 @@ export function CardDetailModal({ cardId, onClose, onUpdated }: Props) {
                 <InfoItem label="Tipo Entrega" value={card.deliveryType || "-"} />
                 <InfoItem label="Contrato" value={card.contractType || "-"} />
                 <InfoItem label="Suplidor" value={card.supplier || "-"} />
-                <InfoItem label="Mensajero" value={card.currentMessenger?.nombre || "-"} />
+                <InfoItem label="Mensajero actual" value={card.currentMessenger?.nombre || "-"} />
+                <InfoItem label="Mensajero asignado" value={card.lastAssignedMessenger?.nombre || card.currentMessenger?.nombre || "-"} />
                 <InfoItem
                   label="Mensajero reasignado"
                   value={card.reassignedMessenger?.nombre || "-"}

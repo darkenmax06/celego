@@ -148,7 +148,7 @@ export async function PATCH(request: Request) {
         for (const item of toCreate) {
           const card = await tx.card.findUnique({
             where: { id: item.cardId },
-            select: { id: true, status: true, returnReason: true },
+            select: { id: true, status: true, returnReason: true, currentMessengerId: true },
           });
           if (!card) {
             continue;
@@ -164,6 +164,11 @@ export async function PATCH(request: Request) {
               currentMessengerId:
                 appliedStatus === CardStatus.ENTREGADA || appliedStatus === CardStatus.RETORNADA
                   ? null
+                  : undefined,
+              lastAssignedMessengerId:
+                (appliedStatus === CardStatus.ENTREGADA || appliedStatus === CardStatus.RETORNADA) &&
+                card.currentMessengerId
+                  ? card.currentMessengerId
                   : undefined,
             },
           });

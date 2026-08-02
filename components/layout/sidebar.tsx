@@ -18,6 +18,7 @@ import {
   Images,
   Search,
   TimerOff,
+  Upload,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { type ModuleName } from "@/lib/constants";
@@ -30,10 +31,11 @@ const NAV_ITEMS: Array<{
 }> = [
   { module: "dashboard", label: "Dashboard", href: "/dashboard", icon: ChartArea },
   { module: "tarjetas", label: "Tarjetas", href: "/tarjetas", icon: CreditCard },
+  { module: "consolidado_debito", label: "Consolidado d\u00e9bito", href: "/consolidado-debito", icon: Upload },
   { module: "modificacion_masiva", label: "Actualizacion masiva", href: "/modificacion-masiva", icon: ScanLine },
   { module: "status_digitales", label: "Entrega digital (imagenes)", href: "/status-digitales", icon: Images },
   { module: "rastreo_masivo", label: "Rastreo masivo", href: "/rastreo-masivo", icon: Search },
-  { module: "sla_vencidas", label: "SLA vencidas", href: "/sla-vencidas", icon: TimerOff },
+  { module: "sla_vencidas", label: "Vencimientos", href: "/sla-vencidas", icon: TimerOff },
   { module: "rutas", label: "Rutas", href: "/rutas", icon: Route },
   { module: "operativo", label: "Operativo", href: "/operativo", icon: Phone },
   { module: "redaccion", label: "Redaccion", href: "/redaccion", icon: FileText },

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import JSZip from "jszip";
 import sharp from "sharp";
 import { requireApiSession } from "@/lib/api-session";
+import { getCardIdentifier } from "@/lib/card-identifier";
 import { prisma } from "@/lib/prisma";
 
 const FONT_FAMILY = "DejaVu Sans, Noto Sans, Liberation Sans, Arial, sans-serif";
@@ -148,9 +149,10 @@ export async function GET(request: NextRequest) {
     const folder = zip.folder(provinceName);
     if (!folder) continue;
 
+    const identifier = getCardIdentifier(row.card);
     const svg = buildCardSvg({
       cliente: row.card.customer.nombre,
-      tc: row.card.tc,
+      tc: identifier,
       cedula: row.card.customer.cedula,
       provincia: row.card.provincia,
       zona: row.card.zona,
@@ -161,7 +163,7 @@ export async function GET(request: NextRequest) {
       dateLabel,
     });
     const jpg = await svgToJpeg(svg);
-    const fileName = `${sanitizeFilePart(row.card.customer.nombre)} - ${sanitizeFilePart(row.card.tc)}.jpg`;
+    const fileName = `${sanitizeFilePart(row.card.customer.nombre)} - ${sanitizeFilePart(identifier)}.jpg`;
     folder.file(fileName, jpg);
   }
 
