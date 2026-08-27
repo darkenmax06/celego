@@ -1,6 +1,10 @@
 "use client";
 
 import { FormEvent, KeyboardEvent, useEffect, useMemo, useState } from "react";
+import {
+  OperationalCardPicker,
+  type OperationalCard,
+} from "@/components/cards/operational-card-picker";
 import { PageHeader } from "@/components/ui/page-header";
 import { Panel } from "@/components/ui/panel";
 import { StatusBadge } from "@/components/ui/status-badge";
@@ -79,6 +83,26 @@ type ScanResult = {
   nombre: string;
 };
 
+type ScanCandidate = {
+  itemId: string;
+  cardId: string | null;
+  tc: string;
+  cedula: string | null;
+  nombre: string | null;
+  status: string | null;
+  dispatchDate: string | null;
+  returnReason: string | null;
+};
+
+type ScanConflict = {
+  kind: "REQUIERE_SELECCION" | "SOLO_CERRADAS";
+  candidates: ScanCandidate[];
+};
+
+type ScanEndpointResult =
+  | { success: true; scanned: { tc: string; cedula: string | null; nombre: string | null } }
+  | { success: false; error: string; conflict: ScanConflict | null };
+
 type RoutesDraft = {
   moduleTab: ModuleTab;
   lotTab: LotTab;
@@ -97,6 +121,8 @@ type RoutesDraft = {
   lotDestinationProvince: string;
   lotFechaEnvio: string;
   lotIdentifiers: string;
+  routeSelectedCards: OperationalCard[];
+  lotSelectedCards: OperationalCard[];
 };
 
 type ModuleTab = "operativo" | "lotes";
@@ -105,6 +131,136 @@ type LotTab = "lotes" | "seguimiento";
 function formatDate(value: string | null) {
   if (!value) return "-";
   return new Date(value).toLocaleDateString("es-DO");
+}
+
+function isClosedOperationalCard(card: Pick<OperationalCard, "status">) {
+  return card.status === "RETORNADA" || card.status === "DEVUELTA_TIENDA";
+}
+
+function getScanConflict(data: unknown): ScanConflict | null {
+  const payload = asRecord(data);
+  if (
+    (payload.kind !== "REQUIERE_SELECCION" && payload.kind !== "SOLO_CERRADAS") ||
+    !Array.isArray(payload.candidates)
+  ) {
+    return null;
+  }
+
+  const candidates = payload.candidates.flatMap((value) => {
+    const candidate = asRecord(value);
+    if (typeof candidate.itemId !== "string" || typeof candidate.tc !== "string") return [];
+    return [
+      {
+        itemId: candidate.itemId,
+        cardId: typeof candidate.cardId === "string" ? candidate.cardId : null,
+        tc: candidate.tc,
+        cedula: typeof candidate.cedula === "string" ? candidate.cedula : null,
+        nombre: typeof candidate.nombre === "string" ? candidate.nombre : null,
+        status: typeof candidate.status === "string" ? candidate.status : null,
+        dispatchDate: typeof candidate.dispatchDate === "string" ? candidate.dispatchDate : null,
+        returnReason: typeof candidate.returnReason === "string" ? candidate.returnReason : null,
+      },
+    ];
+  });
+
+  return { kind: payload.kind, candidates };
+}
+
+function ScanResolutionPanel({
+  conflict,
+  onSelect,
+  onDismiss,
+}: {
+  conflict: ScanConflict;
+  onSelect: (candidate: ScanCandidate) => void;
+  onDismiss: () => void;
+}) {
+  const isClosed = conflict.kind === "SOLO_CERRADAS";
+
+  return (
+    <div
+      className={`mt-3 rounded-xl border p-3 ${
+        isClosed ? "border-amber-300 bg-amber-50" : "border-blue-200 bg-blue-50"
+      }`}
+    >
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div>
+          <p className="text-sm font-semibold text-slate-900">
+            {isClosed ? "La coincidencia esta cerrada" : "Hay varias tarjetas vigentes"}
+          </p>
+          <p className="mt-1 text-xs text-slate-700">
+            {isClosed
+              ? "Confirma explicitamente una tarjeta cerrada antes de actualizarla."
+              : "Selecciona explicitamente la tarjeta que corresponde al pistoleo."}
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={onDismiss}
+          className="rounded-md border border-slate-300 bg-white px-2 py-1 text-xs text-slate-700"
+        >
+          Cancelar
+        </button>
+      </div>
+      <div className="mt-3 grid gap-2">
+        {conflict.candidates.map((candidate) => (
+          <button
+            key={candidate.itemId}
+            type="button"
+            onClick={() => onSelect(candidate)}
+            className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-left text-sm hover:border-blue-400"
+          >
+            <span className="font-semibold text-blue-800">TC {candidate.tc}</span>
+            <span className="ml-2 text-slate-700">{candidate.nombre ?? "Sin cliente"}</span>
+            <span className="mt-1 block text-xs text-slate-600">
+              Cedula: {candidate.cedula ?? "-"} | Estado: {candidate.status ?? "-"} | Despacho: {formatDate(candidate.dispatchDate)}
+            </span>
+            {candidate.returnReason ? (
+              <span className="mt-1 block text-xs text-rose-700">
+                Motivo de devolucion: {candidate.returnReason}
+              </span>
+            ) : null}
+            <span className={`mt-2 block text-xs font-semibold ${isClosed ? "text-amber-800" : "text-blue-800"}`}>
+              {isClosed ? "Confirmar tarjeta cerrada" : "Usar esta tarjeta"}
+            </span>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function SelectedOperationalCardChips({
+  cards,
+  onRemove,
+}: {
+  cards: OperationalCard[];
+  onRemove: (cardId: string) => void;
+}) {
+  if (!cards.length) return null;
+
+  return (
+    <div className="mt-2 flex flex-wrap gap-2" aria-label="Tarjetas seleccionadas explicitamente">
+      {cards.map((card) => (
+        <span
+          key={card.id}
+          className="inline-flex max-w-full items-center gap-2 rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-xs text-blue-900"
+        >
+          <span className="truncate">
+            {card.tc} · {card.customer.nombre}
+          </span>
+          <button
+            type="button"
+            onClick={() => onRemove(card.id)}
+            className="shrink-0 font-semibold text-blue-700 hover:text-blue-900"
+            aria-label={`Quitar tarjeta ${card.tc}`}
+          >
+            Quitar
+          </button>
+        </span>
+      ))}
+    </div>
+  );
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -168,6 +324,8 @@ export default function RutasClient() {
   );
   const [messengerId, setMessengerId] = usePersistentState("rutas:messenger", "");
   const [identifiers, setIdentifiers] = useState("");
+  const [routePickerValue, setRoutePickerValue] = useState("");
+  const [routeSelectedCards, setRouteSelectedCards] = useState<OperationalCard[]>([]);
   const [selectedRouteId, setSelectedRouteId] = usePersistentState("rutas:selected-route", "");
   const [selectedRouteForLot, setSelectedRouteForLot] = usePersistentState<string | null>(
     "rutas:selected-route-lot",
@@ -180,6 +338,7 @@ export default function RutasClient() {
 
   const [scanInput, setScanInput] = useState("");
   const [scanResult, setScanResult] = useState<ScanResult | null>(null);
+  const [routeScanConflict, setRouteScanConflict] = useState<ScanConflict | null>(null);
   const [scanStatus, setScanStatus] = usePersistentState<
     "EN_RUTA" | "ACUSE_RECIBIDO" | "DEVUELTA_TIENDA"
   >("rutas:scan-status", "ACUSE_RECIBIDO");
@@ -196,6 +355,8 @@ export default function RutasClient() {
     new Date().toISOString().slice(0, 10),
   );
   const [lotIdentifiers, setLotIdentifiers] = useState("");
+  const [lotPickerValue, setLotPickerValue] = useState("");
+  const [lotSelectedCards, setLotSelectedCards] = useState<OperationalCard[]>([]);
 
   const [message, setMessage] = useState("");
   const [savingNewLot, setSavingNewLot] = useState(false);
@@ -219,6 +380,8 @@ export default function RutasClient() {
       lotDestinationProvince,
       lotFechaEnvio,
       lotIdentifiers,
+      routeSelectedCards,
+      lotSelectedCards,
     }),
     [
       fecha,
@@ -230,6 +393,8 @@ export default function RutasClient() {
       lotTab,
       messengerId,
       moduleTab,
+      lotSelectedCards,
+      routeSelectedCards,
       scanComment,
       scanInput,
       scanResult,
@@ -243,7 +408,14 @@ export default function RutasClient() {
   const workflowDraft = useWorkflowDraft<RoutesDraft>({
     module: "rutas",
     payload: draftPayload,
-    shouldSave: Boolean(identifiers.trim() || scanInput.trim() || scanComment.trim() || lotIdentifiers.trim()),
+    shouldSave: Boolean(
+      identifiers.trim() ||
+        scanInput.trim() ||
+        scanComment.trim() ||
+        lotIdentifiers.trim() ||
+        routeSelectedCards.length ||
+        lotSelectedCards.length,
+    ),
     onRestore: (draft) => {
       setModuleTab(draft.moduleTab);
       setLotTab(draft.lotTab);
@@ -262,8 +434,36 @@ export default function RutasClient() {
       setLotDestinationProvince(draft.lotDestinationProvince);
       setLotFechaEnvio(draft.lotFechaEnvio);
       setLotIdentifiers(draft.lotIdentifiers);
+      setRouteSelectedCards(draft.routeSelectedCards ?? []);
+      setLotSelectedCards(draft.lotSelectedCards ?? []);
     },
   });
+
+  function addSelectedRouteCard(card: OperationalCard) {
+    if (isClosedOperationalCard(card)) {
+      setMessage("Las tarjetas retornadas o devueltas no se pueden asignar a una nueva ruta");
+      return;
+    }
+    if (routeSelectedCards.some((item) => item.id === card.id)) {
+      setMessage("La tarjeta ya esta seleccionada para la ruta");
+      return;
+    }
+    setRouteSelectedCards((previous) => [...previous, card]);
+    setMessage("");
+  }
+
+  function addSelectedLotCard(card: OperationalCard) {
+    if (isClosedOperationalCard(card)) {
+      setMessage("Las tarjetas retornadas o devueltas no se pueden asignar a un nuevo lote");
+      return;
+    }
+    if (lotSelectedCards.some((item) => item.id === card.id)) {
+      setMessage("La tarjeta ya esta seleccionada para el lote");
+      return;
+    }
+    setLotSelectedCards((previous) => [...previous, card]);
+    setMessage("");
+  }
 
   async function loadMessengers() {
     const res = await fetch("/api/mensajeros", { cache: "no-store" });
@@ -376,13 +576,16 @@ export default function RutasClient() {
 
   async function createRoute(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const parsed = identifiers
+    const typedIdentifiers = identifiers
       .split(/[\n,;]+/g)
       .map((item) => item.trim())
       .filter(Boolean);
+    const parsed = Array.from(
+      new Set([...routeSelectedCards.map((card) => card.id), ...typedIdentifiers]),
+    );
 
     if (!parsed.length) {
-      setMessage("Ingresa al menos un TC/Cedula/Referencia");
+      setMessage("Pistolea una tarjeta o ingresa al menos un TC/Cedula/Referencia");
       return;
     }
 
@@ -398,12 +601,20 @@ export default function RutasClient() {
 
     const data = await res.json();
     if (!res.ok) {
+      if (res.status === 409) {
+        setMessage(
+          "Hay tarjetas ambiguas o cerradas. Selecciona una vigente con el selector y retira las cerradas antes de crear la ruta.",
+        );
+        return;
+      }
       setMessage(data.error ?? "No se pudo crear ruta");
       return;
     }
 
     setMessage(`Ruta creada con ${data.route.items.length} tarjetas`);
     setIdentifiers("");
+    setRoutePickerValue("");
+    setRouteSelectedCards([]);
     setRoutePage(1);
     await loadRoutes(1);
     setSelectedRouteId(data.route.id);
@@ -433,7 +644,7 @@ export default function RutasClient() {
     setMessage(`Ruta exportada en ${format.toUpperCase()}`);
   }
 
-  async function scanCard() {
+  async function scanCard(selection?: { itemId: string; confirmClosed?: boolean }) {
     if (!selectedRoute) {
       setMessage("Selecciona una ruta para pistolear");
       return;
@@ -452,6 +663,8 @@ export default function RutasClient() {
         action: "SCAN_ITEM",
         routeId: selectedRoute.id,
         identifier,
+        itemId: selection?.itemId,
+        confirmClosed: selection?.confirmClosed,
         result: scanStatus,
         comentario: scanComment || undefined,
       }),
@@ -459,16 +672,61 @@ export default function RutasClient() {
 
     const data = await res.json();
     if (!res.ok) {
+      const conflict = res.status === 409 ? getScanConflict(data) : null;
+      if (conflict) {
+        setRouteScanConflict(conflict);
+        setMessage("");
+        return;
+      }
+      setRouteScanConflict(null);
       setMessage(data.error ?? "No se pudo pistolear");
       return;
     }
 
+    setRouteScanConflict(null);
     setScanResult(data.scanned);
     setScanInput("");
     setScanComment("");
     setMessage(`Tarjeta ${data.scanned.tc} actualizada a ${scanStatus}`);
     await workflowDraft.clearDraft();
     await Promise.all([loadRoutes(routePage), loadLots(lotPage)]);
+  }
+
+  async function scanLotTrackingCard(
+    lotId: string,
+    identifier: string,
+    selection?: { itemId: string; confirmClosed?: boolean },
+  ): Promise<ScanEndpointResult> {
+    const res = await fetch("/api/lotes", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: "SCAN_ITEM",
+        lotId,
+        identifier,
+        itemId: selection?.itemId,
+        confirmClosed: selection?.confirmClosed,
+        result: "ACUSE_RECIBIDO",
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      return {
+        success: false,
+        error: typeof data.error === "string" ? data.error : "No se pudo pistolear la tarjeta del lote",
+        conflict: res.status === 409 ? getScanConflict(data) : null,
+      };
+    }
+
+    await Promise.all([loadRoutes(routePage), loadLots(lotPage)]);
+    return {
+      success: true,
+      scanned: {
+        tc: typeof data.scanned?.tc === "string" ? data.scanned.tc : identifier,
+        cedula: typeof data.scanned?.cedula === "string" ? data.scanned.cedula : null,
+        nombre: typeof data.scanned?.nombre === "string" ? data.scanned.nombre : null,
+      },
+    };
   }
 
   async function markRouteItem(
@@ -548,13 +806,16 @@ export default function RutasClient() {
       setSavingNewLot(false);
       return;
     }
-    const parsedIdentifiers = lotIdentifiers
+    const typedIdentifiers = lotIdentifiers
       .split(/[\n,;]+/g)
       .map((item) => item.trim())
       .filter(Boolean);
+    const parsedIdentifiers = Array.from(
+      new Set([...lotSelectedCards.map((card) => card.id), ...typedIdentifiers]),
+    );
 
     if (!parsedIdentifiers.length) {
-      setMessage("Debes indicar al menos una tarjeta para el lote");
+      setMessage("Pistolea una tarjeta o indica al menos un TC/Cedula para el lote");
       setSavingNewLot(false);
       return;
     }
@@ -572,6 +833,13 @@ export default function RutasClient() {
     });
     const data = await res.json();
     if (!res.ok) {
+      if (res.status === 409) {
+        setMessage(
+          "Hay tarjetas ambiguas o cerradas. Selecciona una vigente con el selector y retira las cerradas antes de crear el lote.",
+        );
+        setSavingNewLot(false);
+        return;
+      }
       setMessage(data.error ?? "No se pudo crear lote");
       setSavingNewLot(false);
       return;
@@ -580,6 +848,8 @@ export default function RutasClient() {
     setSavingNewLot(false);
     setShowNewLot(false);
     setLotIdentifiers("");
+    setLotPickerValue("");
+    setLotSelectedCards([]);
     setMessage(`Lote ${data.lot?.lotNumber ?? ""} creado`);
     await workflowDraft.clearDraft();
     await loadLots(lotPage);
@@ -702,7 +972,27 @@ export default function RutasClient() {
               </div>
               <div>
                 <label className="mb-1 block text-xs font-semibold uppercase text-slate-500">
-                  Cedulas/TC/Referencias
+                  Pistolear tarjeta operativa
+                </label>
+                <OperationalCardPicker
+                  value={routePickerValue}
+                  onValueChange={setRoutePickerValue}
+                  onCardSelected={addSelectedRouteCard}
+                  onMessage={setMessage}
+                  placeholder="Pistolear TC/Cedula y presionar Enter"
+                  buttonLabel="Agregar"
+                  inputLabel="Agregar tarjeta resuelta a la ruta"
+                />
+                <SelectedOperationalCardChips
+                  cards={routeSelectedCards}
+                  onRemove={(cardId) =>
+                    setRouteSelectedCards((previous) => previous.filter((card) => card.id !== cardId))
+                  }
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-semibold uppercase text-slate-500">
+                  Cedulas/TC/Referencias adicionales
                 </label>
                 <textarea
                   value={identifiers}
@@ -795,7 +1085,10 @@ export default function RutasClient() {
                   <div className="grid gap-2 md:grid-cols-[1fr_170px_1fr_auto]">
                     <input
                       value={scanInput}
-                      onChange={(event) => setScanInput(event.target.value)}
+                      onChange={(event) => {
+                        setScanInput(event.target.value);
+                        setRouteScanConflict(null);
+                      }}
                       onKeyDown={onScanKeyDown}
                       placeholder="Pistolear TC o Cedula"
                       className="rounded-xl border border-slate-300 px-3 py-2 text-sm"
@@ -822,6 +1115,19 @@ export default function RutasClient() {
                       Pistolear
                     </button>
                   </div>
+
+                  {routeScanConflict ? (
+                    <ScanResolutionPanel
+                      conflict={routeScanConflict}
+                      onDismiss={() => setRouteScanConflict(null)}
+                      onSelect={(candidate) =>
+                        void scanCard({
+                          itemId: candidate.itemId,
+                          confirmClosed: routeScanConflict.kind === "SOLO_CERRADAS",
+                        })
+                      }
+                    />
+                  ) : null}
 
                   {scanResult ? (
                     <p className="mt-2 text-xs text-emerald-700">
@@ -1098,6 +1404,7 @@ export default function RutasClient() {
           returnReasons={returnReasons}
           onClose={() => setSelectedLotTrackingId(null)}
           onMark={markLotTrackingItem}
+          onScanItem={scanLotTrackingCard}
           onRequireReturnReason={requestReturnReason}
         />
       ) : null}
@@ -1146,6 +1453,26 @@ export default function RutasClient() {
                 onChange={(event) => setLotFechaEnvio(event.target.value)}
                 className="w-full rounded-xl border border-slate-300 px-3 py-2"
               />
+              <div>
+                <label className="mb-1 block text-xs font-semibold uppercase text-slate-500">
+                  Pistolear tarjeta operativa
+                </label>
+                <OperationalCardPicker
+                  value={lotPickerValue}
+                  onValueChange={setLotPickerValue}
+                  onCardSelected={addSelectedLotCard}
+                  onMessage={setMessage}
+                  placeholder="Pistolear TC/Cedula y presionar Enter"
+                  buttonLabel="Agregar"
+                  inputLabel="Agregar tarjeta resuelta al lote"
+                />
+                <SelectedOperationalCardChips
+                  cards={lotSelectedCards}
+                  onRemove={(cardId) =>
+                    setLotSelectedCards((previous) => previous.filter((card) => card.id !== cardId))
+                  }
+                />
+              </div>
               <textarea
                 value={lotIdentifiers}
                 onChange={(event) => setLotIdentifiers(event.target.value)}
@@ -1445,6 +1772,7 @@ function TrackingLotModal({
   returnReasons,
   onClose,
   onMark,
+  onScanItem,
   onRequireReturnReason,
 }: {
   lot: LotRow;
@@ -1456,10 +1784,16 @@ function TrackingLotModal({
     comentario?: string,
     options?: { silent?: boolean; skipRefresh?: boolean },
   ) => Promise<void>;
+  onScanItem: (
+    lotId: string,
+    identifier: string,
+    selection?: { itemId: string; confirmClosed?: boolean },
+  ) => Promise<ScanEndpointResult>;
   onRequireReturnReason: (existing?: string | null) => string | null;
 }) {
   const [scanInput, setScanInput] = useState("");
   const [scanResult, setScanResult] = useState("");
+  const [scanConflict, setScanConflict] = useState<ScanConflict | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [bulkStatus, setBulkStatus] = useState<"ACUSE_RECIBIDO" | "DEVUELTA_TIENDA" | "EN_RUTA">("ACUSE_RECIBIDO");
   const [bulkReason, setBulkReason] = useState("");
@@ -1513,29 +1847,31 @@ function TrackingLotModal({
     setSelectedIds([]);
   }
 
-  async function onScan(event: KeyboardEvent<HTMLInputElement>) {
-    if (event.key !== "Enter") return;
-    event.preventDefault();
+  async function scanLotItem(selection?: { itemId: string; confirmClosed?: boolean }) {
     const value = scanInput.trim();
     if (!value) return;
 
-    const target = lot.items.find((item) => {
-      const digits = value.replace(/\D/g, "");
-      return (
-        item.tc === value ||
-        item.cedula === value ||
-        (item.cedula?.replace(/\D/g, "") === digits && digits.length > 0)
-      );
-    });
-
-    if (!target) {
-      setScanResult("Tarjeta no encontrada en el lote");
+    const response = await onScanItem(lot.id, value, selection);
+    if (!response.success) {
+      if (response.conflict) {
+        setScanConflict(response.conflict);
+        setScanResult("");
+      } else {
+        setScanConflict(null);
+        setScanResult(response.error);
+      }
       return;
     }
 
-    await onMark(target.id, "ACUSE_RECIBIDO");
-    setScanResult(`Tarjeta ${target.tc} marcada como acuse recibido`);
+    setScanConflict(null);
+    setScanResult(`Tarjeta ${response.scanned.tc} marcada como acuse recibido`);
     setScanInput("");
+  }
+
+  function onScanKeyDown(event: KeyboardEvent<HTMLInputElement>) {
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    void scanLotItem();
   }
 
   return (
@@ -1608,11 +1944,26 @@ function TrackingLotModal({
           <div className="mb-3 rounded-xl border border-slate-200 p-3">
             <input
               value={scanInput}
-              onChange={(event) => setScanInput(event.target.value)}
-              onKeyDown={(event) => void onScan(event)}
+              onChange={(event) => {
+                setScanInput(event.target.value);
+                setScanConflict(null);
+              }}
+              onKeyDown={onScanKeyDown}
               placeholder="Pistolear TC/Cedula y presionar Enter"
               className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm"
             />
+            {scanConflict ? (
+              <ScanResolutionPanel
+                conflict={scanConflict}
+                onDismiss={() => setScanConflict(null)}
+                onSelect={(candidate) =>
+                  void scanLotItem({
+                    itemId: candidate.itemId,
+                    confirmClosed: scanConflict.kind === "SOLO_CERRADAS",
+                  })
+                }
+              />
+            ) : null}
             {scanResult ? <p className="mt-2 text-xs text-emerald-700">{scanResult}</p> : null}
           </div>
 

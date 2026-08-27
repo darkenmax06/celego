@@ -1,23 +1,16 @@
 "use client";
 
-import { KeyboardEvent, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import {
+  OperationalCardPicker,
+  type OperationalCard,
+} from "@/components/cards/operational-card-picker";
 import { PageHeader } from "@/components/ui/page-header";
 import { Panel } from "@/components/ui/panel";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { WorkflowStatusBar } from "@/components/ui/workflow-status-bar";
 import { usePersistentState } from "@/lib/use-persistent-state";
 import { useWorkflowDraft } from "@/lib/use-workflow-draft";
-
-type CardLookup = {
-  id: string;
-  tc: string;
-  provincia: string;
-  zona: string;
-  isRemote: boolean;
-  status: string;
-  dispatchDate: string | null;
-  customer: { nombre: string; cedula: string };
-};
 
 type DraftRow = {
   cardId: string;
@@ -212,37 +205,9 @@ export default function RedaccionClient() {
     [retornos, entregas],
   );
 
-  async function findCard(identifier: string): Promise<CardLookup | null> {
-    const res = await fetch(`/api/tarjetas?q=${encodeURIComponent(identifier)}`, {
-      cache: "no-store",
-    });
-    if (!res.ok) return null;
-    const data = await res.json();
-    const cards = (data.cards ?? []) as CardLookup[];
-    if (!cards.length) return null;
-
-    const digits = identifier.replace(/\D/g, "");
-    return (
-      cards.find((card) => card.tc === identifier) ??
-      cards.find((card) => card.customer.cedula === identifier || card.customer.cedula.replace(/\D/g, "") === digits) ??
-      cards[0]
-    );
-  }
-
-  async function addByScan() {
-    const value = scanInput.trim();
-    if (!value) return;
-
-    const card = await findCard(value);
-    if (!card) {
-      setMessage("No se encontro tarjeta para ese TC/Cedula");
-      setScanInput("");
-      return;
-    }
-
+  function addSelectedCard(card: OperationalCard) {
     if (allScannedCardIds.has(card.id)) {
       setMessage("Esa tarjeta ya fue pistoleada en esta redaccion");
-      setScanInput("");
       return;
     }
 
@@ -252,8 +217,8 @@ export default function RedaccionClient() {
       cedula: card.customer.cedula,
       nombre: card.customer.nombre,
       fecha: toDisplayDate(card.dispatchDate),
-      zona: card.zona,
-      isRemote: card.isRemote,
+      zona: card.zona ?? "",
+      isRemote: Boolean(card.isRemote),
       comentario: "",
     };
 
@@ -263,15 +228,7 @@ export default function RedaccionClient() {
       setEntregas((prev) => [...prev, row]);
     }
 
-    setScanInput("");
     setMessage("");
-  }
-
-  function onScanKeyDown(event: KeyboardEvent<HTMLInputElement>) {
-    if (event.key === "Enter") {
-      event.preventDefault();
-      void addByScan();
-    }
   }
 
   function removeRow(cardId: string) {
@@ -532,23 +489,15 @@ export default function RedaccionClient() {
           </div>
         ) : null}
 
-        <div className="mb-4 flex items-center gap-3 rounded-xl border border-blue-200 bg-blue-50 px-4 py-3">
-          <span className="text-lg text-blue-700">⊙</span>
-          <input
-            value={scanInput}
-            onChange={(e) => setScanInput(e.target.value)}
-            onKeyDown={onScanKeyDown}
-            placeholder="Pistolear codigo o digitar No. TC / Cedula y presionar Enter"
-            className="flex-1 bg-transparent text-sm outline-none"
-            autoFocus
-          />
-          <button
-            onClick={() => void addByScan()}
-            className="rounded-lg border border-blue-300 bg-white px-3 py-1.5 text-xs font-semibold text-blue-700"
-          >
-            Agregar
-          </button>
-        </div>
+        <OperationalCardPicker
+          value={scanInput}
+          onValueChange={setScanInput}
+          onCardSelected={addSelectedCard}
+          onMessage={setMessage}
+          placeholder="Pistolear codigo o digitar No. TC / Cedula y presionar Enter"
+          className="mb-4"
+          autoFocus
+        />
 
         {mode === "retorno" && selectedRetornos.length > 0 ? (
           <div className="mb-4 flex flex-wrap items-center gap-2 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2">
@@ -833,42 +782,14 @@ function EditRedactionModal({
     [redaction.items],
   );
 
-  async function findCard(identifier: string): Promise<CardLookup | null> {
-    const res = await fetch(`/api/tarjetas?q=${encodeURIComponent(identifier)}`, {
-      cache: "no-store",
-    });
-    if (!res.ok) return null;
-    const data = await res.json();
-    const cards = (data.cards ?? []) as CardLookup[];
-    if (!cards.length) return null;
-
-    const digits = identifier.replace(/\D/g, "");
-    return (
-      cards.find((card) => card.tc === identifier) ??
-      cards.find((card) => card.customer.cedula === identifier || card.customer.cedula.replace(/\D/g, "") === digits) ??
-      cards[0]
-    );
-  }
-
-  async function addByScan() {
-    const value = scanInput.trim();
-    if (!value) return;
-
-    const card = await findCard(value);
-    if (!card) {
-      setFeedback("No se encontro tarjeta para ese TC/Cedula");
-      return;
-    }
-
+  function addSelectedCard(card: OperationalCard) {
     if (existingCardIds.has(card.id)) {
       setFeedback("Esa tarjeta ya existe en la relacion");
-      setScanInput("");
       return;
     }
 
     if (rows.some((row) => row.cardId === card.id)) {
       setFeedback("Esa tarjeta ya esta agregada en esta edicion");
-      setScanInput("");
       return;
     }
 
@@ -879,11 +800,10 @@ function EditRedactionModal({
         tc: card.tc,
         cedula: card.customer.cedula,
         nombre: card.customer.nombre,
-        isRemote: card.isRemote,
+        isRemote: Boolean(card.isRemote),
         comentario: "",
       },
     ]);
-    setScanInput("");
     setFeedback("");
   }
 
@@ -935,28 +855,15 @@ function EditRedactionModal({
           </button>
         </div>
 
-        <div className="mb-3 flex items-center gap-2 rounded-xl border border-blue-200 bg-blue-50 px-3 py-2">
-          <input
-            value={scanInput}
-            onChange={(event) => setScanInput(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") {
-                event.preventDefault();
-                void addByScan();
-              }
-            }}
-            placeholder="Pistolear o escribir TC/Cedula y Enter"
-            className="flex-1 bg-transparent text-sm outline-none"
-            autoFocus
-          />
-          <button
-            type="button"
-            onClick={() => void addByScan()}
-            className="rounded-lg border border-blue-300 bg-white px-3 py-1.5 text-xs font-semibold text-blue-700"
-          >
-            Agregar
-          </button>
-        </div>
+        <OperationalCardPicker
+          value={scanInput}
+          onValueChange={setScanInput}
+          onCardSelected={addSelectedCard}
+          onMessage={setFeedback}
+          placeholder="Pistolear o escribir TC/Cedula y Enter"
+          className="mb-3"
+          autoFocus
+        />
 
         <div className="max-h-[52vh] overflow-y-auto rounded-xl border border-slate-200">
           <table className="w-full text-left text-sm">

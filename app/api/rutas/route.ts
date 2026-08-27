@@ -2,6 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { CardStatus, Prisma, RouteStatus } from "@prisma/client";
 import { z } from "zod";
 import { requireApiSession } from "@/lib/api-session";
+import {
+  findOperationalCardCandidates,
+  resolveOperationalIdentifier,
+} from "@/lib/operational-card-service";
 import { prisma } from "@/lib/prisma";
 import { clearUrgencyOnCardClosure } from "@/lib/urgent-alerts";
 
@@ -36,6 +40,8 @@ const patchSchema = z.discriminatedUnion("action", [
     action: z.literal("SCAN_ITEM"),
     routeId: z.string().cuid(),
     identifier: z.string().min(1),
+    itemId: z.string().cuid().optional(),
+    confirmClosed: z.boolean().optional(),
     result: routeResultSchema.optional(),
     comentario: z.string().optional(),
   }),
@@ -56,6 +62,14 @@ function parsePagination(request: NextRequest) {
 }
 
 type RouteLifecycleResult = "EN_RUTA" | "ACUSE_RECIBIDO" | "DEVUELTA_TIENDA";
+
+const CLOSED_CARD_STATUSES = [CardStatus.RETORNADA, CardStatus.DEVUELTA_TIENDA] as const;
+const CARD_ASSIGNMENT_CLOSED = "CARD_ASSIGNMENT_CLOSED";
+const CARD_CLOSED_REQUIRES_CONFIRMATION = "CARD_CLOSED_REQUIRES_CONFIRMATION";
+
+function isClosedCardStatus(status: CardStatus | string) {
+  return CLOSED_CARD_STATUSES.includes(status as (typeof CLOSED_CARD_STATUSES)[number]);
+}
 
 function normalizeRouteResult(value: z.infer<typeof routeResultSchema>): RouteLifecycleResult {
   if (value === "ENTREGADA" || value === "ACUSE_RECIBIDO") return "ACUSE_RECIBIDO";
@@ -92,6 +106,7 @@ async function applyItemResult(
   tx: Prisma.TransactionClient,
   input: { itemId: string; result: z.infer<typeof routeResultSchema>; comentario?: string },
   byUserId?: string,
+  options?: { requireOpenCard?: boolean },
 ) {
   const item = await tx.routeItem.findUnique({
     where: { id: input.itemId },
@@ -104,6 +119,10 @@ async function applyItemResult(
   });
   if (!item) {
     throw new Error("ITEM_NOT_FOUND");
+  }
+
+  if (options?.requireOpenCard && isClosedCardStatus(item.card.status)) {
+    throw new Error(CARD_CLOSED_REQUIRES_CONFIRMATION);
   }
 
   const lifecycleResult = normalizeRouteResult(input.result);
@@ -248,88 +267,113 @@ export async function POST(request: Request) {
     .filter(Boolean);
   const uniqueIdentifiers = [...new Set(identifiers)];
 
-  const cards = await prisma.card.findMany({
-    where: {
-      OR: uniqueIdentifiers.flatMap((identifier) => [
-        { id: identifier },
-        { tc: identifier },
-        { externalReference: identifier },
-        { customer: { cedula: identifier } },
-      ]),
-    },
-    include: { customer: true },
-    orderBy: { updatedAt: "desc" },
-  });
-
-  if (!cards.length) {
-    return NextResponse.json({ error: "No se encontraron tarjetas" }, { status: 404 });
-  }
+  const cards = await findOperationalCardCandidates(uniqueIdentifiers);
 
   const usedCardIds = new Set<string>();
   const selectedCards: typeof cards = [];
+  const conflicts: Array<{
+    identifier: string;
+    kind: "REQUIERE_SELECCION" | "SOLO_CERRADAS";
+    cards: typeof cards;
+  }> = [];
 
   for (const identifier of uniqueIdentifiers) {
-    const candidate = cards.find((card) => {
-      if (usedCardIds.has(card.id)) return false;
-      return (
-        card.id === identifier ||
-        card.tc === identifier ||
-        card.externalReference === identifier ||
-        card.customer.cedula === identifier
-      );
-    });
-    if (candidate) {
-      usedCardIds.add(candidate.id);
-      selectedCards.push(candidate);
+    const resolution = resolveOperationalIdentifier(identifier, cards);
+    if (resolution.kind === "REQUIERE_SELECCION") {
+      conflicts.push({ identifier, kind: resolution.kind, cards: resolution.options });
+      continue;
     }
+    if (resolution.kind === "SOLO_CERRADAS") {
+      conflicts.push({ identifier, kind: resolution.kind, cards: resolution.closedCards });
+      continue;
+    }
+    if (resolution.kind === "RESUELTA" && !usedCardIds.has(resolution.card.id)) {
+      if (isClosedCardStatus(resolution.card.status)) {
+        conflicts.push({ identifier, kind: "SOLO_CERRADAS", cards: [resolution.card] });
+        continue;
+      }
+      usedCardIds.add(resolution.card.id);
+      selectedCards.push(resolution.card);
+    }
+  }
+
+  if (conflicts.length) {
+    return NextResponse.json(
+      {
+        error: "Hay tarjetas que requieren selección o confirmación antes de crear la ruta",
+        conflicts,
+      },
+      { status: 409 },
+    );
   }
 
   if (!selectedCards.length) {
     return NextResponse.json({ error: "No se encontraron tarjetas para la ruta" }, { status: 404 });
   }
 
-  const route = await prisma.route.create({
-    data: {
-      fecha: new Date(parsed.data.fecha),
-      messengerId: parsed.data.messengerId,
-      notas: parsed.data.notas,
-      createdById: auth.session.user.id,
-      status: RouteStatus.PENDIENTE,
-      items: {
-        create: selectedCards.map((card, index) => ({
-          cardId: card.id,
-          sequence: index + 1,
-        })),
-      },
-    },
-    include: {
-      items: true,
-      messenger: true,
-    },
-  });
-
-  await prisma.$transaction(async (tx) => {
-    for (const card of selectedCards) {
-      await tx.card.update({
-        where: { id: card.id },
+  try {
+    const route = await prisma.$transaction(async (tx) => {
+      const assigned = await tx.card.updateMany({
+        where: {
+          id: { in: selectedCards.map((card) => card.id) },
+          status: { notIn: [...CLOSED_CARD_STATUSES] },
+        },
         data: {
           currentMessengerId: parsed.data.messengerId,
           status: CardStatus.EN_RUTA,
         },
       });
-      await tx.cardStatusLog.create({
+
+      if (assigned.count !== selectedCards.length) {
+        throw new Error(CARD_ASSIGNMENT_CLOSED);
+      }
+
+      const created = await tx.route.create({
         data: {
+          fecha: new Date(parsed.data.fecha),
+          messengerId: parsed.data.messengerId,
+          notas: parsed.data.notas,
+          createdById: auth.session.user.id,
+          status: RouteStatus.PENDIENTE,
+          items: {
+            create: selectedCards.map((card, index) => ({
+              cardId: card.id,
+              sequence: index + 1,
+            })),
+          },
+        },
+        include: {
+          items: true,
+          messenger: true,
+        },
+      });
+
+      await tx.cardStatusLog.createMany({
+        data: selectedCards.map((card) => ({
           cardId: card.id,
           fromStatus: card.status,
           toStatus: CardStatus.EN_RUTA,
-          note: `Asignada a mensajero ${route.messenger.nombre} (ruta ${route.id})`,
+          note: `Asignada a mensajero ${created.messenger.nombre} (ruta ${created.id})`,
           byUserId: auth.session.user.id,
-        },
+        })),
       });
-    }
-  });
 
-  return NextResponse.json({ route }, { status: 201 });
+      return created;
+    });
+
+    return NextResponse.json({ route }, { status: 201 });
+  } catch (error) {
+    if (error instanceof Error && error.message === CARD_ASSIGNMENT_CLOSED) {
+      return NextResponse.json(
+        {
+          error:
+            "Una o mas tarjetas fueron retornadas o devueltas mientras se creaba la ruta. Recarga y selecciona tarjetas vigentes.",
+        },
+        { status: 409 },
+      );
+    }
+    throw error;
+  }
 }
 
 export async function PATCH(request: Request) {
@@ -391,19 +435,83 @@ export async function PATCH(request: Request) {
       }
 
       const identifier = payload.identifier.trim();
-      const digits = identifier.replace(/\D/g, "");
-      const foundItem = route.items.find((item) => {
-        return (
-          item.card.id === identifier ||
-          item.card.tc === identifier ||
-          item.card.externalReference === identifier ||
-          item.card.customer.cedula === identifier ||
-          item.card.customer.cedula.replace(/\D/g, "") === digits
-        );
+      const toCandidate = (item: (typeof route.items)[number]) => ({
+        itemId: item.id,
+        cardId: item.card.id,
+        tc: item.card.tc,
+        cedula: item.card.customer.cedula,
+        nombre: item.card.customer.nombre,
+        status: item.card.status,
+        dispatchDate: item.card.dispatchDate,
+        returnReason: item.card.returnReason,
       });
+      const conflict = (
+        kind: "REQUIERE_SELECCION" | "SOLO_CERRADAS",
+        items: readonly (typeof route.items)[number][],
+      ) =>
+        NextResponse.json(
+          {
+            error:
+              kind === "SOLO_CERRADAS"
+                ? "La tarjeta encontrada esta cerrada y requiere confirmacion explicita"
+                : "Hay varias tarjetas vigentes que coinciden; selecciona una explicitamente",
+            kind,
+            candidates: items.map(toCandidate),
+          },
+          { status: 409 },
+        );
+
+      let foundItem: (typeof route.items)[number] | undefined;
+      if (payload.itemId) {
+        const explicitItems = route.items.filter((item) => item.id === payload.itemId);
+        if (!explicitItems.length) {
+          return NextResponse.json({ error: "Item de ruta no encontrado" }, { status: 404 });
+        }
+        foundItem = explicitItems[0];
+      } else {
+        const explicitCardItems = route.items.filter((item) => item.card.id === identifier);
+        if (explicitCardItems.length > 1) {
+          return conflict("REQUIERE_SELECCION", explicitCardItems);
+        }
+        if (explicitCardItems.length === 1) {
+          foundItem = explicitCardItems[0];
+        } else {
+          const resolution = resolveOperationalIdentifier(
+            identifier,
+            route.items.map((item) => item.card),
+          );
+          if (resolution.kind === "REQUIERE_SELECCION") {
+            return conflict(
+              resolution.kind,
+              route.items.filter((item) =>
+                resolution.options.some((card) => card.id === item.card.id),
+              ),
+            );
+          }
+          if (resolution.kind === "SOLO_CERRADAS") {
+            return conflict(
+              resolution.kind,
+              route.items.filter((item) =>
+                resolution.closedCards.some((card) => card.id === item.card.id),
+              ),
+            );
+          }
+          if (resolution.kind === "RESUELTA") {
+            const resolvedItems = route.items.filter((item) => item.card.id === resolution.card.id);
+            if (resolvedItems.length > 1) {
+              return conflict("REQUIERE_SELECCION", resolvedItems);
+            }
+            foundItem = resolvedItems[0];
+          }
+        }
+      }
 
       if (!foundItem) {
         return NextResponse.json({ error: "Tarjeta no encontrada en la ruta" }, { status: 404 });
+      }
+
+      if (isClosedCardStatus(foundItem.card.status) && !payload.confirmClosed) {
+        return conflict("SOLO_CERRADAS", [foundItem]);
       }
 
       try {
@@ -416,6 +524,7 @@ export async function PATCH(request: Request) {
               comentario: payload.comentario,
             },
             auth.session.user.id,
+            { requireOpenCard: !payload.confirmClosed },
           ),
         );
 
@@ -433,6 +542,12 @@ export async function PATCH(request: Request) {
           return NextResponse.json(
             { error: "Motivo de devolucion requerido para marcar tarjeta retornada" },
             { status: 400 },
+          );
+        }
+        if (error instanceof Error && error.message === CARD_CLOSED_REQUIRES_CONFIRMATION) {
+          return NextResponse.json(
+            { error: "La tarjeta se cerro antes de actualizarla. Confirma la seleccion explicitamente." },
+            { status: 409 },
           );
         }
         throw error;

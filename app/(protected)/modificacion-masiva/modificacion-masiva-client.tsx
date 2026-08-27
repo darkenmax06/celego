@@ -1,7 +1,11 @@
 "use client";
 
-import { KeyboardEvent, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { CardStatus } from "@prisma/client";
+import {
+  OperationalCardPicker,
+  type OperationalCard,
+} from "@/components/cards/operational-card-picker";
 import { PageHeader } from "@/components/ui/page-header";
 import { Panel } from "@/components/ui/panel";
 import { StatusBadge } from "@/components/ui/status-badge";
@@ -122,52 +126,24 @@ export default function ModificacionMasivaClient() {
 
   const allSelected = scannedCards.length > 0 && selectedCardIds.length === scannedCards.length;
 
-  async function findCard(identifier: string) {
-    const res = await fetch(`/api/tarjetas?q=${encodeURIComponent(identifier)}`, { cache: "no-store" });
-    if (!res.ok) return null;
-    const json = await res.json();
-    const cards = (json.cards ?? []) as CardRow[];
-    if (!cards.length) return null;
-
-    const digits = identifier.replace(/\D/g, "");
-    return (
-      cards.find((card) => card.tc === identifier) ??
-      cards.find(
-        (card) =>
-          card.customer.cedula === identifier || card.customer.cedula.replace(/\D/g, "") === digits,
-      ) ??
-      cards[0]
-    );
-  }
-
-  async function addCardByScan() {
-    const value = scanInput.trim();
-    if (!value) return;
-
-    const card = await findCard(value);
-    if (!card) {
-      setMessage("No se encontro tarjeta para ese TC/Cedula");
-      setScanInput("");
-      return;
-    }
-
+  function addSelectedCard(card: OperationalCard) {
     if (scannedCards.some((item) => item.id === card.id)) {
       setMessage("La tarjeta ya fue pistoleada");
-      setScanInput("");
       return;
     }
 
-    setScannedCards((prev) => [...prev, card]);
+    const row: CardRow = {
+      id: card.id,
+      tc: card.tc,
+      provincia: card.provincia ?? "",
+      zona: card.zona ?? "",
+      isRemote: Boolean(card.isRemote),
+      status: card.status,
+      customer: card.customer,
+    };
+    setScannedCards((prev) => [...prev, row]);
     setSelectedCardIds((prev) => [...prev, card.id]);
-    setScanInput("");
     setMessage("");
-  }
-
-  function onScanKeyDown(event: KeyboardEvent<HTMLInputElement>) {
-    if (event.key === "Enter") {
-      event.preventDefault();
-      void addCardByScan();
-    }
   }
 
   async function applyBatchChanges() {
@@ -262,23 +238,15 @@ export default function ModificacionMasivaClient() {
       />
 
       <Panel>
-        <div className="mb-3 flex items-center gap-2 rounded-xl border border-blue-200 bg-blue-50 px-4 py-3">
-          <span className="text-lg text-blue-700">⊙</span>
-          <input
-            value={scanInput}
-            onChange={(event) => setScanInput(event.target.value)}
-            onKeyDown={onScanKeyDown}
-            placeholder="Pistolear TC/Cedula y presionar Enter"
-            className="flex-1 bg-transparent text-sm outline-none"
-            autoFocus
-          />
-          <button
-            onClick={() => void addCardByScan()}
-            className="rounded-lg border border-blue-300 bg-white px-3 py-1.5 text-xs font-semibold text-blue-700"
-          >
-            Agregar
-          </button>
-        </div>
+        <OperationalCardPicker
+          value={scanInput}
+          onValueChange={setScanInput}
+          onCardSelected={addSelectedCard}
+          onMessage={setMessage}
+          placeholder="Pistolear TC/Cedula y presionar Enter"
+          className="mb-3"
+          autoFocus
+        />
 
         <div className="mb-3 flex flex-wrap items-center gap-2">
           <select
