@@ -1,5 +1,6 @@
 import {
   ensureBaseCatalogs,
+  ensureDebitCardIntegrity,
   normalizeDigitalDeliveryCycles,
   normalizeLegacyRedactionSequences,
 } from "../lib/bootstrap";
@@ -7,6 +8,7 @@ import { prisma } from "../lib/prisma";
 
 async function main() {
   await ensureBaseCatalogs();
+  await ensureDebitCardIntegrity();
   await normalizeLegacyRedactionSequences();
   await normalizeDigitalDeliveryCycles();
   console.log("Catalogos base, secuencias y ciclos digitales creados/validados.");

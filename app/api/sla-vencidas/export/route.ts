@@ -1,18 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import { CardStatus } from "@prisma/client";
+import { CardProductType } from "@prisma/client";
 import JSZip from "jszip";
 import sharp from "sharp";
 import { requireApiSession } from "@/lib/api-session";
 import { prisma } from "@/lib/prisma";
 import { remainingBusinessDays } from "@/lib/sla";
-
-const CLOSED_STATUSES: CardStatus[] = [
-  CardStatus.ENTREGADA,
-  CardStatus.ENTREGA_DIGITAL,
-  CardStatus.RETORNADA,
-  CardStatus.ACUSE_RECIBIDO,
-  CardStatus.DEVUELTA_TIENDA,
-];
+import { slaWhere } from "../shared";
 
 function escapeXml(value: string) {
   return value
@@ -49,7 +42,8 @@ function formatDate(value: Date | null) {
 function buildSlaSvg(input: {
   nombre: string;
   cedula: string;
-  tc: string;
+  identifier: string;
+  productType: string;
   provincia: string;
   status: string;
   mensajero: string;
@@ -71,7 +65,7 @@ function buildSlaSvg(input: {
   <rect x="40" y="40" width="1320" height="740" rx="22" fill="#ffffff"/>
 
   <text x="80" y="110" font-size="36" font-family="DejaVu Sans, Arial, sans-serif" fill="#7f1d1d" font-weight="700">${escapeXml(input.nombre)}</text>
-  <text x="80" y="145" font-size="18" font-family="DejaVu Sans, Arial, sans-serif" fill="#475569">TC ${escapeXml(input.tc)} · Cedula ${escapeXml(input.cedula)}</text>
+  <text x="80" y="145" font-size="18" font-family="DejaVu Sans, Arial, sans-serif" fill="#475569">${escapeXml(input.productType)} ${escapeXml(input.identifier)} · Cedula ${escapeXml(input.cedula)}</text>
 
   <rect x="80" y="178" width="1240" height="90" rx="12" fill="#fff1f2" stroke="#fecdd3"/>
   <text x="100" y="210" font-size="13" font-family="DejaVu Sans, Arial, sans-serif" fill="#9f1239">SLA vencida</text>
@@ -110,17 +104,23 @@ export async function GET(request: NextRequest) {
   if ("error" in auth) return auth.error;
 
   const messengerId = request.nextUrl.searchParams.get("messengerId");
+  const rawProductType = request.nextUrl.searchParams.get("productType");
+  if (rawProductType && rawProductType !== "ALL" && !(rawProductType in CardProductType)) {
+    return NextResponse.json({ error: "Producto invalido" }, { status: 400 });
+  }
   const today = new Date();
   today.setHours(0, 0, 0, 0);
 
   const cards = await prisma.card.findMany({
-    where: {
-      status: { notIn: CLOSED_STATUSES },
-      slaDueDate: { lt: today },
-      ...(messengerId && messengerId !== "ALL" ? { currentMessengerId: messengerId } : {}),
-    },
+    where: slaWhere({
+      tab: "OVERDUE",
+      productType: rawProductType && rawProductType !== "ALL" ? rawProductType as CardProductType : undefined,
+      messengerId: messengerId && messengerId !== "ALL" ? messengerId : undefined,
+    }),
     select: {
       tc: true,
+      requestNumber: true,
+      productType: true,
       status: true,
       provincia: true,
       slaDueDate: true,
@@ -152,7 +152,8 @@ export async function GET(request: NextRequest) {
     const svg = buildSlaSvg({
       nombre: card.customer.nombre,
       cedula: card.customer.cedula,
-      tc: card.tc,
+      identifier: card.productType === CardProductType.DEBITO ? card.requestNumber ?? "" : card.tc ?? "",
+      productType: card.productType === CardProductType.DEBITO ? "SOLICITUD" : "TARJETA",
       provincia: card.provincia,
       status: card.status.replaceAll("_", " "),
       mensajero: card.currentMessenger?.nombre ?? "",
@@ -162,7 +163,8 @@ export async function GET(request: NextRequest) {
       telefonos: splitPhones(card.customer.telefonosRaw),
     });
     const jpg = await svgToJpeg(svg);
-    const filename = `${sanitizeFilePart(card.customer.nombre)} - ${sanitizeFilePart(card.tc)}.jpg`;
+    const identifier = card.productType === CardProductType.DEBITO ? card.requestNumber ?? "SIN_SOLICITUD" : card.tc ?? "SIN_TARJETA";
+    const filename = `${sanitizeFilePart(card.customer.nombre)} - ${sanitizeFilePart(identifier)}.jpg`;
     zip.file(filename, jpg);
   }
 

@@ -95,6 +95,7 @@ export async function upsertCardsFromImport(rows: ParsedCardRow[], byUserId?: st
     const existing = await prisma.card.findFirst({
       where: {
         tc: item.tc,
+        productType: "CREDITO",
         customerId: customer.id,
         dispatchDate: item.fechaDespacho ?? undefined,
       },
@@ -240,6 +241,10 @@ export async function batchUpdateCards(
           isRemote: changes.isRemote ?? undefined,
           currentMessengerId:
             changes.messengerId === undefined ? undefined : changes.messengerId,
+          lastAssignedMessengerId:
+            changes.messengerId === undefined || changes.messengerId === null
+              ? undefined
+              : changes.messengerId,
         },
         alwaysLog: shouldUpdateStatus,
       });

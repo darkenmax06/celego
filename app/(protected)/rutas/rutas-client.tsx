@@ -19,7 +19,9 @@ type RouteItem = {
   checkedAt: string | null;
   card: {
     id: string;
-    tc: string;
+    tc: string | null;
+    requestNumber: string | null;
+    productType: "CREDITO" | "DEBITO";
     provincia: string;
     zona: string;
     status: string;
@@ -32,6 +34,7 @@ type RouteItem = {
 type RouteRow = {
   id: string;
   fecha: string;
+  routeProductFilter: string;
   status: string;
   notas: string | null;
   messenger: Messenger;
@@ -79,10 +82,29 @@ type ScanResult = {
   nombre: string;
 };
 
+type RouteCandidate = {
+  id: string;
+  productType: "CREDITO" | "DEBITO";
+  identifier: string;
+  status: string;
+  provincia: string;
+  zona: string;
+  customer: { nombre: string; cedula: string };
+  eligible: boolean;
+  reason: "YA_ASIGNADA" | "ESTADO_TERMINAL" | null;
+};
+type RoutePreviewItem = {
+  identifier: string;
+  classification: "ENCONTRADO" | "AMBIGUO" | "NO_ENCONTRADO" | "YA_ASIGNADA" | "NO_ELEGIBLE";
+  candidates: RouteCandidate[];
+};
+type RoutePreview = { items: RoutePreviewItem[]; summary: { found: number; ambiguous: number; notFound: number; alreadyAssigned: number; notEligible: number; duplicates: number } };
+
 type RoutesDraft = {
   moduleTab: ModuleTab;
   lotTab: LotTab;
   fecha: string;
+  routeProductFilter: "ALL" | "CREDITO" | "DEBITO";
   messengerId: string;
   identifiers: string;
   selectedRouteId: string;
@@ -166,6 +188,9 @@ export default function RutasClient() {
     "rutas:fecha",
     new Date().toISOString().slice(0, 10),
   );
+  const [routeProductFilter, setRouteProductFilter] = usePersistentState<
+    "ALL" | "CREDITO" | "DEBITO"
+  >("rutas:producto", "ALL");
   const [messengerId, setMessengerId] = usePersistentState("rutas:messenger", "");
   const [identifiers, setIdentifiers] = useState("");
   const [selectedRouteId, setSelectedRouteId] = usePersistentState("rutas:selected-route", "");
@@ -199,12 +224,15 @@ export default function RutasClient() {
 
   const [message, setMessage] = useState("");
   const [savingNewLot, setSavingNewLot] = useState(false);
+  const [routePreview, setRoutePreview] = useState<RoutePreview | null>(null);
+  const [routeSelections, setRouteSelections] = useState<Record<string, string>>({});
 
   const draftPayload = useMemo<RoutesDraft>(
     () => ({
       moduleTab,
       lotTab,
       fecha,
+      routeProductFilter,
       messengerId,
       identifiers,
       selectedRouteId,
@@ -230,6 +258,7 @@ export default function RutasClient() {
       lotTab,
       messengerId,
       moduleTab,
+      routeProductFilter,
       scanComment,
       scanInput,
       scanResult,
@@ -248,6 +277,7 @@ export default function RutasClient() {
       setModuleTab(draft.moduleTab);
       setLotTab(draft.lotTab);
       setFecha(draft.fecha);
+      setRouteProductFilter(draft.routeProductFilter ?? "ALL");
       setMessengerId(draft.messengerId);
       setIdentifiers(draft.identifiers);
       setSelectedRouteId(draft.selectedRouteId);
@@ -303,6 +333,7 @@ export default function RutasClient() {
       page: String(pageArg),
       pageSize: String(routesPagination.pageSize),
     });
+    if (routeProductFilter !== "ALL") params.set("productType", routeProductFilter);
     const res = await fetch(`/api/rutas?${params.toString()}`, { cache: "no-store" });
     const json = await res.json();
     const list = json.routes ?? [];
@@ -353,7 +384,7 @@ export default function RutasClient() {
 
   useEffect(() => {
     void loadRoutes(routePage);
-  }, [fecha, routePage]);
+  }, [fecha, routePage, routeProductFilter]);
 
   useEffect(() => {
     void loadLots(lotPage);
@@ -374,15 +405,57 @@ export default function RutasClient() {
     [lots, selectedLotTrackingId],
   );
 
-  async function createRoute(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const parsed = identifiers
+  function parseRouteIdentifiers() {
+    return identifiers
       .split(/[\n,;]+/g)
       .map((item) => item.trim())
       .filter(Boolean);
+  }
+
+  async function previewRoute(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const parsed = parseRouteIdentifiers();
 
     if (!parsed.length) {
-      setMessage("Ingresa al menos un TC/Cedula/Referencia");
+      setMessage("Ingresa al menos una tarjeta, solicitud, cédula o referencia");
+      return;
+    }
+
+    const res = await fetch("/api/rutas/candidatos", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ identifiers: parsed }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      setMessage(data.error ?? "No se pudo previsualizar la ruta");
+      return;
+    }
+    const defaults: Record<string, string> = {};
+    for (const item of data.items as RoutePreviewItem[]) {
+      const eligible = item.candidates.filter((candidate) => candidate.eligible);
+      if (eligible.length === 1) defaults[item.identifier] = eligible[0].id;
+    }
+    setRouteSelections(defaults);
+    setRoutePreview(data as RoutePreview);
+    setMessage("Revisa la previsualización antes de crear la ruta.");
+  }
+
+  async function createRoute() {
+    if (!routePreview) {
+      setMessage("Primero previsualiza los identificadores.");
+      return;
+    }
+    const unresolved = routePreview.items.filter((item) =>
+      item.classification !== "ENCONTRADO" && !routeSelections[item.identifier],
+    );
+    if (unresolved.length) {
+      setMessage("Resuelve las coincidencias ambiguas y elimina los identificadores no elegibles.");
+      return;
+    }
+    const selectedIds = [...new Set(Object.values(routeSelections))];
+    if (!selectedIds.length) {
+      setMessage("No hay tarjetas elegibles para crear la ruta.");
       return;
     }
 
@@ -392,7 +465,8 @@ export default function RutasClient() {
       body: JSON.stringify({
         fecha,
         messengerId,
-        identifiers: parsed,
+        identifiers: parseRouteIdentifiers(),
+        cardIds: selectedIds,
       }),
     });
 
@@ -404,6 +478,8 @@ export default function RutasClient() {
 
     setMessage(`Ruta creada con ${data.route.items.length} tarjetas`);
     setIdentifiers("");
+    setRoutePreview(null);
+    setRouteSelections({});
     setRoutePage(1);
     await loadRoutes(1);
     setSelectedRouteId(data.route.id);
@@ -676,7 +752,7 @@ export default function RutasClient() {
       {moduleTab === "operativo" ? (
         <div className="grid gap-5 xl:grid-cols-[360px_1fr]">
           <Panel title="Crear ruta diaria">
-            <form className="space-y-3" onSubmit={createRoute}>
+            <form className="space-y-3" onSubmit={previewRoute}>
               <div>
                 <label className="mb-1 block text-xs font-semibold uppercase text-slate-500">Fecha</label>
                 <input
@@ -701,21 +777,50 @@ export default function RutasClient() {
                 </select>
               </div>
               <div>
+                <label className="mb-1 block text-xs font-semibold uppercase text-slate-500">Producto en rutas listadas</label>
+                <select value={routeProductFilter} onChange={(event) => { setRouteProductFilter(event.target.value as "ALL" | "CREDITO" | "DEBITO"); setRoutePage(1); }} className="w-full rounded-xl border border-slate-300 px-3 py-2">
+                  <option value="ALL">Todos</option>
+                  <option value="CREDITO">Crédito</option>
+                  <option value="DEBITO">Débito</option>
+                </select>
+              </div>
+              <div>
                 <label className="mb-1 block text-xs font-semibold uppercase text-slate-500">
-                  Cedulas/TC/Referencias
+                  Tarjetas / Solicitudes / Cédulas / Referencias
                 </label>
                 <textarea
                   value={identifiers}
                   onChange={(event) => setIdentifiers(event.target.value)}
                   rows={7}
                   className="w-full rounded-xl border border-slate-300 px-3 py-2"
-                  placeholder="Una por linea o separadas por coma"
+                  placeholder="Una por línea o separadas por coma"
                 />
               </div>
               <button className="w-full rounded-xl bg-[#0f2544] px-4 py-2 text-sm font-semibold text-white">
-                Crear ruta
+                Previsualizar ruta
               </button>
             </form>
+
+            {routePreview ? (
+              <div className="mt-4 space-y-3 border-t border-slate-200 pt-3">
+                <div className="rounded-lg bg-blue-50 px-3 py-2 text-xs text-blue-900">
+                  Encontradas: {routePreview.summary.found} · Ambiguas: {routePreview.summary.ambiguous} · No encontradas: {routePreview.summary.notFound} · No elegibles: {routePreview.summary.alreadyAssigned + routePreview.summary.notEligible}
+                </div>
+                {routePreview.items.map((item) => (
+                  <div key={item.identifier} className="rounded-lg border border-slate-200 p-2 text-xs">
+                    <p className="font-semibold text-slate-800">{item.identifier} <span className="text-slate-500">({item.classification.replaceAll("_", " ")})</span></p>
+                    {item.candidates.filter((candidate) => candidate.eligible).map((candidate) => (
+                      <label key={candidate.id} className="mt-1 flex cursor-pointer items-start gap-2 rounded-md px-1 py-1 hover:bg-slate-50">
+                        <input type="radio" name={`candidate-${item.identifier}`} checked={routeSelections[item.identifier] === candidate.id} onChange={() => setRouteSelections((previous) => ({ ...previous, [item.identifier]: candidate.id }))} />
+                        <span><strong>{candidate.productType === "DEBITO" ? "Solicitud" : "Tarjeta"} {candidate.identifier}</strong><br />{candidate.customer.nombre} · {candidate.customer.cedula} · {candidate.provincia}/{candidate.zona}</span>
+                      </label>
+                    ))}
+                    {!item.candidates.filter((candidate) => candidate.eligible).length ? <p className="mt-1 text-rose-700">Sin despacho elegible para asignar.</p> : null}
+                  </div>
+                ))}
+                <button type="button" onClick={() => void createRoute()} className="w-full rounded-xl bg-emerald-700 px-4 py-2 text-sm font-semibold text-white">Crear ruta con selección</button>
+              </div>
+            ) : null}
 
           </Panel>
 
@@ -797,7 +902,7 @@ export default function RutasClient() {
                       value={scanInput}
                       onChange={(event) => setScanInput(event.target.value)}
                       onKeyDown={onScanKeyDown}
-                      placeholder="Pistolear TC o Cedula"
+                      placeholder="Pistolear tarjeta, solicitud o cédula"
                       className="rounded-xl border border-slate-300 px-3 py-2 text-sm"
                     />
                     <select
@@ -835,7 +940,7 @@ export default function RutasClient() {
                     <thead className="text-xs uppercase tracking-wide text-slate-500">
                       <tr>
                         <th className="pb-2">#</th>
-                        <th className="pb-2">TC</th>
+                        <th className="pb-2">Identificador</th>
                         <th className="pb-2">Cliente</th>
                         <th className="pb-2">Cedula</th>
                         <th className="pb-2">Provincia</th>
@@ -848,7 +953,7 @@ export default function RutasClient() {
                       {selectedRoute.items.map((item) => (
                         <tr key={item.id} className="border-t border-slate-100">
                           <td className="py-2 text-slate-400">{item.sequence}</td>
-                          <td className="py-2 font-medium">{item.card.tc}</td>
+                          <td className="py-2 font-medium"><span className="mr-1 text-xs text-slate-500">{item.card.productType === "DEBITO" ? "SOL" : "TC"}</span>{item.card.productType === "DEBITO" ? item.card.requestNumber : item.card.tc}</td>
                           <td className="py-2">{item.card.customer.nombre}</td>
                           <td className="py-2">{item.card.customer.cedula}</td>
                         <td className="py-2">{item.card.provincia}</td>

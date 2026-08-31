@@ -362,6 +362,7 @@ export async function POST(request: Request) {
           provincia: sentTo,
           zona: zoneForDestination,
           currentMessengerId: messenger.id,
+          lastAssignedMessengerId: messenger.id,
         },
       });
       await tx.cardStatusLog.create({

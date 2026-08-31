@@ -6,7 +6,7 @@ export async function ensureBaseCatalogs() {
   await prisma.sLAConfig.upsert({
     where: { id: "default" },
     update: {},
-    create: { id: "default", businessDays: 5 },
+    create: { id: "default", businessDays: 5, warningBusinessDays: 3 },
   });
 
   for (const p of PROVINCIAS_INICIALES) {
@@ -25,6 +25,12 @@ export async function ensureBaseCatalogs() {
     });
   }
 
+  await prisma.returnReason.upsert({
+    where: { nombre: "Orden anulada" },
+    update: {},
+    create: { nombre: "Orden anulada" },
+  });
+
   for (const zona of [...ZONAS, "REMOTA"]) {
     await prisma.zoneTariff.upsert({
       where: { zona },
@@ -38,6 +44,30 @@ export async function ensureBaseCatalogs() {
     update: {},
     create: { id: "default", remoteSurchargeCents: 0 },
   });
+}
+
+export async function ensureDebitCardIntegrity() {
+  await prisma.$executeRawUnsafe(`
+    CREATE UNIQUE INDEX IF NOT EXISTS "Card_debit_request_dispatch_key"
+    ON "Card" ("requestNumber", "dispatchDate")
+    WHERE "productType" = 'DEBITO'
+  `);
+
+  await prisma.$executeRawUnsafe(`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'card_product_identifier_valid'
+      ) THEN
+        ALTER TABLE "Card"
+        ADD CONSTRAINT card_product_identifier_valid CHECK (
+          ("productType" = 'CREDITO' AND "tc" IS NOT NULL AND "requestNumber" IS NULL)
+          OR
+          ("productType" = 'DEBITO' AND "tc" = '' AND "requestNumber" IS NOT NULL AND "dispatchDate" IS NOT NULL)
+        ) NOT VALID;
+      END IF;
+    END $$;
+  `);
 }
 
 export async function normalizeLegacyRedactionSequences() {

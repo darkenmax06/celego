@@ -5,6 +5,7 @@ import { prisma } from "@/lib/prisma";
 
 const schema = z.object({
   businessDays: z.number().int().min(1).max(30),
+  warningBusinessDays: z.number().int().min(0).max(30).optional(),
 });
 
 export async function GET() {
@@ -14,7 +15,7 @@ export async function GET() {
   const config = await prisma.sLAConfig.upsert({
     where: { id: "default" },
     update: {},
-    create: { id: "default", businessDays: 5 },
+    create: { id: "default", businessDays: 5, warningBusinessDays: 3 },
   });
 
   return NextResponse.json({ config });
@@ -33,11 +34,13 @@ export async function PATCH(request: Request) {
     where: { id: "default" },
     update: {
       businessDays: parsed.data.businessDays,
+      warningBusinessDays: parsed.data.warningBusinessDays,
       updatedById: auth.session.user.id,
     },
     create: {
       id: "default",
       businessDays: parsed.data.businessDays,
+      warningBusinessDays: parsed.data.warningBusinessDays ?? 3,
       updatedById: auth.session.user.id,
     },
   });

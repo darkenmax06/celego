@@ -25,6 +25,25 @@ enum CardStatus {
   RETORNADA
 }
 
+enum CardProductType {
+  CREDITO
+  DEBITO
+}
+
+enum DebitConsolidationRunStatus {
+  VALIDATING
+  READY
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+enum DebitConsolidationIssueSeverity {
+  WARNING
+  ROW_ERROR
+  BLOCKING
+}
+
 enum RouteStatus {
   PENDIENTE
   EN_PROCESO
@@ -76,6 +95,7 @@ model User {
   deliveryReassignments     CardDeliveryReassignment[] @relation("ReassignmentByUser")
   workflowDrafts            WorkflowDraft[]
   generatedBizcochitos      BizcochitoBatch[]          @relation("BizcochitoGeneratedBy")
+  createdDebitConsolidations DebitConsolidationRun[]    @relation("DebitConsolidationCreatedBy")
 }
 
 model Customer {
@@ -94,6 +114,8 @@ model Customer {
 model Card {
   id                    String                     @id @default(cuid())
   tc                    String
+  requestNumber         String?
+  productType           CardProductType            @default(CREDITO)
   externalReference     String?
   customerId            String
   customer              Customer                   @relation(fields: [customerId], references: [id], onDelete: Restrict)
@@ -114,6 +136,8 @@ model Card {
   returnReason          String?
   currentMessengerId    String?
   currentMessenger      Messenger?                 @relation("CurrentMessengerCards", fields: [currentMessengerId], references: [id], onDelete: SetNull)
+  lastAssignedMessengerId String?
+  lastAssignedMessenger Messenger?                 @relation("LastAssignedMessengerCards", fields: [lastAssignedMessengerId], references: [id], onDelete: SetNull)
   reassignedProvince    String?
   reassignedZone        String?
   reassignedAt          DateTime?
@@ -133,8 +157,11 @@ model Card {
   urgentCases           UrgentCase[]
   deliveryReassignments CardDeliveryReassignment[]
   bizcochitoItems       BizcochitoItem[]
+  debitStatusEvents     DebitStatusEvent[]
 
   @@index([tc])
+  @@index([productType, requestNumber])
+  @@index([productType, status, slaDueDate])
   @@index([status])
   @@index([provincia, zona])
   @@index([status, bizcochito, digitalDeliveryCycle])
@@ -169,10 +196,77 @@ model Messenger {
   dailyRecords      MessengerDailyRecord[]
   routes            Route[]
   currentCards      Card[]                     @relation("CurrentMessengerCards")
+  lastAssignedCards Card[]                     @relation("LastAssignedMessengerCards")
   reassignedCards   Card[]                     @relation("ReassignedMessengerCards")
   reassignmentsFrom CardDeliveryReassignment[] @relation("ReassignmentFromMessenger")
   reassignmentsTo   CardDeliveryReassignment[] @relation("ReassignmentToMessenger")
   reports           MessengerReport[]
+}
+
+model DebitConsolidationRun {
+  id                   String                       @id @default(cuid())
+  status               DebitConsolidationRunStatus  @default(VALIDATING)
+  validationToken      String                       @unique
+  dispatchDate         DateTime
+  baseFileName         String
+  baseFileSha256       String
+  baseFile             Bytes
+  newCardsFileName     String?
+  newCardsFileSha256   String?
+  newCardsFile         Bytes?
+  statusFileName       String?
+  statusFileSha256     String?
+  statusFile           Bytes?
+  outputFileName       String?
+  outputFile           Bytes?
+  counts               Json?
+  errorMessage         String?
+  createdById          String?
+  createdBy            User?                        @relation("DebitConsolidationCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  appliedAt            DateTime?
+  createdAt            DateTime                     @default(now())
+  updatedAt            DateTime                     @updatedAt
+  issues               DebitConsolidationIssue[]
+  statusEvents         DebitStatusEvent[]
+
+  @@index([status, createdAt])
+  @@index([baseFileSha256])
+}
+
+model DebitConsolidationIssue {
+  id            String                          @id @default(cuid())
+  runId         String
+  run           DebitConsolidationRun           @relation(fields: [runId], references: [id], onDelete: Cascade)
+  sourceFile    String
+  sheet         String?
+  rowNumber     Int?
+  requestNumber String?
+  severity      DebitConsolidationIssueSeverity
+  code          String
+  message       String
+  createdAt     DateTime                        @default(now())
+
+  @@index([runId, severity])
+  @@index([requestNumber])
+}
+
+model DebitStatusEvent {
+  id             String                 @id @default(cuid())
+  runId          String
+  run            DebitConsolidationRun  @relation(fields: [runId], references: [id], onDelete: Cascade)
+  cardId         String?
+  card           Card?                  @relation(fields: [cardId], references: [id], onDelete: SetNull)
+  requestNumber  String
+  trackingNumber String?
+  externalStatus String
+  movementAt     DateTime?
+  operator       String?
+  notes          String?
+  resolution     Json?
+  createdAt      DateTime               @default(now())
+
+  @@index([cardId, movementAt])
+  @@index([requestNumber, movementAt])
 }
 
 model MessengerServiceRate {
@@ -408,6 +502,7 @@ model BillingConfig {
 model SLAConfig {
   id           String   @id @default("default")
   businessDays Int      @default(5)
+  warningBusinessDays Int @default(3)
   updatedAt    DateTime @updatedAt
   updatedById  String?
   updatedBy    User?    @relation("SlaConfigUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)

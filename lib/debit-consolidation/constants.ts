@@ -1,0 +1,171 @@
+import type { DebitCardStatus } from "./types";
+
+export const DATA_HEADERS = [
+  "FECH ASIG",
+  "N-SS",
+  "TIPO",
+  "AREA",
+  "SUBAREA",
+  "ANALISTA_ASIGNADO",
+  "NRO_ID",
+  "CONTACTO",
+  "NOMBRE_DE_OFICINA",
+  "OFICIAL",
+  "PROVMUNSEC",
+  "DESCRIPCION_AMPLIADA",
+  "PROVINCIA",
+  "ESTADO",
+  "DISTRITO_MUNICIPIAL",
+  "SECTOR",
+  "CALLE",
+  "NUMERO",
+  "EMPRESA_EDIFICIO",
+  "DEPTO_APTO",
+  "REFERENCIA",
+  "TIPO_TEL_1",
+  "TEL_1",
+  "EXT_TEL_1",
+  "TIPO_TEL_2",
+  "TEL_2",
+  "EXT_TEL_2",
+  "TIPO_TEL_3",
+  "TEL_3",
+  "EXT_TEL_3",
+  "CREADO_POR",
+  "FECHA_CREACION",
+  "ZONA",
+  "STATUS",
+  "COMENTARIO",
+  "QUIEN RECIBE",
+  "INFO TERCERO",
+  "FECHA DE ENTREGA",
+  "Comentario BPD",
+  "AREAS REMOTAS",
+  "Status Cc",
+  "Contacto Cc",
+  "No. Contact",
+] as const;
+
+export const NEW_CARD_HEADERS = [
+  "NRO_SS",
+  "TIPO",
+  "AREA",
+  "SUBAREA",
+  "ANALISTA_ASIGNADO",
+  "NRO_ID",
+  "CONTACTO",
+  "NOMBRE_DE_OFICINA",
+  "OFICIAL",
+  "PROVMUNSEC",
+  "DESCRIPCION_AMPLIADA",
+  "PROVINCIA",
+  "MUNICIPIO",
+  "DISTRITO_MUNICIPIAL",
+  "SECTOR",
+  "CALLE",
+  "NUMERO",
+  "EMPRESA_EDIFICIO",
+  "DEPTO_APTO",
+  "REFERENCIA",
+  "TIPO_TEL_1",
+  "TEL_1",
+  "EXT_TEL_1",
+  "TIPO_TEL_2",
+  "TEL_2",
+  "EXT_TEL_2",
+  "TIPO_TEL_3",
+  "TEL_3",
+  "EXT_TEL_3",
+  "CREADO_POR",
+  "FECHA_CREACION",
+  "ESTADO",
+  "MOTIVO_DEL_CIERRE",
+  "DETALLE_CIERRE",
+  "NOTA",
+  "FechaAsig - VAL",
+  "BusqSol - DEL",
+  "BusqCed - CALL",
+  "NoAsig - RE",
+  "Dups",
+  "Val Sol",
+] as const;
+
+export const STATUS_REPORT_REQUIRED_HEADERS = [
+  "Tracking number",
+  "No. de orden",
+  "Status",
+  "Fecha de último movimiento",
+] as const;
+
+export const CANCELLED_DATA_STATUS = "TD- DEVUELTO ORDEN ANULADA";
+
+export type LegacyStatusResolution = {
+  cardStatus: DebitCardStatus;
+  normalizedDataStatus: string;
+  returnReason: string | null;
+};
+
+export const LEGACY_STATUS_MAP: Record<string, LegacyStatusResolution> = {
+  "": { cardStatus: "DESPACHADA", normalizedDataStatus: "", returnReason: null },
+  "EN PROCESO": {
+    cardStatus: "DESPACHADA",
+    normalizedDataStatus: "EN PROCESO",
+    returnReason: null,
+  },
+  "CNT BPD EN PROCESO": {
+    cardStatus: "DESPACHADA",
+    normalizedDataStatus: "CNT BPD - EN PROCESO",
+    returnReason: null,
+  },
+  "EN RUTA": { cardStatus: "EN_RUTA", normalizedDataStatus: "EN RUTA", returnReason: null },
+  "TD ENTREGADO": {
+    cardStatus: "ENTREGADA",
+    normalizedDataStatus: "TD- ENTREGADO",
+    returnReason: null,
+  },
+  "TD RETIRADA EN OFICINA": {
+    cardStatus: "ENTREGADA",
+    normalizedDataStatus: "TD- RETIRADA EN OFICINA",
+    returnReason: null,
+  },
+  "NO LOCALIZADO": {
+    cardStatus: "RETORNADA",
+    normalizedDataStatus: "NO LOCALIZADO",
+    returnReason: "No localizado",
+  },
+  "TD DEVUELTO DIRECCION IMCOMPLETA": {
+    cardStatus: "RETORNADA",
+    normalizedDataStatus: "TD- DEVUELTO DIRECCION IMCOMPLETA",
+    returnReason: "Direccion incompleta",
+  },
+  "TD DEVUELTO NO LOCALIZADO": {
+    cardStatus: "RETORNADA",
+    normalizedDataStatus: "TD- DEVUELTO NO LOCALIZADO",
+    returnReason: "No localizado",
+  },
+  "TD NO APLICA PASAPORTE": {
+    cardStatus: "RETORNADA",
+    normalizedDataStatus: "TD- NO APLICA PASAPORTE",
+    returnReason: "No aplica pasaporte",
+  },
+  "TD NO LE INTERESA": {
+    cardStatus: "RETORNADA",
+    normalizedDataStatus: "TD- NO LE INTERESA",
+    returnReason: "No le interesa",
+  },
+  "TD SOLICITADA POR ERROR": {
+    cardStatus: "RETORNADA",
+    normalizedDataStatus: "TD- SOLICITADA POR ERROR",
+    returnReason: "Solicitada por error",
+  },
+  "TD ZONA FUERA DE COBERTURA": {
+    cardStatus: "RETORNADA",
+    normalizedDataStatus: "TD- ZONA FUERA DE COBERTURA",
+    returnReason: "Zona fuera de cobertura",
+  },
+  "TD DEVUELTO ORDEN ANULADA": {
+    cardStatus: "RETORNADA",
+    normalizedDataStatus: CANCELLED_DATA_STATUS,
+    returnReason: "Orden anulada",
+  },
+};

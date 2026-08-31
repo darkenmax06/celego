@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { CardStatus } from "@prisma/client";
+import { CardProductType, CardStatus } from "@prisma/client";
 import { parseISO } from "date-fns";
 import { z } from "zod";
 import { requireApiSession } from "@/lib/api-session";
@@ -19,6 +19,25 @@ const updateSchema = z.object({
   note: z.string().optional(),
 });
 
+const createSchema = z.object({
+  productType: z.nativeEnum(CardProductType).default(CardProductType.CREDITO),
+  tc: z.string().trim().optional(),
+  requestNumber: z.string().trim().regex(/^4-\d{11}$/).optional(),
+  cedula: z.string().trim().min(1),
+  nombre: z.string().trim().min(1),
+  provincia: z.string().trim().optional(),
+  zona: z.string().trim().optional(),
+  isRemote: z.boolean().optional(),
+  dispatchDate: z.coerce.date().optional(),
+}).superRefine((value, ctx) => {
+  if (value.productType === CardProductType.CREDITO && !value.tc) {
+    ctx.addIssue({ code: "custom", path: ["tc"], message: "El n\u00famero de tarjeta es requerido" });
+  }
+  if (value.productType === CardProductType.DEBITO && !value.requestNumber) {
+    ctx.addIssue({ code: "custom", path: ["requestNumber"], message: "El n\u00famero de solicitud es requerido" });
+  }
+});
+
 export async function GET(request: NextRequest) {
   const auth = await requireApiSession(["ADMIN", "OPERADOR", "FACTURACION", "MENSAJERO"]);
   if ("error" in auth) return auth.error;
@@ -30,6 +49,7 @@ export async function GET(request: NextRequest) {
   const zona = searchParams.get("zona");
   const urgent = searchParams.get("urgent");
   const remote = searchParams.get("remote");
+  const productType = searchParams.get("productType");
   const from = searchParams.get("from");
   const to = searchParams.get("to");
   const pageRaw = Number(searchParams.get("page") ?? "1");
@@ -42,12 +62,14 @@ export async function GET(request: NextRequest) {
   if (q) {
     where.OR = [
       { tc: { contains: q, mode: "insensitive" } },
+      { requestNumber: { contains: q, mode: "insensitive" } },
       { externalReference: { contains: q, mode: "insensitive" } },
       { customer: { cedula: { contains: q, mode: "insensitive" } } },
       { customer: { nombre: { contains: q, mode: "insensitive" } } },
     ];
   }
   if (status && status !== "ALL") where.status = toCardStatus(status);
+  if (productType && productType !== "ALL") where.productType = productType;
   if (provincia && provincia !== "ALL") where.provincia = provincia;
   if (zona && zona !== "ALL") where.zona = zona;
   if (urgent === "1") where.urgent = true;
@@ -66,6 +88,7 @@ export async function GET(request: NextRequest) {
       include: {
         customer: true,
         currentMessenger: true,
+        lastAssignedMessenger: true,
         urgentCases: {
           where: { resolvedAt: null },
           orderBy: [{ level: "desc" }, { importedAt: "desc" }],
@@ -142,14 +165,18 @@ export async function PATCH(request: Request) {
           provincia: parsed.data.provincia ?? undefined,
           zona: parsed.data.zona ?? undefined,
           isRemote: parsed.data.isRemote ?? undefined,
-        currentMessengerId:
-          parsed.data.messengerId === undefined ? undefined : parsed.data.messengerId,
+          currentMessengerId:
+            parsed.data.messengerId === undefined ? undefined : parsed.data.messengerId,
+          lastAssignedMessengerId:
+            parsed.data.messengerId === undefined || parsed.data.messengerId === null
+              ? undefined
+              : parsed.data.messengerId,
         },
       });
 
       return tx.card.findUniqueOrThrow({
         where: { id: card.id },
-        include: { customer: true, currentMessenger: true },
+        include: { customer: true, currentMessenger: true, lastAssignedMessenger: true },
       });
     });
   } catch (error) {
@@ -169,11 +196,11 @@ export async function POST(request: Request) {
   const auth = await requireApiSession(["ADMIN", "OPERADOR"]);
   if ("error" in auth) return auth.error;
 
-  const body = await request.json();
-  const { tc, cedula, nombre, provincia, zona, isRemote } = body ?? {};
-  if (!tc || !cedula || !nombre) {
-    return NextResponse.json({ error: "tc, cedula y nombre son requeridos" }, { status: 400 });
+  const parsed = createSchema.safeParse(await request.json());
+  if (!parsed.success) {
+    return NextResponse.json({ error: "Datos de tarjeta inv\u00e1lidos" }, { status: 400 });
   }
+  const { productType, tc, requestNumber, cedula, nombre, provincia, zona, isRemote, dispatchDate } = parsed.data;
 
   const customer = await prisma.customer.upsert({
     where: { cedula },
@@ -183,13 +210,15 @@ export async function POST(request: Request) {
 
   const card = await prisma.card.create({
     data: {
-      tc,
+      tc: productType === CardProductType.CREDITO ? tc! : "",
+      requestNumber: productType === CardProductType.DEBITO ? requestNumber : null,
+      productType,
       customerId: customer.id,
       provincia: provincia ?? "Santo Domingo",
       zona: zona ?? "Metro",
       isRemote: Boolean(isRemote),
       status: CardStatus.DESPACHADA,
-      dispatchDate: new Date(),
+      dispatchDate: dispatchDate ?? new Date(),
     },
     include: { customer: true },
   });

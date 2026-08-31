@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import sharp from "sharp";
 import { requireApiSession } from "@/lib/api-session";
 import { prisma } from "@/lib/prisma";
+import { getCardIdentifier, getCardIdentifierLabel } from "@/lib/card-identifier";
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -59,7 +60,9 @@ export async function GET(request: NextRequest) {
   const generatedAt = new Date().toLocaleString("es-DO");
 
   const customerName = escapeXml(card.customer.nombre);
-  const tc = escapeXml(card.tc);
+  const identifier = getCardIdentifier(card);
+  const identifierLabel = getCardIdentifierLabel(card);
+  const tc = escapeXml(identifier);
   const cedula = escapeXml(card.customer.cedula);
   const provincia = escapeXml(card.provincia);
   const zona = escapeXml(card.zona);
@@ -79,7 +82,7 @@ export async function GET(request: NextRequest) {
   <rect x="40" y="40" width="1120" height="620" rx="24" fill="#ffffff"/>
   <text x="80" y="110" font-size="28" font-family="Arial" fill="#1e293b" font-weight="700">Resumen para mensajero</text>
   <text x="80" y="145" font-size="20" font-family="Arial" fill="#0f2544" font-weight="700">${customerName}</text>
-  <text x="80" y="175" font-size="16" font-family="Arial" fill="#64748b">TC ${tc} - Cedula ${cedula}</text>
+  <text x="80" y="175" font-size="16" font-family="Arial" fill="#64748b">${identifierLabel} ${tc} - Cedula ${cedula}</text>
   <text x="80" y="210" font-size="16" font-family="Arial" fill="#64748b">Provincia ${provincia} - Zona ${zona}</text>
   <text x="80" y="245" font-size="15" font-family="Arial" fill="#334155">Telefonos: ${phonesSafe}</text>
   <text x="80" y="280" font-size="15" font-family="Arial" fill="#334155">Direccion: ${addressSafe}</text>
@@ -94,7 +97,7 @@ export async function GET(request: NextRequest) {
   return new NextResponse(Uint8Array.from(jpg), {
     headers: {
       "Content-Type": "image/jpeg",
-      "Content-Disposition": `attachment; filename="contacto-${card.tc}.jpg"`,
+      "Content-Disposition": `attachment; filename="contacto-${identifier}.jpg"`,
     },
   });
 }

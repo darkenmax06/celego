@@ -6,7 +6,7 @@ import { PageHeader } from "@/components/ui/page-header";
 import { Panel } from "@/components/ui/panel";
 import { usePersistentState } from "@/lib/use-persistent-state";
 
-type SlaConfig = { id: string; businessDays: number };
+type SlaConfig = { id: string; businessDays: number; warningBusinessDays: number };
 type Motivo = { id: string; nombre: string; active: boolean };
 type Provincia = { id: string; nombre: string; zona: string; active: boolean };
 
@@ -59,7 +59,10 @@ export default function ConfiguracionClient() {
     const response = await fetch("/api/config/sla", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ businessDays: sla.businessDays }),
+      body: JSON.stringify({
+        businessDays: sla.businessDays,
+        warningBusinessDays: sla.warningBusinessDays,
+      }),
     });
     const json = await response.json();
     if (!response.ok) {
@@ -151,7 +154,7 @@ export default function ConfiguracionClient() {
           <div className="grid gap-5 xl:grid-cols-2">
             <Panel title="SLA de entrega">
               {sla ? (
-                <div className="flex items-center gap-3">
+                <div className="flex flex-wrap items-center gap-3">
                   <button
                     type="button"
                     onClick={() =>
@@ -168,6 +171,24 @@ export default function ConfiguracionClient() {
                   >
                     -
                   </button>
+                  <label className="ml-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                    Alerta previa
+                    <input
+                      type="number"
+                      min={0}
+                      max={30}
+                      value={sla.warningBusinessDays}
+                      onChange={(event) =>
+                        setSla((previous) =>
+                          previous
+                            ? { ...previous, warningBusinessDays: Math.max(0, Number(event.target.value) || 0) }
+                            : previous,
+                        )
+                      }
+                      className="mt-1 block w-20 rounded-lg border border-slate-300 px-2 py-1 text-sm font-normal text-slate-800"
+                    />
+                    <span className="mt-1 block normal-case">d\u00edas laborables</span>
+                  </label>
                   <div className="rounded-xl bg-slate-50 px-6 py-3 text-center">
                     <p className="font-display text-4xl font-bold text-[#0f2544]">
                       {sla.businessDays}
