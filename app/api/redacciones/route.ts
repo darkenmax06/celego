@@ -2,8 +2,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { CardStatus, Prisma, RedactionStatus, RedactionType } from "@prisma/client";
 import { z } from "zod";
 import { requireApiSession } from "@/lib/api-session";
+import { buildListEnvelope, compile, ListQueryValidationError } from "@/lib/list-query";
+import { redaccionesListQuery } from "@/lib/list-query/descriptors/redacciones";
 import { prisma } from "@/lib/prisma";
-import { clearUrgencyOnCardClosure } from "@/lib/urgent-alerts";
+import { assertRedactionOrigin } from "@/lib/dispatch-origin";
+import { applyCardTransition } from "@/lib/card-transition";
 
 const updateSchema = z.discriminatedUnion("action", [
   z.object({
@@ -25,25 +28,23 @@ export async function GET(request: NextRequest) {
   const auth = await requireApiSession(["ADMIN", "OPERADOR", "FACTURACION"]);
   if ("error" in auth) return auth.error;
 
-  const status = request.nextUrl.searchParams.get("status");
-  const zona = request.nextUrl.searchParams.get("zona");
-  const tipo = request.nextUrl.searchParams.get("tipo");
-  const date = request.nextUrl.searchParams.get("date");
-  const pageRaw = Number(request.nextUrl.searchParams.get("page") ?? "1");
-  const pageSizeRaw = Number(request.nextUrl.searchParams.get("pageSize") ?? "20");
-  const page = Number.isFinite(pageRaw) ? Math.max(1, Math.trunc(pageRaw)) : 1;
-  const pageSize = Number.isFinite(pageSizeRaw) ? Math.min(100, Math.max(1, Math.trunc(pageSizeRaw))) : 20;
-
-  const where: Record<string, unknown> = {};
-  if (status && status !== "ALL") where.status = status;
-  if (zona && zona !== "ALL") where.zona = zona;
-  if (tipo && tipo !== "ALL") where.tipo = tipo;
-  if (date) {
-    const start = new Date(date);
-    const end = new Date(start);
-    end.setDate(end.getDate() + 1);
-    where.fecha = { gte: start, lt: end };
+  // `status`/`tipo`/`origin` keep the "ALL" sentinel; `date` stays a SINGLE
+  // param expanded to [start, start + 1 day). The descriptor additionally
+  // VALIDATES the three enums: previously an unknown value reached Prisma and
+  // failed the request, so this reports it as a 400 instead.
+  let query;
+  try {
+    query = compile(redaccionesListQuery, request.nextUrl.searchParams);
+  } catch (error) {
+    if (error instanceof ListQueryValidationError) {
+      return NextResponse.json(
+        { error: `Valor no permitido para ${error.param}` },
+        { status: 400 },
+      );
+    }
+    throw error;
   }
+  const where = query.where;
 
   const [redacciones, total] = await Promise.all([
     prisma.redaction.findMany({
@@ -55,17 +56,16 @@ export async function GET(request: NextRequest) {
           orderBy: [{ sequence: "asc" }, { createdAt: "asc" }, { id: "asc" }],
         },
       },
-      orderBy: { createdAt: "desc" },
-      skip: (page - 1) * pageSize,
-      take: pageSize,
+      orderBy: query.orderBy,
+      skip: query.skip,
+      take: query.take,
     }),
     prisma.redaction.count({ where }),
   ]);
 
-  const totalPages = Math.max(1, Math.ceil(total / pageSize));
   return NextResponse.json({
     redacciones,
-    pagination: { page, pageSize, total, totalPages },
+    pagination: buildListEnvelope({ page: query.page, pageSize: query.pageSize, total }),
   });
 }
 
@@ -108,10 +108,19 @@ export async function PATCH(request: Request) {
 
     const cards = await prisma.card.findMany({
       where: { id: { in: toCreate.map((item) => item.cardId) } },
-      select: { id: true },
+      select: { id: true, dispatchOrigin: true },
     });
     if (cards.length !== toCreate.length) {
       return NextResponse.json({ error: "Hay tarjetas seleccionadas que no existen" }, { status: 404 });
+    }
+    if (!redaction.dispatchOrigin) {
+      return NextResponse.json({ error: "MISSING_DISPATCH_ORIGIN" }, { status: 409 });
+    }
+    try {
+      assertRedactionOrigin(redaction.dispatchOrigin, cards.map((card) => card.dispatchOrigin));
+    } catch (error) {
+      const code = error instanceof Error ? error.message : "MIXED_DISPATCH_ORIGIN";
+      return NextResponse.json({ error: code }, { status: 409 });
     }
 
     const appliedStatus =
@@ -148,40 +157,26 @@ export async function PATCH(request: Request) {
         for (const item of toCreate) {
           const card = await tx.card.findUnique({
             where: { id: item.cardId },
-            select: { id: true, status: true, returnReason: true },
+            select: { id: true, tc: true, status: true, returnReason: true, digitalDeliveryCycle: true },
           });
           if (!card) {
             continue;
           }
 
           const comentario = (item.comentario ?? redaction.notas ?? "").trim();
-          await tx.card.update({
-            where: { id: card.id },
+          await applyCardTransition({
+            tx,
+            card,
+            nextStatus: appliedStatus,
+            byUserId: auth.session.user.id,
+            note: comentario || `Tarjeta agregada a relacion aprobada ${redaction.id}`,
+            returnReason: requiresReturnReason ? comentario : null,
             data: {
-              status: appliedStatus,
               isRemote: item.isRemote ?? undefined,
-              returnReason: requiresReturnReason ? comentario : null,
               currentMessengerId:
                 appliedStatus === CardStatus.ENTREGADA || appliedStatus === CardStatus.RETORNADA
                   ? null
                   : undefined,
-            },
-          });
-
-          await clearUrgencyOnCardClosure({
-            tx,
-            cardId: card.id,
-            nextStatus: appliedStatus,
-            byUserId: auth.session.user.id,
-          });
-
-          await tx.cardStatusLog.create({
-            data: {
-              cardId: card.id,
-              fromStatus: card.status,
-              toStatus: appliedStatus,
-              note: comentario || `Tarjeta agregada a relacion aprobada ${redaction.id}`,
-              byUserId: auth.session.user.id,
             },
           });
         }

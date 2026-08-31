@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { CardStatus } from "@prisma/client";
+import { CardStatus, DispatchOrigin } from "@prisma/client";
 import { requireApiSession } from "@/lib/api-session";
 import { parseEntregasRetornosImport } from "@/lib/importers/entregas-retornos";
 import { prisma } from "@/lib/prisma";
@@ -8,6 +8,7 @@ import {
   isOperationalCardClosed,
   resolveOperationalCardLookup,
 } from "@/lib/operational-card-lookup";
+import { syncTcGuardForTransition } from "@/lib/card-transition";
 
 function lookupKey(tc: string, cedula: string) {
   return `${tc}\u0000${cedula}`;
@@ -19,6 +20,7 @@ function cardSummary(card: {
   status: CardStatus;
   dispatchDate: Date | null;
   returnReason: string | null;
+  dispatchOrigin: DispatchOrigin | null;
 }) {
   return {
     id: card.id,
@@ -26,6 +28,7 @@ function cardSummary(card: {
     status: card.status,
     dispatchDate: card.dispatchDate,
     returnReason: card.returnReason,
+    dispatchOrigin: card.dispatchOrigin,
   };
 }
 
@@ -35,6 +38,7 @@ const operationalCardMutationSelect = {
   status: true,
   returnReason: true,
   dispatchDate: true,
+  dispatchOrigin: true,
   createdAt: true,
   customer: {
     select: {
@@ -54,6 +58,10 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Archivo requerido" }, { status: 400 });
   }
 
+  const origin = form.get("origin");
+  if (origin !== "TORRE_POPULAR" && origin !== "CENTRO_ACOPIO") {
+    return NextResponse.json({ error: "origin TORRE_POPULAR o CENTRO_ACOPIO requerido" }, { status: 422 });
+  }
   const parsed = parseEntregasRetornosImport(Buffer.from(await file.arrayBuffer()));
   const lookupRows = Array.from(
     new Map(parsed.rows.map((row) => [lookupKey(row.tc, row.cedula), row])).values(),
@@ -90,7 +98,12 @@ export async function POST(request: Request) {
   let concurrentSkipped = 0;
 
   for (const row of parsed.rows) {
-    const candidates = cardsByLookup.get(lookupKey(row.tc, row.cedula)) ?? [];
+    if (!row.fecha) {
+      ambiguous += 1;
+      rows.push({ tc: row.tc, cedula: row.cedula, nombre: row.nombre, requestedStatus: row.status, action: "PROCEDENCIA_INCOMPLETA_FECHA_REQUERIDA" });
+      continue;
+    }
+    const candidates = (cardsByLookup.get(lookupKey(row.tc, row.cedula)) ?? []).filter((card) => card.dispatchOrigin === origin && card.dispatchDate?.toISOString().slice(0, 10) === row.fecha!.toISOString().slice(0, 10));
     const resolution = resolveOperationalCardLookup(
       { kind: "TC", value: row.tc },
       candidates,
@@ -182,6 +195,12 @@ export async function POST(request: Request) {
 
         return { kind: "CAMBIO_CONCURRENTE" as const, card: changedCard };
       }
+
+      await syncTcGuardForTransition(tx, {
+        tc: currentCard.tc,
+        cardId: currentCard.id,
+        nextStatus: plan.nextStatus,
+      });
 
       await clearUrgencyOnCardClosure({
         tx,

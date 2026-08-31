@@ -1,13 +1,26 @@
 import { prisma } from "@/lib/prisma";
 import { PROVINCIAS_INICIALES, RETURN_REASONS_DEFAULT, ZONAS } from "@/lib/constants";
+import { ensureCardTransitionPolicy } from "@/lib/card-transition-policy-store";
 import { CardStatus } from "@prisma/client";
 
 export async function ensureBaseCatalogs() {
+  await prisma.$executeRawUnsafe('DROP INDEX IF EXISTS "Card_debit_request_dispatch_key";').catch(() => undefined);
+
   await prisma.sLAConfig.upsert({
     where: { id: "default" },
     update: {},
     create: { id: "default", businessDays: 5 },
   });
+
+  await prisma.debitConsolidadoExportConfig.upsert({
+    where: { id: "default" },
+    update: {},
+    create: { id: "default", dispatchDateFrom: null },
+  });
+
+  // Enforcement switch for the card transition graph. Seeded at SHADOW so it
+  // observes without ever rejecting a write that succeeds today.
+  await ensureCardTransitionPolicy();
 
   for (const p of PROVINCIAS_INICIALES) {
     await prisma.provinceConfig.upsert({

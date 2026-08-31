@@ -18,6 +18,7 @@ import {
   Images,
   Search,
   TimerOff,
+  FileWarning,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { type ModuleName } from "@/lib/constants";
@@ -36,6 +37,7 @@ const NAV_ITEMS: Array<{
   { module: "sla_vencidas", label: "SLA vencidas", href: "/sla-vencidas", icon: TimerOff },
   { module: "rutas", label: "Rutas", href: "/rutas", icon: Route },
   { module: "operativo", label: "Operativo", href: "/operativo", icon: Phone },
+  { module: "contratos_pendientes", label: "Contratos pendientes", href: "/contratos-pendientes", icon: FileWarning },
   { module: "redaccion", label: "Redaccion", href: "/redaccion", icon: FileText },
   { module: "mensajeros", label: "Mensajeros", href: "/mensajeros", icon: Bike },
   { module: "facturacion", label: "Facturacion", href: "/facturacion", icon: HandCoins },

@@ -5,10 +5,23 @@ import {
   OperationalCardPicker,
   type OperationalCard,
 } from "@/components/cards/operational-card-picker";
+import {
+  RedaccionDraftsModal,
+  type SavedRedactionDraftSummary,
+} from "@/components/redaccion/redaccion-drafts-modal";
+import {
+  RedaccionErrorWizardModal,
+  type RedactionWizardErrorState,
+} from "@/components/redaccion/redaccion-error-wizard-modal";
 import { PageHeader } from "@/components/ui/page-header";
 import { Panel } from "@/components/ui/panel";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { WorkflowStatusBar } from "@/components/ui/workflow-status-bar";
+import {
+  admitCardIntoRedaction,
+  dispatchOriginLabel,
+  type DispatchOrigin,
+} from "@/lib/dispatch-origin";
 import { usePersistentState } from "@/lib/use-persistent-state";
 import { useWorkflowDraft } from "@/lib/use-workflow-draft";
 
@@ -21,6 +34,7 @@ type DraftRow = {
   zona: string;
   isRemote: boolean;
   comentario: string;
+  dispatchOrigin: DispatchOrigin | null;
 };
 
 type Redaction = {
@@ -30,6 +44,7 @@ type Redaction = {
   status: string;
   fecha: string;
   notas?: string | null;
+  dispatchOrigin?: DispatchOrigin | null;
   items: Array<{
     id: string;
     cardId: string;
@@ -100,6 +115,14 @@ export default function RedaccionClient() {
   const [editingRedactionId, setEditingRedactionId] = useState<string | null>(null);
   const [processing, setProcessing] = useState(false);
   const [message, setMessage] = useState("");
+  const [errorWizard, setErrorWizard] = useState<RedactionWizardErrorState | null>(null);
+  const [showApproveConfirm, setShowApproveConfirm] = useState(false);
+  const [activeDraftKey, setActiveDraftKey] = usePersistentState(
+    "redaccion:active-draft-key",
+    "default",
+  );
+  const [savedDrafts, setSavedDrafts] = useState<SavedRedactionDraftSummary[]>([]);
+  const [showDraftsModal, setShowDraftsModal] = useState(false);
 
   const draftPayload = useMemo<RedactionDraft>(
     () => ({
@@ -129,6 +152,7 @@ export default function RedaccionClient() {
   );
   const workflowDraft = useWorkflowDraft<RedactionDraft>({
     module: "redaccion",
+    contextKey: activeDraftKey,
     payload: draftPayload,
     shouldSave: retornos.length > 0 || entregas.length > 0,
     onRestore: (draft) => {
@@ -146,6 +170,22 @@ export default function RedaccionClient() {
   });
   const workflowDraftStatus = workflowDraft.status;
   const clearWorkflowDraft = workflowDraft.clearDraft;
+
+  async function loadSavedDrafts() {
+    try {
+      const res = await fetch("/api/workflow-drafts?module=redaccion&all=true", {
+        cache: "no-store",
+      });
+      const json = await res.json().catch(() => ({ drafts: [] }));
+      if (res.ok && Array.isArray(json.drafts)) {
+        setSavedDrafts(json.drafts as SavedRedactionDraftSummary[]);
+      }
+    } catch {}
+  }
+
+  useEffect(() => {
+    void loadSavedDrafts();
+  }, [workflowDraft.status, activeDraftKey]);
 
   const listaActiva = mode === "retorno" ? retornos : entregas;
   const allRetornosSelected = retornos.length > 0 && selectedRetornos.length === retornos.length;
@@ -185,29 +225,73 @@ export default function RedaccionClient() {
     void loadCatalogs();
   }, [historyDate, zona, historyPage]);
 
-  useEffect(() => {
-    if (
-      !retornos.length &&
-      !entregas.length &&
-      (workflowDraftStatus === "saved" || workflowDraftStatus === "restored")
-    ) {
-      void clearWorkflowDraft();
-    }
-  }, [
-    clearWorkflowDraft,
-    entregas.length,
-    retornos.length,
-    workflowDraftStatus,
-  ]);
+  async function persistDraftImmediately(key: string, payload: RedactionDraft) {
+    if (payload.retornos.length === 0 && payload.entregas.length === 0) return;
+    try {
+      await fetch("/api/workflow-drafts", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          module: "redaccion",
+          contextKey: key,
+          payload,
+        }),
+      });
+    } catch {}
+  }
 
   const allScannedCardIds = useMemo(
     () => new Set([...retornos.map((item) => item.cardId), ...entregas.map((item) => item.cardId)]),
     [retornos, entregas],
   );
 
+  // A redaction belongs to a single dispatch origin. The first scanned card fixes
+  // it for the whole draft; the API rejects mixed origins with a 409 anyway, so
+  // catching it here keeps the operator from building a draft that cannot ship.
+  const draftOrigin = useMemo<DispatchOrigin | null>(
+    () =>
+      [...retornos, ...entregas].find((item) => item.dispatchOrigin)?.dispatchOrigin ?? null,
+    [retornos, entregas],
+  );
+
   function addSelectedCard(card: OperationalCard) {
     if (allScannedCardIds.has(card.id)) {
-      setMessage("Esa tarjeta ya fue pistoleada en esta redaccion");
+      setErrorWizard({
+        type: "DUPLICATE",
+        title: "Tarjeta ya pistoleada",
+        subtitle: `TC: ${card.tc} · ${card.customer.nombre}`,
+        message: `La tarjeta ${card.tc} ya fue agregada previamente a la lista de esta redacción.`,
+        scannedCard: card,
+        suggestedAction:
+          "Revisa la tabla de tarjetas cargadas. No es necesario pistolear la misma tarjeta más de una vez en esta redacción.",
+      });
+      return;
+    }
+
+    const admission = admitCardIntoRedaction({
+      draftOrigin,
+      cardOrigin: card.dispatchOrigin,
+      cardLabel: card.tc,
+    });
+    if (!admission.ok) {
+      setErrorWizard({
+        type: admission.code === "MIXED_DISPATCH_ORIGIN" ? "MIXED_ORIGIN" : "MISSING_ORIGIN",
+        title:
+          admission.code === "MIXED_DISPATCH_ORIGIN"
+            ? "Incompatibilidad de Procedencia"
+            : "Procedencia No Registrada",
+        subtitle: `TC: ${card.tc} · ${card.customer.nombre}`,
+        message: admission.message,
+        scannedCard: card,
+        draftOrigin,
+        cardOrigin: card.dispatchOrigin,
+        zona,
+        totalDraftCards: retornos.length + entregas.length,
+        suggestedAction:
+          admission.code === "MIXED_DISPATCH_ORIGIN"
+            ? `Esta redacción contiene tarjetas de ${dispatchOriginLabel(draftOrigin)}. Aparta físicamente la tarjeta ${card.tc} para pistolearla en una redacción separada de ${dispatchOriginLabel(card.dispatchOrigin)}.`
+            : `La tarjeta ${card.tc} no tiene procedencia asignada en el sistema. Debes asignarle procedencia antes de procesarla en una relación.`,
+      });
       return;
     }
 
@@ -220,6 +304,7 @@ export default function RedaccionClient() {
       zona: card.zona ?? "",
       isRemote: Boolean(card.isRemote),
       comentario: "",
+      dispatchOrigin: card.dispatchOrigin,
     };
 
     if (mode === "retorno") {
@@ -271,17 +356,36 @@ export default function RedaccionClient() {
     setSelectedRetornos(retornos.map((item) => item.cardId));
   }
 
-  async function approveRedaction() {
+  function handleStartApprove() {
     if (!retornos.length && !entregas.length) {
-      setMessage("No hay tarjetas pistoleadas para aprobar");
-      return;
-    }
-    const missingReason = retornos.find((item) => !item.comentario.trim());
-    if (missingReason) {
-      setMessage(`Debes indicar motivo de devolucion para la tarjeta ${missingReason.tc}`);
+      setErrorWizard({
+        type: "APPROVAL_VALIDATION",
+        title: "Sin tarjetas para aprobar",
+        message: "No hay tarjetas retornadas ni acuses de entrega pistoleados en esta redacción.",
+        suggestedAction: "Pistolea al menos una tarjeta antes de aprobar la redacción.",
+      });
       return;
     }
 
+    const missingReasons = retornos.filter((item) => !item.comentario.trim());
+    if (missingReasons.length > 0) {
+      setErrorWizard({
+        type: "APPROVAL_VALIDATION",
+        title: "Motivos de Devolución Requeridos",
+        subtitle: `${missingReasons.length} tarjeta(s) sin motivo`,
+        message: "Debes especificar el motivo de devolución para todas las tarjetas retornadas antes de aprobar la redacción.",
+        missingCards: missingReasons.map((item) => ({ tc: item.tc, nombre: item.nombre })),
+        suggestedAction:
+          "Completa los motivos de devolución en la tabla (puedes seleccionarlas con el checkbox y usar la barra de asignación masiva de motivos) y vuelve a intentar la aprobación.",
+      });
+      return;
+    }
+
+    setShowApproveConfirm(true);
+  }
+
+  async function confirmApproveRedaction() {
+    setShowApproveConfirm(false);
     setProcessing(true);
     setMessage("");
 
@@ -306,7 +410,12 @@ export default function RedaccionClient() {
 
     const generateData = await generateRes.json();
     if (!generateRes.ok) {
-      setMessage(generateData.error ?? "No se pudo generar redaccion");
+      setErrorWizard({
+        type: "GENERIC",
+        title: "Error al generar redacción",
+        message: generateData.error ?? "No se pudo generar la redacción.",
+        suggestedAction: "Verifica los datos e inténtalo de nuevo o contacta al administrador.",
+      });
       setProcessing(false);
       return;
     }
@@ -320,7 +429,12 @@ export default function RedaccionClient() {
 
     const approveData = await approveRes.json();
     if (!approveRes.ok) {
-      setMessage(approveData.error ?? "No se pudo aprobar redaccion");
+      setErrorWizard({
+        type: "GENERIC",
+        title: "Error al aprobar redacción",
+        message: approveData.error ?? "No se pudo aprobar la redacción.",
+        suggestedAction: "Revisa los registros en el sistema e inténtalo nuevamente.",
+      });
       setProcessing(false);
       return;
     }
@@ -330,10 +444,155 @@ export default function RedaccionClient() {
     setSelectedRetornos([]);
     setHistoryDate(fecha);
     setHistoryPage(1);
-    setMessage(`Redaccion aprobada: ${approveData.updatedItems} tarjetas actualizadas`);
+    setMessage(`Redacción aprobada exitosamente: ${approveData.updatedItems} tarjeta(s) actualizadas`);
     setProcessing(false);
-    await workflowDraft.clearDraft();
+    await fetch("/api/workflow-drafts", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ module: "redaccion", contextKey: activeDraftKey }),
+    });
+    setActiveDraftKey(`draft_${Date.now()}`);
+    await loadSavedDrafts();
     await loadCatalogs();
+  }
+
+  async function handleCreateNewDraft() {
+    if (retornos.length > 0 || entregas.length > 0) {
+      await persistDraftImmediately(activeDraftKey, draftPayload);
+    }
+    const newKey = `draft_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+    setRetornos([]);
+    setEntregas([]);
+    setSelectedRetornos([]);
+    setBulkMotivo("");
+    setScanInput("");
+    setActiveDraftKey(newKey);
+    setShowDraftsModal(false);
+    await loadSavedDrafts();
+    setMessage("Nueva redacción en blanco iniciada");
+  }
+
+  async function handleSelectDraft(targetKey: string) {
+    if (targetKey === activeDraftKey) {
+      setShowDraftsModal(false);
+      return;
+    }
+    if (retornos.length > 0 || entregas.length > 0) {
+      await persistDraftImmediately(activeDraftKey, draftPayload);
+    }
+
+    const cached = savedDrafts.find((d) => d.contextKey === targetKey);
+    if (cached?.payload) {
+      const p = cached.payload as unknown as RedactionDraft;
+      setMode(p.mode ?? "retorno");
+      setScanInput(p.scanInput ?? "");
+      setZona(p.zona ?? "Este");
+      setFecha(p.fecha ?? new Date().toISOString().slice(0, 10));
+      setHistoryDate(p.historyDate ?? new Date().toISOString().slice(0, 10));
+      setRetornos((p.retornos as DraftRow[]) ?? []);
+      setEntregas((p.entregas as DraftRow[]) ?? []);
+      setSelectedRetornos(p.selectedRetornos ?? []);
+      setBulkMotivo(p.bulkMotivo ?? "");
+      setHistoryPage(p.historyPage ?? 1);
+    } else {
+      try {
+        const res = await fetch(
+          `/api/workflow-drafts?module=redaccion&contextKey=${encodeURIComponent(targetKey)}`,
+          { cache: "no-store" },
+        );
+        const json = await res.json().catch(() => ({ draft: null }));
+        if (json.draft?.payload) {
+          const p = json.draft.payload as RedactionDraft;
+          setMode(p.mode ?? "retorno");
+          setScanInput(p.scanInput ?? "");
+          setZona(p.zona ?? "Este");
+          setFecha(p.fecha ?? new Date().toISOString().slice(0, 10));
+          setHistoryDate(p.historyDate ?? new Date().toISOString().slice(0, 10));
+          setRetornos(p.retornos ?? []);
+          setEntregas(p.entregas ?? []);
+          setSelectedRetornos(p.selectedRetornos ?? []);
+          setBulkMotivo(p.bulkMotivo ?? "");
+          setHistoryPage(p.historyPage ?? 1);
+        }
+      } catch {}
+    }
+
+    setActiveDraftKey(targetKey);
+    setShowDraftsModal(false);
+    await loadSavedDrafts();
+    setMessage("Borrador seleccionado cargado en pantalla");
+  }
+
+  async function handleDeleteDraft(targetKey: string) {
+    await fetch("/api/workflow-drafts", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ module: "redaccion", contextKey: targetKey }),
+    });
+    if (targetKey === activeDraftKey) {
+      setRetornos([]);
+      setEntregas([]);
+      setSelectedRetornos([]);
+      setActiveDraftKey(`draft_${Date.now()}`);
+    }
+    await loadSavedDrafts();
+    setMessage("Borrador descartado");
+  }
+
+  async function handleSaveAndSwitchToCardOrigin(
+    newOrigin: DispatchOrigin,
+    card?: OperationalCard | null,
+  ) {
+    if (retornos.length > 0 || entregas.length > 0) {
+      await persistDraftImmediately(activeDraftKey, draftPayload);
+    }
+
+    const newKey = `draft_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+    const newRow: DraftRow | null = card
+      ? {
+          cardId: card.id,
+          tc: card.tc,
+          cedula: card.customer.cedula,
+          nombre: card.customer.nombre,
+          fecha: toDisplayDate(card.dispatchDate),
+          zona: card.zona ?? zona,
+          isRemote: Boolean(card.isRemote),
+          comentario: "",
+          dispatchOrigin: card.dispatchOrigin,
+        }
+      : null;
+
+    const nextRetornos = mode === "retorno" && newRow ? [newRow] : [];
+    const nextEntregas = mode === "entrega" && newRow ? [newRow] : [];
+
+    setRetornos(nextRetornos);
+    setEntregas(nextEntregas);
+    setSelectedRetornos([]);
+    setBulkMotivo("");
+    setScanInput("");
+
+    const nextPayload: RedactionDraft = {
+      mode,
+      scanInput: "",
+      zona: card?.zona ?? zona,
+      fecha,
+      historyDate,
+      retornos: nextRetornos,
+      entregas: nextEntregas,
+      selectedRetornos: [],
+      bulkMotivo: "",
+      historyPage: 1,
+    };
+    await persistDraftImmediately(newKey, nextPayload);
+
+    setActiveDraftKey(newKey);
+    setErrorWizard(null);
+    await loadSavedDrafts();
+    setMessage(
+      `Borrador anterior guardado. Redacción para ${dispatchOriginLabel(newOrigin)} iniciada${
+        newRow ? ` con tarjeta TC ${newRow.tc}` : ""
+      }.`,
+    );
   }
 
   async function exportRelation(format: "xlsx" | "pdf", redactionId?: string) {
@@ -350,6 +609,11 @@ export default function RedaccionClient() {
     });
     if (redactionId) {
       params.set("redactionIds", redactionId);
+      const targetRed = redacciones.find((r) => r.id === redactionId);
+      if (targetRed) {
+        if (targetRed.tipo) params.set("redactionType", targetRed.tipo);
+        if (targetRed.dispatchOrigin) params.set("origin", targetRed.dispatchOrigin);
+      }
     } else if (approvedRedactionIds.length) {
       params.set("redactionIds", approvedRedactionIds.join(","));
     }
@@ -442,14 +706,54 @@ export default function RedaccionClient() {
                 </option>
               ))}
             </select>
+
+            {draftOrigin ? (
+              <div className="flex items-center gap-2 rounded-xl border border-blue-200 bg-blue-50/90 px-3 py-2 text-xs text-blue-950 shadow-sm">
+                <span className="h-2 w-2 rounded-full bg-blue-600 animate-pulse" />
+                <span className="text-slate-600">Procedencia activa:</span>
+                <span className="font-bold text-blue-900">
+                  {draftOrigin === "TORRE_POPULAR" ? "🏛️ Torre Popular" : "📦 Centro de acopio"}
+                </span>
+                <span className="text-slate-400">·</span>
+                <span className="text-slate-600 font-medium">
+                  {retornos.length + entregas.length} tarjeta(s)
+                </span>
+              </div>
+            ) : (
+              <div className="flex items-center gap-1.5 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-500">
+                <span className="h-1.5 w-1.5 rounded-full bg-slate-400" />
+                <span>Procedencia: <em className="text-slate-600">Se fijará al pistolear la primera tarjeta</em></span>
+              </div>
+            )}
           </div>
-          <div className="flex flex-wrap gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <button
-              onClick={() => void approveRedaction()}
-              disabled={processing}
-              className="rounded-xl bg-[#0f2544] px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
+              type="button"
+              onClick={() => setShowDraftsModal(true)}
+              className="relative inline-flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-3.5 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50"
             >
-              {processing ? "Procesando..." : "Aprobar redaccion"}
+              <span>📂 Borradores</span>
+              {savedDrafts.length > 0 ? (
+                <span className="rounded-full bg-blue-600 px-2 py-0.5 text-xs font-bold text-white">
+                  {savedDrafts.length}
+                </span>
+              ) : null}
+            </button>
+
+            <button
+              type="button"
+              onClick={handleCreateNewDraft}
+              className="rounded-xl border border-slate-300 bg-white px-3.5 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50"
+            >
+              + Nueva redacción
+            </button>
+
+            <button
+              onClick={handleStartApprove}
+              disabled={processing || (!retornos.length && !entregas.length)}
+              className="rounded-xl bg-[#0f2544] px-4 py-2 text-sm font-semibold text-white shadow transition hover:bg-[#1a3860] disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {processing ? "Procesando..." : "Aprobar redacción"}
             </button>
           </div>
         </div>
@@ -538,6 +842,7 @@ export default function RedaccionClient() {
                 <th className="px-3 py-2">{mode === "retorno" ? "" : "#"}</th>
                 <th className="px-3 py-2">No.</th>
                 <th className="px-3 py-2">Numero TC</th>
+                <th className="px-3 py-2">Procedencia</th>
                 <th className="px-3 py-2">Cedula</th>
                 <th className="px-3 py-2">Nombre</th>
                 <th className="px-3 py-2">Fecha</th>
@@ -568,6 +873,23 @@ export default function RedaccionClient() {
                   </td>
                   <td className="px-3 py-2 text-slate-400">{index + 1}</td>
                   <td className="px-3 py-2 font-medium text-blue-700">{row.tc}</td>
+                  <td className="px-3 py-2">
+                    <span
+                      className={`inline-block rounded px-2 py-0.5 text-[11px] font-bold ${
+                        row.dispatchOrigin === "TORRE_POPULAR"
+                          ? "bg-blue-100 text-blue-800"
+                          : row.dispatchOrigin === "CENTRO_ACOPIO"
+                            ? "bg-amber-100 text-amber-900"
+                            : "bg-slate-100 text-slate-600"
+                      }`}
+                    >
+                      {row.dispatchOrigin === "TORRE_POPULAR"
+                        ? "🏛️ Torre Popular"
+                        : row.dispatchOrigin === "CENTRO_ACOPIO"
+                          ? "📦 Centro de acopio"
+                          : "⚠️ Sin procedencia"}
+                    </span>
+                  </td>
                   <td className="px-3 py-2">{row.cedula}</td>
                   <td className="px-3 py-2">{row.nombre}</td>
                   <td className="px-3 py-2">{row.fecha}</td>
@@ -602,7 +924,7 @@ export default function RedaccionClient() {
               {!listaActiva.length ? (
                 <tr>
                   <td
-                    colSpan={mode === "retorno" ? 9 : 8}
+                    colSpan={mode === "retorno" ? 10 : 9}
                     className="px-3 py-8 text-center text-sm text-slate-500"
                   >
                     No hay tarjetas. Pistolea TC/Cedula para agregarlas.
@@ -618,7 +940,20 @@ export default function RedaccionClient() {
           ))}
         </datalist>
 
-        {message ? <p className="mt-3 text-sm text-emerald-700">{message}</p> : null}
+        {message ? (
+          <div className="mt-4 flex items-center justify-between rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900 shadow-sm">
+            <div className="flex items-center gap-2">
+              <span className="font-bold text-emerald-700">✓</span>
+              <span>{message}</span>
+            </div>
+            <button
+              onClick={() => setMessage("")}
+              className="text-xs font-semibold text-emerald-700 hover:text-emerald-900"
+            >
+              Descartar
+            </button>
+          </div>
+        ) : null}
       </Panel>
 
       <Panel className="mt-5" title="Historial del dia/zona">
@@ -747,6 +1082,38 @@ export default function RedaccionClient() {
               setEditingRedactionId(null);
             }
           }}
+        />
+      ) : null}
+
+      {errorWizard ? (
+        <RedaccionErrorWizardModal
+          error={errorWizard}
+          onClose={() => setErrorWizard(null)}
+          onSaveCurrentAndSwitchOrigin={handleSaveAndSwitchToCardOrigin}
+        />
+      ) : null}
+
+      {showDraftsModal ? (
+        <RedaccionDraftsModal
+          drafts={savedDrafts}
+          activeDraftKey={activeDraftKey}
+          onSelectDraft={handleSelectDraft}
+          onDeleteDraft={(key) => void handleDeleteDraft(key)}
+          onCreateNewDraft={handleCreateNewDraft}
+          onClose={() => setShowDraftsModal(false)}
+        />
+      ) : null}
+
+      {showApproveConfirm ? (
+        <ApproveConfirmModal
+          retornosCount={retornos.length}
+          entregasCount={entregas.length}
+          zona={zona}
+          fecha={fecha}
+          draftOrigin={draftOrigin}
+          processing={processing}
+          onClose={() => setShowApproveConfirm(false)}
+          onConfirm={() => void confirmApproveRedaction()}
         />
       ) : null}
     </div>
@@ -953,6 +1320,103 @@ function EditRedactionModal({
             className="rounded-lg bg-[#0f2544] px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
           >
             {busy ? "Guardando..." : "Guardar cambios"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+type ApproveConfirmModalProps = {
+  retornosCount: number;
+  entregasCount: number;
+  zona: string;
+  fecha: string;
+  draftOrigin: DispatchOrigin | null;
+  processing: boolean;
+  onClose: () => void;
+  onConfirm: () => void;
+};
+
+function ApproveConfirmModal({
+  retornosCount,
+  entregasCount,
+  zona,
+  fecha,
+  draftOrigin,
+  processing,
+  onClose,
+  onConfirm,
+}: ApproveConfirmModalProps) {
+  const total = retornosCount + entregasCount;
+
+  return (
+    <div
+      className="fixed inset-0 z-[140] flex items-center justify-center overflow-y-auto bg-slate-950/60 p-3 sm:p-4 backdrop-blur-sm transition-all"
+      onClick={onClose}
+    >
+      <div
+        className="flex max-h-[90vh] w-full max-w-md flex-col overflow-hidden rounded-2xl bg-white shadow-2xl ring-1 ring-slate-900/10 animate-in fade-in zoom-in-95 duration-150"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="shrink-0 border-b border-slate-100 bg-slate-50/80 px-5 py-3">
+          <span className="inline-block rounded-md bg-blue-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-blue-800">
+            Confirmación de Cierre
+          </span>
+          <h3 className="mt-0.5 font-display text-base font-bold text-slate-900">
+            Aprobar Redacción de Estados
+          </h3>
+          <p className="text-[11px] text-slate-500">
+            Zona {zona} · {dateInputToDisplay(fecha)} · {dispatchOriginLabel(draftOrigin)}
+          </p>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-4 sm:p-5 space-y-3">
+          <p className="text-xs leading-relaxed text-slate-600">
+            Al aprobar esta redacción, se actualizarán los estados de las siguientes tarjetas en el sistema:
+          </p>
+
+          <div className="grid grid-cols-2 gap-2.5">
+            <div className="rounded-xl border border-rose-200 bg-rose-50/60 p-2.5 text-center">
+              <div className="font-display text-2xl font-extrabold text-rose-700">
+                {retornosCount}
+              </div>
+              <div className="mt-0.5 text-[10px] font-bold uppercase tracking-wider text-rose-900">
+                → RETORNADAS
+              </div>
+            </div>
+            <div className="rounded-xl border border-blue-200 bg-blue-50/60 p-2.5 text-center">
+              <div className="font-display text-2xl font-extrabold text-blue-700">
+                {entregasCount}
+              </div>
+              <div className="mt-0.5 text-[10px] font-bold uppercase tracking-wider text-blue-900">
+                → ENTREGADAS
+              </div>
+            </div>
+          </div>
+
+          <div className="rounded-lg border border-amber-200 bg-amber-50/70 p-2.5 text-[11px] leading-relaxed text-amber-900">
+            ⚠️ <strong>Aviso:</strong> Esta acción aplicará el cambio a{" "}
+            <strong>{total} tarjeta(s)</strong> y cerrará la redacción.
+          </div>
+        </div>
+
+        <div className="shrink-0 flex justify-end gap-2 border-t border-slate-100 bg-slate-50/80 px-4 py-2.5">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={processing}
+            className="rounded-lg border border-slate-300 bg-white px-3.5 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-50"
+          >
+            Cancelar
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            disabled={processing}
+            className="rounded-lg bg-[#0f2544] px-4 py-1.5 text-xs font-semibold text-white shadow transition hover:bg-[#1a3860] disabled:opacity-60"
+          >
+            {processing ? "Aprobando..." : "✓ Confirmar y actualizar"}
           </button>
         </div>
       </div>

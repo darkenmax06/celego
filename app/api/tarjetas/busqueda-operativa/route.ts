@@ -4,7 +4,10 @@ import {
   resolveOperationalCardLookup,
   type OperationalCardResolution,
 } from "@/lib/operational-card-lookup";
-import { findOperationalCardCandidates } from "@/lib/operational-card-service";
+import {
+  findOperationalCardCandidates,
+  resolveOperationalIdentifier,
+} from "@/lib/operational-card-service";
 
 function normalizedCedula(value: string) {
   const digits = value.replace(/\D/g, "");
@@ -36,4 +39,30 @@ export async function GET(request: NextRequest) {
   }
 
   return NextResponse.json({ result });
+}
+
+export async function POST(request: NextRequest) {
+  const auth = await requireApiSession(["ADMIN", "OPERADOR"]);
+  if ("error" in auth) return auth.error;
+
+  const body = await request.json().catch(() => null);
+  const identifiers = Array.isArray(body?.identifiers)
+    ? (body.identifiers as unknown[]).map((v) => String(v).trim()).filter(Boolean)
+    : [];
+  if (!identifiers.length) {
+    return NextResponse.json({ error: "Debes indicar al menos un TC o cédula" }, { status: 400 });
+  }
+
+  const cards = await findOperationalCardCandidates(identifiers);
+  const results: Array<{
+    identifier: string;
+    resolution: OperationalCardResolution<(typeof cards)[number]>;
+  }> = [];
+
+  for (const identifier of identifiers) {
+    const resolution = resolveOperationalIdentifier(identifier, cards);
+    results.push({ identifier, resolution });
+  }
+
+  return NextResponse.json({ results });
 }

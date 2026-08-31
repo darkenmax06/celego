@@ -22,6 +22,7 @@ export type OperationalCard = {
     cedula: string;
   };
   externalReference: string | null;
+  dispatchOrigin: "TORRE_POPULAR" | "CENTRO_ACOPIO" | null;
   isRemote: boolean;
   zona: string;
   provincia?: string | null;
@@ -41,6 +42,7 @@ type OperationalCardPickerProps = {
   value: string;
   onValueChange: (value: string) => void;
   onCardSelected: (card: OperationalCard) => void;
+  onCardsSelected?: (cards: OperationalCard[]) => void;
   onMessage?: (message: string) => void;
   placeholder?: string;
   buttonLabel?: string;
@@ -112,6 +114,7 @@ export function OperationalCardPicker({
   value,
   onValueChange,
   onCardSelected,
+  onCardsSelected,
   onMessage,
   placeholder = "Pistolear TC/Cedula y presionar Enter",
   buttonLabel = "Agregar",
@@ -168,11 +171,80 @@ export function OperationalCardPicker({
   }
 
   async function search() {
-    const query = value.trim();
-    if (!query || isSearching || disabled) return;
+    const raw = value.trim();
+    if (!raw || isSearching || disabled) return;
+
+    // Detect if input contains multiple identifiers (separated by newline, comma, semicolon, or whitespace)
+    const tokens = raw
+      .split(/[\n,;]+/g)
+      .map((t) => t.trim())
+      .filter(Boolean);
+
+    if (!tokens.length) return;
 
     setIsSearching(true);
     setFeedback("");
+
+    // If multiple tokens entered: use batch search endpoint
+    if (tokens.length > 1) {
+      try {
+        const response = await fetch("/api/tarjetas/busqueda-operativa", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ identifiers: tokens }),
+        });
+        const payload = await response.json().catch(() => null);
+
+        if (!response.ok || !payload || !Array.isArray(payload.results)) {
+          publishMessage("No se pudieron resolver las tarjetas ingresadas");
+          return;
+        }
+
+        const resolvedCards: OperationalCard[] = [];
+        const notFound: string[] = [];
+        const ambiguous: string[] = [];
+
+        for (const item of payload.results) {
+          const res = item.resolution;
+          if (res?.kind === "RESUELTA" && isOperationalCard(res.card)) {
+            resolvedCards.push(res.card);
+          } else if (res?.kind === "NO_ENCONTRADA") {
+            notFound.push(item.identifier);
+          } else {
+            ambiguous.push(item.identifier);
+          }
+        }
+
+        if (resolvedCards.length > 0) {
+          if (onCardsSelected) {
+            onCardsSelected(resolvedCards);
+          } else {
+            for (const c of resolvedCards) {
+              onCardSelected(c);
+            }
+          }
+          onValueChange("");
+          let msg = `Se agregaron ${resolvedCards.length} tarjetas.`;
+          if (notFound.length > 0) {
+            msg += ` No encontradas: ${notFound.slice(0, 3).join(", ")}${notFound.length > 3 ? "..." : ""}.`;
+          }
+          if (ambiguous.length > 0) {
+            msg += ` Requieren selección individual: ${ambiguous.slice(0, 3).join(", ")}.`;
+          }
+          publishMessage(msg);
+        } else {
+          publishMessage("No se encontraron tarjetas válidas con los datos ingresados");
+        }
+      } catch {
+        publishMessage("Error al procesar la búsqueda en lote");
+      } finally {
+        setIsSearching(false);
+      }
+      return;
+    }
+
+    // Single token lookup
+    const query = tokens[0];
     try {
       const response = await fetch(`/api/tarjetas/busqueda-operativa?q=${encodeURIComponent(query)}`, {
         cache: "no-store",
@@ -400,7 +472,22 @@ function CardCandidateSummary({ card }: { card: OperationalCard }) {
     <span className="block">
       <span className="flex flex-wrap items-center justify-between gap-2">
         <span className="font-semibold text-blue-700">TC {card.tc}</span>
-        <StatusBadge value={card.status} />
+        <div className="flex items-center gap-1.5">
+          {card.dispatchOrigin === "TORRE_POPULAR" ? (
+            <span className="rounded bg-blue-100 px-1.5 py-0.5 text-[11px] font-bold text-blue-800">
+              🏛️ Torre Popular
+            </span>
+          ) : card.dispatchOrigin === "CENTRO_ACOPIO" ? (
+            <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[11px] font-bold text-amber-900">
+              📦 Centro de acopio
+            </span>
+          ) : (
+            <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[11px] font-medium text-slate-600">
+              ⚠️ Sin procedencia
+            </span>
+          )}
+          <StatusBadge value={card.status} />
+        </div>
       </span>
       <span className="mt-2 block text-sm font-medium text-slate-900">{card.customer.nombre}</span>
       <span className="mt-0.5 block text-sm text-slate-600">Cedula: {card.customer.cedula}</span>

@@ -23,6 +23,22 @@ const reportSchema = z.object({
 
 const bodySchema = z.union([recordSchema, reportSchema]);
 
+function parseStartDate(raw: string): Date | null {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  const dayOnly = /^\d{4}-\d{2}-\d{2}$/.test(trimmed);
+  const d = new Date(dayOnly ? `${trimmed}T00:00:00.000Z` : trimmed);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+function parseEndDate(raw: string): Date | null {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  const dayOnly = /^\d{4}-\d{2}-\d{2}$/.test(trimmed);
+  const d = new Date(dayOnly ? `${trimmed}T23:59:59.999Z` : trimmed);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
 export async function GET(request: NextRequest) {
   const auth = await requireApiSession(["ADMIN", "OPERADOR", "FACTURACION", "MENSAJERO"]);
   if ("error" in auth) return auth.error;
@@ -31,31 +47,56 @@ export async function GET(request: NextRequest) {
   const from = request.nextUrl.searchParams.get("from");
   const to = request.nextUrl.searchParams.get("to");
 
+  const fromDate = from ? parseStartDate(from) : null;
+  const toDate = to ? parseEndDate(to) : null;
+
   const where: Record<string, unknown> = {};
-  if (messengerId) where.messengerId = messengerId;
-  if (from || to) {
+  if (messengerId && messengerId !== "ALL") where.messengerId = messengerId;
+  if (fromDate || toDate) {
     where.fecha = {
-      ...(from ? { gte: new Date(from) } : {}),
-      ...(to ? { lte: new Date(to) } : {}),
+      ...(fromDate ? { gte: fromDate } : {}),
+      ...(toDate ? { lte: toDate } : {}),
     };
   }
 
-  const [records, reports] = await Promise.all([
+  const pageParam = request.nextUrl.searchParams.get("page");
+  const pageSizeParam = request.nextUrl.searchParams.get("pageSize");
+  const unpaginated = pageParam === null && pageSizeParam === null;
+  const page = pageParam ? Math.max(1, parseInt(pageParam, 10) || 1) : 1;
+  const pageSize = pageSizeParam ? Math.min(500, Math.max(1, parseInt(pageSizeParam, 10) || 50)) : 50;
+
+  const reportWhere = messengerId && messengerId !== "ALL" ? { messengerId } : undefined;
+
+  const [records, reports, totalRecords, totalReports] = await Promise.all([
     prisma.messengerDailyRecord.findMany({
       where,
       include: { messenger: true },
       orderBy: { fecha: "desc" },
-      take: 300,
+      skip: unpaginated ? undefined : (page - 1) * pageSize,
+      take: unpaginated ? undefined : pageSize,
     }),
     prisma.messengerReport.findMany({
-      where: messengerId ? { messengerId } : undefined,
+      where: reportWhere,
       include: { messenger: true },
       orderBy: { generatedAt: "desc" },
       take: 100,
     }),
+    prisma.messengerDailyRecord.count({ where }),
+    prisma.messengerReport.count({ where: reportWhere }),
   ]);
 
-  return NextResponse.json({ records, reports });
+  return NextResponse.json({
+    records,
+    reports,
+    total: totalRecords,
+    totalReports,
+    pagination: {
+      page,
+      pageSize: unpaginated ? totalRecords : pageSize,
+      total: totalRecords,
+      totalPages: unpaginated ? 1 : Math.max(1, Math.ceil(totalRecords / pageSize)),
+    },
+  });
 }
 
 export async function POST(request: Request) {
@@ -121,8 +162,8 @@ export async function POST(request: Request) {
     return NextResponse.json({ record });
   }
 
-  const from = new Date(parsed.data.from);
-  const to = new Date(parsed.data.to);
+  const from = parseStartDate(parsed.data.from) ?? new Date(parsed.data.from);
+  const to = parseEndDate(parsed.data.to) ?? new Date(parsed.data.to);
 
   const records = await prisma.messengerDailyRecord.findMany({
     where: {

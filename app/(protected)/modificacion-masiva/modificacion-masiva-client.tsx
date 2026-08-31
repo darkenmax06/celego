@@ -45,6 +45,13 @@ const statuses: CardStatus[] = [
   CardStatus.ENTREGA_DIGITAL,
   CardStatus.ENTREGADA,
   CardStatus.RETORNADA,
+  CardStatus.TD_ENTREGADO,
+  CardStatus.TD_DEVUELTO_NO_LOCALIZADO,
+  CardStatus.TD_NO_LE_INTERESA,
+  CardStatus.TD_RETIRADA_EN_OFICINA,
+  CardStatus.TD_SOLICITADA_POR_ERROR,
+  CardStatus.TD_ZONA_FUERA_COBERTURA,
+  CardStatus.NO_LOCALIZADO,
 ];
 const zonas = ["Metro", "Este", "Norte", "Sur"];
 

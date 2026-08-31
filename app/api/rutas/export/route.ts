@@ -31,26 +31,43 @@ export async function GET(request: NextRequest) {
   if ("error" in auth) return auth.error;
 
   const routeId = request.nextUrl.searchParams.get("routeId");
+  // SDD contrato-tarjetas-pistoleo (design D8): an optional `cardId` produces
+  // a single-row relación for that card's latest route item, reusing the
+  // exact same builder below instead of a new endpoint.
+  const cardId = request.nextUrl.searchParams.get("cardId");
   const format = (request.nextUrl.searchParams.get("format") ?? "pdf").toLowerCase();
 
-  if (!routeId) {
-    return NextResponse.json({ error: "routeId es requerido" }, { status: 400 });
+  if (!routeId && !cardId) {
+    return NextResponse.json({ error: "routeId o cardId es requerido" }, { status: 400 });
   }
 
-  const route = await prisma.route.findUnique({
-    where: { id: routeId },
-    include: {
-      messenger: true,
-      items: {
-        include: {
-          card: {
-            include: { customer: true },
-          },
-        },
-        orderBy: { sequence: "asc" },
+  let route;
+  if (cardId) {
+    const latestItem = await prisma.routeItem.findFirst({
+      where: { cardId },
+      include: {
+        route: { include: { messenger: true } },
+        card: { include: { customer: true } },
       },
-    },
-  });
+      orderBy: [{ route: { fecha: "desc" } }, { id: "desc" }],
+    });
+    route = latestItem ? { ...latestItem.route, items: [latestItem] } : null;
+  } else {
+    route = await prisma.route.findUnique({
+      where: { id: routeId! },
+      include: {
+        messenger: true,
+        items: {
+          include: {
+            card: {
+              include: { customer: true },
+            },
+          },
+          orderBy: { sequence: "asc" },
+        },
+      },
+    });
+  }
 
   if (!route) {
     return NextResponse.json({ error: "Ruta no encontrada" }, { status: 404 });
@@ -59,7 +76,7 @@ export async function GET(request: NextRequest) {
   const slaConfig = await prisma.sLAConfig.findUnique({ where: { id: "default" } });
   const baseSlaDays = slaConfig?.businessDays ?? 5;
 
-  const lotLabel = route.id.slice(-6).toUpperCase();
+  const routeLabel = route.id.slice(-6).toUpperCase();
   const returnDate = route.items.length
     ? route.items.reduce((max, item) => {
         const due = item.card.slaDueDate ?? addBusinessDaysStrict(item.card.dispatchDate ?? route.fecha, baseSlaDays);
@@ -82,9 +99,9 @@ export async function GET(request: NextRequest) {
 
   if (format === "xlsx") {
     const workbook = new ExcelJS.Workbook();
-    const sheet = workbook.addWorksheet("LOTE");
+    const sheet = workbook.addWorksheet("RUTA");
 
-    sheet.addRow([`LOTE ${lotLabel}`]);
+    sheet.addRow([`RUTA ${routeLabel}`]);
     sheet.addRow([`Mensajero: ${route.messenger.nombre}`]);
     sheet.addRow([`Fecha ruta: ${formatDate(route.fecha)}`]);
     sheet.addRow([]);
@@ -104,7 +121,7 @@ export async function GET(request: NextRequest) {
     });
 
     sheet.addRow([]);
-    sheet.addRow([`Fecha limite de devolucion del lote: ${formatDate(returnDateForMessenger)}`]);
+    sheet.addRow([`Fecha limite de devolucion de la ruta: ${formatDate(returnDateForMessenger)}`]);
 
     sheet.getRow(1).font = { bold: true, size: 14 };
     sheet.getRow(2).font = { bold: true };
@@ -131,7 +148,7 @@ export async function GET(request: NextRequest) {
     });
     return new NextResponse(Buffer.from(buffer), {
       headers: fileHeaders(
-        `ruta-lote-${lotLabel}.xlsx`,
+        `ruta-${routeLabel}.xlsx`,
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
       ),
     });
@@ -153,7 +170,7 @@ export async function GET(request: NextRequest) {
       (pageIndex + 1) * rowsPerPage,
     );
 
-    page.drawText(`LOTE ${lotLabel}`, {
+    page.drawText(`RUTA ${routeLabel}`, {
       x: 40,
       y: 760,
       size: 18,
@@ -212,7 +229,7 @@ export async function GET(request: NextRequest) {
     }
 
     if (pageIndex === pageCount - 1) {
-      page.drawText(`Fecha limite de devolucion del lote: ${formatDate(returnDateForMessenger)}`, {
+      page.drawText(`Fecha limite de devolucion de la ruta: ${formatDate(returnDateForMessenger)}`, {
         x: 40,
         y: 48,
         size: 11,
@@ -232,6 +249,6 @@ export async function GET(request: NextRequest) {
     request,
   });
   return new NextResponse(Buffer.from(pdfBytes), {
-    headers: fileHeaders(`ruta-lote-${lotLabel}.pdf`, "application/pdf"),
+    headers: fileHeaders(`ruta-${routeLabel}.pdf`, "application/pdf"),
   });
 }

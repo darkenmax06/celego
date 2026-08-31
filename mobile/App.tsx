@@ -31,6 +31,7 @@ type RouteItem = {
     id: string;
     tc: string;
     status: string;
+    origin: "TORRE_POPULAR" | "CENTRO_ACOPIO" | null;
     customer: { nombre: string; cedula: string };
   };
   proofs: Array<{ id: string; fileUrl: string; createdAt: string }>;
@@ -285,7 +286,7 @@ export default function App() {
                     {item.card.customer.nombre} - {item.card.customer.cedula}
                   </Text>
                   <Text style={styles.itemSub}>
-                    Estado: {item.card.status} | Pruebas: {item.proofs.length}
+                    Origen: {item.card.origin === "CENTRO_ACOPIO" ? "Centro de acopio" : "Torre Popular"} | Estado: {item.card.status} | Pruebas: {item.proofs.length}
                   </Text>
                   {item.proofs[0] ? (
                     <Image

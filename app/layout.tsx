@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { DM_Sans, Space_Grotesk } from "next/font/google";
 import "./globals.css";
 import { AppSessionProvider } from "@/components/providers/session-provider";
+import { ToastProvider } from "@/components/providers/toast-provider";
 
 const dmSans = DM_Sans({
   variable: "--font-dm-sans",
@@ -29,7 +30,10 @@ export default function RootLayout({
       className={`${dmSans.variable} ${spaceGrotesk.variable} h-full antialiased`}
     >
       <body className="min-h-full bg-[#f5f5f3] text-slate-900">
-        <AppSessionProvider>{children}</AppSessionProvider>
+        <AppSessionProvider>
+          <ToastProvider />
+          {children}
+        </AppSessionProvider>
       </body>
     </html>
   );

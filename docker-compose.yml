@@ -36,6 +36,8 @@ services:
         condition: service_healthy
     ports:
       - "${APP_PORT:-3800}:3000"
+    volumes:
+      - ./storage:/app/storage
 
 volumes:
   celego_pgdata:

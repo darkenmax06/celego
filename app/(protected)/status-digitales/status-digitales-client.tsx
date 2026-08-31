@@ -8,11 +8,20 @@ import { WorkflowStatusBar } from "@/components/ui/workflow-status-bar";
 import { useWorkflowDraft } from "@/lib/use-workflow-draft";
 import { usePersistentState } from "@/lib/use-persistent-state";
 import { BizcochitosPanel } from "@/components/status-digitales/bizcochitos-panel";
+import {
+  StatusDigitalSelectionWizardModal,
+  type AmbiguousCardOption,
+} from "@/components/status-digitales/status-digital-selection-wizard-modal";
+import {
+  MissingContractWizardModal,
+  type MissingContractCardItem,
+} from "@/components/status-digitales/missing-contract-wizard-modal";
 
 type ParsedImageRow = {
   fileName: string;
   identifier: string;
   isRemote: boolean;
+  overrideCardId?: string;
 };
 
 type ProcessedRow = {
@@ -25,6 +34,12 @@ type ProcessedRow = {
   remoteBefore?: boolean;
   remoteAfter?: boolean;
   action: string;
+  options?: AmbiguousCardOption[];
+  customer?: {
+    nombre: string;
+    cedula: string;
+  };
+  provincia?: string | null;
 };
 
 type Summary = {
@@ -68,8 +83,39 @@ export default function StatusDigitalesClient() {
   const [processing, setProcessing] = useState(false);
   const [message, setMessage] = useState("");
   const [needsReselection, setNeedsReselection] = useState(false);
+  const [manualOverrides, setManualOverrides] = useState<Record<string, string>>({});
+  const [skippedFiles, setSkippedFiles] = useState<Set<string>>(new Set());
+  const [wizardOpen, setWizardOpen] = useState(false);
+  const [wizardTotal, setWizardTotal] = useState(0);
+  const [missingContractsModalOpen, setMissingContractsModalOpen] = useState(false);
 
   const notFound = useMemo(() => rows.filter((row) => !row.found).length, [rows]);
+  const unresolvedRows = useMemo(
+    () =>
+      rows.filter(
+        (row) =>
+          (row.action === "AMBIGUA_REQUIERE_REVISION" || row.action === "NO_ENCONTRADA") &&
+          !manualOverrides[row.fileName] &&
+          !skippedFiles.has(row.fileName),
+      ),
+    [rows, manualOverrides, skippedFiles],
+  );
+  const missingContractRows = useMemo<MissingContractCardItem[]>(() => {
+    return rows
+      .filter(
+        (row) =>
+          row.statusAfter === "ENTREGA_DIGITAL_SIN_CONTRATO" ||
+          row.action?.includes("SIN_CONTRATO_PENDIENTE"),
+      )
+      .map((row) => ({
+        fileName: row.fileName,
+        identifier: row.identifier,
+        tc: row.identifier,
+        nombre: row.customer?.nombre ?? null,
+        cedula: row.customer?.cedula ?? null,
+        provincia: row.provincia ?? null,
+      }));
+  }, [rows]);
   const draftPayload = useMemo<StatusDigitalDraft>(
     () => ({ images, rows, summary }),
     [images, rows, summary],
@@ -108,10 +154,12 @@ export default function StatusDigitalesClient() {
     setRows([]);
     setSummary(null);
     setNeedsReselection(false);
+    setManualOverrides({});
+    setSkippedFiles(new Set());
     setMessage(parsed.length ? `${parsed.length} imagen(es) listas para procesar` : "No se detectaron nombres validos");
   }
 
-  async function processImages() {
+  async function processImages(overrides?: Record<string, string>) {
     if (!images.length) {
       setMessage("Selecciona imagenes primero");
       return;
@@ -121,12 +169,18 @@ export default function StatusDigitalesClient() {
       return;
     }
 
+    const effectiveOverrides = overrides ?? manualOverrides;
+    const items = images.map((item) => ({
+      ...item,
+      overrideCardId: effectiveOverrides[item.fileName],
+    }));
+
     setProcessing(true);
     setMessage("");
     const res = await fetch("/api/status-digitales", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ items: images }),
+      body: JSON.stringify({ items }),
     });
     const json = await res.json().catch(() => ({ error: "No se pudo procesar status digitales" }));
 
@@ -136,10 +190,44 @@ export default function StatusDigitalesClient() {
       return;
     }
 
-    setRows((json.rows ?? []) as ProcessedRow[]);
+    const nextRows = (json.rows ?? []) as ProcessedRow[];
+    setRows(nextRows);
     setSummary((json.summary ?? null) as Summary | null);
     setMessage("Status digitales procesados");
     setProcessing(false);
+
+    const pendingContracts = nextRows.filter(
+      (row) =>
+        row.statusAfter === "ENTREGA_DIGITAL_SIN_CONTRATO" ||
+        row.action?.includes("SIN_CONTRATO_PENDIENTE"),
+    );
+    if (pendingContracts.length) {
+      setMissingContractsModalOpen(true);
+    }
+
+    const stillPending = nextRows.filter(
+      (row) =>
+        (row.action === "AMBIGUA_REQUIERE_REVISION" || row.action === "NO_ENCONTRADA") &&
+        !effectiveOverrides[row.fileName] &&
+        !skippedFiles.has(row.fileName),
+    );
+    if (stillPending.length) {
+      setWizardTotal(stillPending.length);
+      setWizardOpen(true);
+    }
+  }
+
+  function resolveWizardRow(fileName: string, cardId: string) {
+    setManualOverrides((prev) => ({ ...prev, [fileName]: cardId }));
+  }
+
+  function skipWizardRow(fileName: string) {
+    setSkippedFiles((prev) => new Set(prev).add(fileName));
+  }
+
+  function applyWizardSelections() {
+    setWizardOpen(false);
+    void processImages(manualOverrides);
   }
 
   if (activeTab === "BIZCOCHITOS") {
@@ -206,6 +294,9 @@ export default function StatusDigitalesClient() {
               setRows([]);
               setSummary(null);
               setNeedsReselection(false);
+              setManualOverrides({});
+              setSkippedFiles(new Set());
+              setWizardOpen(false);
               setMessage("");
               void workflowDraft.clearDraft();
             }}
@@ -213,6 +304,27 @@ export default function StatusDigitalesClient() {
           >
             Limpiar
           </button>
+          {unresolvedRows.length ? (
+            <button
+              type="button"
+              onClick={() => {
+                setWizardTotal(unresolvedRows.length);
+                setWizardOpen(true);
+              }}
+              className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-2 text-sm font-semibold text-amber-900"
+            >
+              Resolver pendientes ({unresolvedRows.length})
+            </button>
+          ) : null}
+          {missingContractRows.length ? (
+            <button
+              type="button"
+              onClick={() => setMissingContractsModalOpen(true)}
+              className="rounded-xl border border-amber-400 bg-amber-50 px-4 py-2 text-sm font-semibold text-amber-900 shadow-xs"
+            >
+              Tarjetas sin contrato ({missingContractRows.length})
+            </button>
+          ) : null}
         </div>
 
         {summary ? (
@@ -279,6 +391,31 @@ export default function StatusDigitalesClient() {
           </table>
         </div>
       </Panel>
+
+      {wizardOpen ? (
+        <StatusDigitalSelectionWizardModal
+          pending={unresolvedRows.map((row) => ({
+            fileName: row.fileName,
+            identifier: row.identifier,
+            action: row.action as "AMBIGUA_REQUIERE_REVISION" | "NO_ENCONTRADA",
+            options: row.options,
+          }))}
+          resolvedCount={Math.max(0, wizardTotal - unresolvedRows.length)}
+          totalCount={wizardTotal}
+          onResolve={resolveWizardRow}
+          onSkip={skipWizardRow}
+          onClose={() => setWizardOpen(false)}
+          onApply={applyWizardSelections}
+        />
+      ) : null}
+
+      {missingContractsModalOpen && missingContractRows.length ? (
+        <MissingContractWizardModal
+          items={missingContractRows}
+          onClose={() => setMissingContractsModalOpen(false)}
+          onConfirm={() => setMissingContractsModalOpen(false)}
+        />
+      ) : null}
     </div>
   );
 }

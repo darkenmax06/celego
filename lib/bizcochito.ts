@@ -5,13 +5,20 @@ import { format } from "date-fns";
 import { prisma } from "@/lib/prisma";
 import { resolveDeliveryLocation } from "@/lib/delivery-location";
 import { writeAuditEvent } from "@/lib/audit";
+import { DIGITAL_DELIVERY_STATUSES } from "@/lib/card-transition";
+
+// SDD contrato-tarjetas-pistoleo (spec: bizcochito-report). A card entering
+// `ENTREGA_DIGITAL_SIN_CONTRATO` counts for the digital cycle immediately, so
+// every bizcochito query site widens from a single `ENTREGA_DIGITAL` check to
+// membership in `DIGITAL_DELIVERY_STATUSES`.
+const DIGITAL_DELIVERY_STATUS_LIST = Array.from(DIGITAL_DELIVERY_STATUSES);
 
 export const bizcochitoCardInclude = {
   customer: true,
   currentMessenger: true,
   reassignedMessenger: true,
   logs: {
-    where: { toStatus: CardStatus.ENTREGA_DIGITAL },
+    where: { toStatus: { in: DIGITAL_DELIVERY_STATUS_LIST } },
     orderBy: { createdAt: "desc" },
     take: 1,
   },
@@ -56,6 +63,8 @@ export type BizcochitoSnapshot = {
   tipoEntrega: string;
   suplidor: string;
   tipoContrato: string;
+  tieneContrato: string;
+  imagenContratoSubida: string;
 };
 
 function isoDate(value: Date | null | undefined) {
@@ -107,6 +116,11 @@ export function createBizcochitoSnapshot(
     tipoEntrega: card.deliveryType ?? metadataString(card.metadata, "tipoEntrega"),
     suplidor: card.supplier ?? "",
     tipoContrato: card.contractType ?? "",
+    // SDD contrato-tarjetas-pistoleo: read from `hasContract`/`contractImageAt`
+    // directly, NOT from current status — a resolved card may have already
+    // moved past ENTREGA_DIGITAL_SIN_CONTRATO to ENTREGA_DIGITAL.
+    tieneContrato: card.hasContract ? "SI" : "NO",
+    imagenContratoSubida: card.hasContract ? (card.contractImageAt ? "SI" : "NO") : "",
   };
 }
 
@@ -140,6 +154,8 @@ const excelColumns: Array<{
   { header: "Tipo de entrega", key: "tipoEntrega", width: 18 },
   { header: "Suplidor", key: "suplidor", width: 20 },
   { header: "Tipo de contrato", key: "tipoContrato", width: 20 },
+  { header: "Tiene contrato", key: "tieneContrato", width: 16 },
+  { header: "Se subió imagen del contrato", key: "imagenContratoSubida", width: 26 },
 ];
 
 export async function buildBizcochitoExcel(rows: BizcochitoSnapshot[]) {
@@ -204,7 +220,7 @@ export async function generateBizcochito(userId: string, request?: Request) {
         async (tx) => {
           const cards = await tx.card.findMany({
             where: {
-              status: CardStatus.ENTREGA_DIGITAL,
+              status: { in: DIGITAL_DELIVERY_STATUS_LIST },
               bizcochito: false,
               digitalDeliveryCycle: { gt: 0 },
             },
@@ -247,7 +263,10 @@ export async function generateBizcochito(userId: string, request?: Request) {
             const claimed = await tx.card.updateMany({
               where: {
                 id: card.id,
-                status: CardStatus.ENTREGA_DIGITAL,
+                // Claims the exact status this card was read with (ENTREGA_DIGITAL
+                // or ENTREGA_DIGITAL_SIN_CONTRATO), not a fixed literal, so a
+                // concurrent status change is still detected correctly.
+                status: card.status,
                 digitalDeliveryCycle: card.digitalDeliveryCycle,
                 bizcochito: false,
               },

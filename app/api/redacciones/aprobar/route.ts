@@ -3,7 +3,7 @@ import { CardStatus, RedactionStatus } from "@prisma/client";
 import { z } from "zod";
 import { requireApiSession } from "@/lib/api-session";
 import { prisma } from "@/lib/prisma";
-import { clearUrgencyOnCardClosure } from "@/lib/urgent-alerts";
+import { applyCardTransition } from "@/lib/card-transition";
 
 const schema = z
   .object({
@@ -53,7 +53,10 @@ export async function POST(request: Request) {
 
     for (const redaction of redactions) {
       for (const item of redaction.items) {
-        const card = await tx.card.findUnique({ where: { id: item.cardId } });
+        const card = await tx.card.findUnique({
+          where: { id: item.cardId },
+          select: { id: true, tc: true, status: true, returnReason: true, digitalDeliveryCycle: true },
+        });
         if (!card) continue;
 
         const nextStatus = item.appliedStatus as CardStatus;
@@ -64,12 +67,16 @@ export async function POST(request: Request) {
         }
         const changed = card.status !== nextStatus;
 
-        await tx.card.update({
-          where: { id: card.id },
+        await applyCardTransition({
+          tx,
+          card,
+          nextStatus,
+          byUserId: auth.session.user.id,
+          note: item.comentario || `Actualizada por redaccion ${redaction.id}`,
+          returnReason: requiresReturnReason ? item.comentario?.trim() ?? null : null,
+          alwaysLog: changed || Boolean(item.comentario),
           data: {
-            status: nextStatus,
             isRemote: item.isRemote ?? undefined,
-            returnReason: requiresReturnReason ? item.comentario?.trim() ?? null : null,
             currentMessengerId:
               nextStatus === CardStatus.ENTREGADA ||
               nextStatus === CardStatus.RETORNADA ||
@@ -78,25 +85,6 @@ export async function POST(request: Request) {
                 : undefined,
           },
         });
-
-        await clearUrgencyOnCardClosure({
-          tx,
-          cardId: card.id,
-          nextStatus,
-          byUserId: auth.session.user.id,
-        });
-
-        if (changed || item.comentario) {
-          await tx.cardStatusLog.create({
-            data: {
-              cardId: card.id,
-              fromStatus: card.status,
-              toStatus: nextStatus,
-              note: item.comentario || `Actualizada por redaccion ${redaction.id}`,
-              byUserId: auth.session.user.id,
-            },
-          });
-        }
 
         updatedItems += 1;
       }

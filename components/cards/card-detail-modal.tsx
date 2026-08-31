@@ -1,9 +1,27 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import {
+  PhoneCall,
+  MessageSquare,
+  Phone,
+  MapPin,
+  Calendar,
+  AlertTriangle,
+  Send,
+  CheckCircle2,
+  Clock,
+  Sparkles,
+} from "lucide-react";
 import { CardStatus } from "@prisma/client";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { notificationFailureMessage, notifyInBrowser } from "@/lib/browser-notifications";
+import { displayText } from "@/lib/display";
+import {
+  OperativeContactWizard,
+  type PhoneState,
+  type OperativeWizardCard,
+} from "@/components/operativo/operative-contact-wizard";
 
 type ReturnReason = { id: string; nombre: string; active: boolean };
 type Province = { id: string; nombre: string; zona: string; active: boolean };
@@ -14,18 +32,41 @@ type Messenger = {
   activo: boolean;
 };
 
+type OperativoMetadata = {
+  contactado?: boolean;
+  canalContacto?: "WHATSAPP" | "LLAMADA_DIRECTA" | null;
+  comentarioContacto?: string;
+  telefonos?: Array<{ num: string; principal: boolean; funciona: boolean; comentario?: string }>;
+  nuevaDireccion?: string | null;
+  fechaPreferenciaEntrega?: string | null;
+  solicitudRetorno?: boolean;
+  motivoRetorno?: string | null;
+  traslado?: {
+    provinciaDestino?: string;
+    motivo?: string;
+    solicitadoAt?: string;
+    solicitadoPor?: string;
+  } | null;
+  updatedAt?: string;
+};
+
 type CardDetail = {
   id: string;
   tc: string;
+  requestNumber?: string | null;
+  productType?: "CREDITO" | "DEBITO" | null;
   externalReference: string | null;
   zona: string;
   provincia: string;
   isRemote: boolean;
   dispatchDate: string | null;
+  dispatchOrigin: "TORRE_POPULAR" | "CENTRO_ACOPIO" | "BPD_DEBITO" | null;
   deliveryType: string | null;
   emissionType: string | null;
   supplier: string | null;
   contractType: string | null;
+  hasContract: boolean;
+  contractImageAt: string | null;
   status: string;
   reassignedProvince: string | null;
   reassignedZone: string | null;
@@ -111,7 +152,7 @@ type UrgencyMutationResponse = {
   error?: string;
 };
 
-const statusOptions: CardStatus[] = [
+const CREDIT_STATUS_OPTIONS: CardStatus[] = [
   CardStatus.DESPACHADA,
   CardStatus.ENVIADA_INTERIOR,
   CardStatus.EN_RUTA,
@@ -122,7 +163,23 @@ const statusOptions: CardStatus[] = [
   CardStatus.RETORNADA,
 ];
 
+const DEBIT_STATUS_OPTIONS: CardStatus[] = [
+  CardStatus.DESPACHADA,
+  CardStatus.EN_RUTA,
+  CardStatus.NO_LOCALIZADO,
+  CardStatus.TD_ENTREGADO,
+  CardStatus.TD_DEVUELTO_NO_LOCALIZADO,
+  CardStatus.TD_NO_LE_INTERESA,
+  CardStatus.TD_RETIRADA_EN_OFICINA,
+  CardStatus.TD_SOLICITADA_POR_ERROR,
+  CardStatus.TD_ZONA_FUERA_COBERTURA,
+];
+
 function statusLabel(value: string) {
+  if (value.startsWith("TD_")) {
+    return value.replace(/^TD_/, "TD- ").replaceAll("_", " ");
+  }
+  if (value === "NO_LOCALIZADO") return "No Localizado";
   return value.replaceAll("_", " ");
 }
 
@@ -140,7 +197,8 @@ function splitPhones(raw: string | null | undefined) {
   return [...new Set(matches)];
 }
 
-function requiresReturnReason(status: CardStatus) {
+function requiresReturnReason(status: CardStatus, isDebit = false) {
+  if (isDebit) return false;
   return status === CardStatus.RETORNADA || status === CardStatus.DEVUELTA_TIENDA;
 }
 
@@ -170,6 +228,7 @@ export function CardDetailModal({ cardId, onClose, onUpdated }: Props) {
   const [statusValue, setStatusValue] = useState<CardStatus>(CardStatus.DESPACHADA);
   const [returnReason, setReturnReason] = useState("");
   const [isRemoteValue, setIsRemoteValue] = useState(false);
+  const [hasContractValue, setHasContractValue] = useState(false);
   const [note, setNote] = useState("");
   const [saving, setSaving] = useState(false);
   const [savingUrgency, setSavingUrgency] = useState(false);
@@ -207,6 +266,7 @@ export function CardDetailModal({ cardId, onClose, onUpdated }: Props) {
     setStatusValue(nextCard.status as CardStatus);
     setReturnReason(nextCard.returnReason ?? "");
     setIsRemoteValue(nextCard.isRemote);
+    setHasContractValue(nextCard.hasContract);
     setUrgencyEnabled(nextCard.urgent);
     setUrgencyLevel(nextCard.activeUrgentCase?.level ?? 3);
     setUrgencyComment("");
@@ -275,6 +335,8 @@ export function CardDetailModal({ cardId, onClose, onUpdated }: Props) {
     };
   }, [onClose]);
 
+  const [showContactWizard, setShowContactWizard] = useState(false);
+
   const phoneList = useMemo(() => splitPhones(card?.customer.telefonosRaw), [card?.customer.telefonosRaw]);
   const addressLines = useMemo(() => splitTextChunks(card?.customer.direccionRaw), [card?.customer.direccionRaw]);
   const referenceList = useMemo(
@@ -284,6 +346,87 @@ export function CardDetailModal({ cardId, onClose, onUpdated }: Props) {
         : [],
     [card?.externalReference],
   );
+
+  const operativoData = useMemo(() => {
+    const meta = card?.metadata as Record<string, unknown> | null;
+    if (!meta || typeof meta !== "object") return null;
+    const op = meta.operativo as Record<string, unknown> | null;
+    if (!op || typeof op !== "object") return null;
+    return op as OperativoMetadata;
+  }, [card?.metadata]);
+
+  const provincesList = useMemo(() => provinces.map((p) => p.nombre).sort(), [provinces]);
+
+  const wizardCard: OperativeWizardCard | null = useMemo(() => {
+    if (!card) return null;
+    const fallbackPhones = phoneList.map((num, idx) => ({
+      num,
+      principal: idx === 0,
+      funciona: false,
+      comentario: "",
+    }));
+    const phones = operativoData?.telefonos && operativoData.telefonos.length > 0 ? operativoData.telefonos : fallbackPhones;
+
+    return {
+      id: card.id,
+      cardId: card.id,
+      tc: card.tc,
+      requestNumber: card.requestNumber ?? null,
+      nombre: card.customer.nombre,
+      cedula: card.customer.cedula,
+      provincia: card.provincia,
+      zona: card.zona,
+      status: card.status,
+      urgent: card.urgent,
+      remaining: null,
+      presinto: null,
+      fechaDespacho: card.dispatchDate,
+      tipoEmision: card.emissionType,
+      tipoEntrega: card.deliveryType,
+      direcciones: addressLines,
+      refs: referenceList,
+      mensajero: card.currentMessenger?.nombre || "Sin asignar",
+      telefonos: phones,
+      comentarioContacto: operativoData?.comentarioContacto || "",
+      contactado: Boolean(operativoData?.contactado),
+      canalContacto: operativoData?.canalContacto || null,
+      nuevaDireccion: operativoData?.nuevaDireccion || null,
+      fechaPreferenciaEntrega: operativoData?.fechaPreferenciaEntrega || null,
+      solicitudRetorno: Boolean(operativoData?.solicitudRetorno),
+      motivoRetorno: operativoData?.motivoRetorno || null,
+      traslado: operativoData?.traslado ?? null,
+    };
+  }, [card, operativoData, phoneList, addressLines, referenceList]);
+
+  async function handleSaveContactFromWizard(payload: {
+    telefonos: PhoneState[];
+    comentario: string;
+    contactado: boolean;
+    canalContacto?: "WHATSAPP" | "LLAMADA_DIRECTA" | null;
+    nuevaDireccion?: string | null;
+    fechaPreferenciaEntrega?: string | null;
+    solicitudRetorno?: boolean;
+    motivoRetorno?: string | null;
+    trasladoProvincia?: string | null;
+    trasladoMotivo?: string | null;
+  }) {
+    if (!card) return "No hay tarjeta";
+    const res = await fetch("/api/operativo/contacto", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        cardId: card.id,
+        ...payload,
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      return data.error ?? "No se pudo guardar contacto";
+    }
+    await loadCard();
+    onUpdated?.();
+    return null;
+  }
 
   const timeline = useMemo(() => {
     if (!card) return [] as Array<{
@@ -310,9 +453,9 @@ export function CardDetailModal({ cardId, onClose, onUpdated }: Props) {
       id: `contact-${contact.id}`,
       kind: "contact" as const,
       createdAt: contact.createdAt,
-      user: contact.user?.name || "Sistema",
+      user: contact.user?.name || "Operador",
       title: contact.comentario || (contact.contactado ? "Contacto marcado como exitoso" : "Contacto registrado"),
-      subtitle: `Telefono usado: ${contact.telefonosUsados || "-"} · ${contact.contactado ? "Contactado" : "No contactado"}`,
+      subtitle: `Teléfonos: ${contact.telefonosUsados || "-"} · ${contact.contactado ? "✓ Contactado" : "○ No contactado"}`,
     }));
 
     const reassignmentEntries = card.deliveryReassignments.map((reassignment) => ({
@@ -328,6 +471,9 @@ export function CardDetailModal({ cardId, onClose, onUpdated }: Props) {
       (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
     );
   }, [card]);
+
+  const isDebit = card?.productType === "DEBITO" || card?.dispatchOrigin === "BPD_DEBITO";
+  const availableStatusOptions = isDebit ? DEBIT_STATUS_OPTIONS : CREDIT_STATUS_OPTIONS;
 
   const canReassign =
     card?.status === CardStatus.ENTREGADA || card?.status === CardStatus.ENTREGA_DIGITAL;
@@ -347,10 +493,11 @@ export function CardDetailModal({ cardId, onClose, onUpdated }: Props) {
       id: card.id,
       status: statusValue,
       isRemote: isRemoteValue,
-      returnReason: requiresReturnReason(statusValue) ? returnReason || null : null,
+      hasContract: hasContractValue,
+      returnReason: requiresReturnReason(statusValue, isDebit) ? returnReason || null : returnReason || null,
       note:
         note ||
-        (requiresReturnReason(statusValue) && returnReason
+        (requiresReturnReason(statusValue, isDebit) && returnReason
           ? `Retorno: ${returnReason}`
           : "Actualizacion manual desde modal"),
     };
@@ -517,14 +664,30 @@ export function CardDetailModal({ cardId, onClose, onUpdated }: Props) {
       >
         <div className="flex items-start justify-between border-b border-slate-200 px-6 py-5">
           <div>
-            <p className="text-xs font-semibold tracking-wide text-blue-700">{card.tc}</p>
-            <h3 className="font-display text-xl font-bold text-slate-900">{card.customer.nombre}</h3>
+            <div className="flex items-center gap-2">
+              <p className="text-xs font-semibold tracking-wide text-blue-700">
+                {isDebit
+                  ? `Solicitud Débito: ${card.requestNumber || card.tc}`
+                  : `TC: ${card.tc}`}
+              </p>
+              <span
+                className={`rounded px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider ${
+                  isDebit
+                    ? "bg-amber-100 text-amber-800 border border-amber-200"
+                    : "bg-blue-100 text-blue-800 border border-blue-200"
+                }`}
+              >
+                {isDebit ? "Débito" : "Crédito"}
+              </span>
+            </div>
+            <h3 className="font-display text-xl font-bold text-slate-900 mt-0.5">{card.customer.nombre}</h3>
           </div>
           <div className="flex items-center gap-2">
             <StatusBadge value={card.status} />
             <button
               onClick={onClose}
-              className="rounded-lg bg-slate-100 px-2.5 py-1.5 text-sm text-slate-700"
+              className="rounded-lg bg-slate-100 px-2.5 py-1.5 text-sm text-slate-700 hover:bg-slate-200 transition"
+              title="Cerrar modal"
             >
               ✕
             </button>
@@ -569,10 +732,22 @@ export function CardDetailModal({ cardId, onClose, onUpdated }: Props) {
                   label="F. Despacho"
                   value={card.dispatchDate ? new Date(card.dispatchDate).toLocaleDateString("es-DO") : "-"}
                 />
-                <InfoItem label="Tipo Emision" value={card.emissionType || "-"} />
-                <InfoItem label="Tipo Entrega" value={card.deliveryType || "-"} />
-                <InfoItem label="Contrato" value={card.contractType || "-"} />
-                <InfoItem label="Suplidor" value={card.supplier || "-"} />
+                <InfoItem
+                  label="Origen despacho"
+                  value={
+                    card.dispatchOrigin === "CENTRO_ACOPIO"
+                      ? "Centro de acopio"
+                      : card.dispatchOrigin === "TORRE_POPULAR"
+                        ? "Torre Popular"
+                        : card.dispatchOrigin === "BPD_DEBITO"
+                          ? "BPD Débito"
+                          : "Sin procedencia"
+                  }
+                />
+                <InfoItem label="Tipo Emision" value={displayText(card.emissionType)} />
+                <InfoItem label="Tipo Entrega" value={displayText(card.deliveryType)} />
+                <InfoItem label="Contrato" value={displayText(card.contractType)} />
+                <InfoItem label="Suplidor" value={displayText(card.supplier)} />
                 <InfoItem label="Mensajero" value={card.currentMessenger?.nombre || "-"} />
                 <InfoItem
                   label="Mensajero reasignado"
@@ -587,7 +762,7 @@ export function CardDetailModal({ cardId, onClose, onUpdated }: Props) {
                   label="Nivel urgencia"
                   value={card.activeUrgentCase ? urgencyLabel(card.activeUrgentCase.level) : "-"}
                 />
-                <InfoItem label="Referencia" value={card.externalReference || "-"} />
+                <InfoItem label="Referencia" value={displayText(card.externalReference)} />
               </div>
 
               {addressLines.length ? (
@@ -614,8 +789,176 @@ export function CardDetailModal({ cardId, onClose, onUpdated }: Props) {
                 </section>
               ) : null}
 
+              {/* SECCIÓN DESTACADA: GESTIÓN OPERATIVA Y CONTACTO */}
+              <section className="mt-5 rounded-2xl border border-slate-200/90 bg-slate-50/70 p-4 space-y-3.5 shadow-2xs">
+                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200/80 pb-3">
+                  <div className="flex items-center gap-2">
+                    <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-emerald-100 text-emerald-700">
+                      <PhoneCall className="h-4 w-4" />
+                    </div>
+                    <div>
+                      <h4 className="font-bold text-slate-800 text-sm">Gestión Operativa y Contacto</h4>
+                      <p className="text-[11px] text-slate-500">Historial y datos acordados con el cliente</p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowContactWizard(true)}
+                    className="inline-flex items-center gap-1.5 rounded-xl bg-slate-900 px-3.5 py-1.5 text-xs font-semibold text-white hover:bg-slate-800 transition shadow-2xs active:scale-95"
+                  >
+                    <Sparkles className="h-3.5 w-3.5 text-amber-300" />
+                    Abrir Asistente de Contacto
+                  </button>
+                </div>
+
+                {/* Grid de Estado, Canal, Fecha y Última Gestión */}
+                <div className="grid gap-3 sm:grid-cols-2 md:grid-cols-4">
+                  <div className="rounded-xl border border-slate-200 bg-white p-3 shadow-2xs">
+                    <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block mb-1">
+                      Estado de Contacto
+                    </span>
+                    <div>
+                      {operativoData?.solicitudRetorno ? (
+                        <span className="inline-flex items-center gap-1 rounded-md bg-rose-50 border border-rose-200 px-2 py-0.5 text-xs font-bold text-rose-700">
+                          <AlertTriangle className="h-3.5 w-3.5" /> Retorno Solicitado
+                        </span>
+                      ) : operativoData?.traslado && Object.keys(operativoData.traslado).length > 0 ? (
+                        <span className="inline-flex items-center gap-1 rounded-md bg-indigo-50 border border-indigo-200 px-2 py-0.5 text-xs font-bold text-indigo-700">
+                          <Send className="h-3.5 w-3.5" /> Traslado Solicitado
+                        </span>
+                      ) : operativoData?.contactado ? (
+                        <span className="inline-flex items-center gap-1 rounded-md bg-emerald-50 border border-emerald-200 px-2 py-0.5 text-xs font-bold text-emerald-700">
+                          <CheckCircle2 className="h-3.5 w-3.5" /> Contactada
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 rounded-md bg-slate-100 border border-slate-200 px-2 py-0.5 text-xs font-medium text-slate-600">
+                          <Clock className="h-3.5 w-3.5" /> Pendiente de Contacto
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="rounded-xl border border-slate-200 bg-white p-3 shadow-2xs">
+                    <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block mb-1">
+                      Canal Efectivo
+                    </span>
+                    <p className="text-xs font-semibold text-slate-800 flex items-center gap-1.5">
+                      {operativoData?.canalContacto === "WHATSAPP" ? (
+                        <>
+                          <MessageSquare className="h-4 w-4 text-emerald-600" /> WhatsApp
+                        </>
+                      ) : operativoData?.canalContacto === "LLAMADA_DIRECTA" ? (
+                        <>
+                          <Phone className="h-4 w-4 text-blue-600" /> Llamada Directa
+                        </>
+                      ) : (
+                        <span className="text-slate-400 font-normal">No especificado</span>
+                      )}
+                    </p>
+                  </div>
+
+                  <div className="rounded-xl border border-slate-200 bg-white p-3 shadow-2xs">
+                    <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block mb-1">
+                      Fecha Preferencia
+                    </span>
+                    <p className="text-xs font-semibold text-slate-800 flex items-center gap-1.5">
+                      <Calendar className="h-4 w-4 text-slate-400" />
+                      {operativoData?.fechaPreferenciaEntrega
+                        ? new Date(operativoData.fechaPreferenciaEntrega).toLocaleDateString("es-DO")
+                        : <span className="text-slate-400 font-normal">Sin fecha fijada</span>}
+                    </p>
+                  </div>
+
+                  <div className="rounded-xl border border-slate-200 bg-white p-3 shadow-2xs">
+                    <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block mb-1">
+                      Última Gestión
+                    </span>
+                    <p className="text-xs font-semibold text-slate-800">
+                      {operativoData?.updatedAt
+                        ? new Date(operativoData.updatedAt).toLocaleString("es-DO")
+                        : <span className="text-slate-400 font-normal">Sin registro previo</span>}
+                    </p>
+                  </div>
+                </div>
+
+                {/* Nueva Dirección confirmada */}
+                {operativoData?.nuevaDireccion ? (
+                  <div className="rounded-xl border border-emerald-200 bg-emerald-50/50 p-3 text-xs">
+                    <div className="flex items-center gap-1.5 font-bold text-emerald-800 uppercase tracking-wide">
+                      <MapPin className="h-3.5 w-3.5 text-emerald-600" />
+                      Nueva Dirección de Entrega (Confirmada):
+                    </div>
+                    <p className="mt-1 text-slate-800 font-medium leading-relaxed">
+                      {operativoData.nuevaDireccion}
+                    </p>
+                  </div>
+                ) : null}
+
+                {/* Motivo de retorno si aplica */}
+                {operativoData?.solicitudRetorno && operativoData?.motivoRetorno ? (
+                  <div className="rounded-xl border border-rose-200 bg-rose-50/60 p-3 text-xs">
+                    <span className="font-bold text-rose-800 uppercase tracking-wide">Motivo de Solicitud de Retorno:</span>
+                    <p className="mt-1 text-rose-900 font-medium">{operativoData.motivoRetorno}</p>
+                  </div>
+                ) : null}
+
+                {/* Traslado si aplica */}
+                {operativoData?.traslado && typeof operativoData.traslado === "object" && operativoData.traslado.provinciaDestino ? (
+                  <div className="rounded-xl border border-indigo-200 bg-indigo-50/60 p-3 text-xs">
+                    <span className="font-bold text-indigo-800 uppercase tracking-wide">Traslado a Otra Provincia Solicitado:</span>
+                    <p className="mt-1 text-indigo-900">
+                      Destino: <strong>{operativoData.traslado.provinciaDestino}</strong> · Motivo: {operativoData.traslado.motivo || "Traslado solicitado"}
+                    </p>
+                  </div>
+                ) : null}
+
+                {/* Observaciones generales de la llamada */}
+                {operativoData?.comentarioContacto ? (
+                  <div className="rounded-xl border border-slate-200 bg-white p-3 text-xs">
+                    <span className="font-bold text-slate-700 uppercase tracking-wide">Observaciones de la Llamada:</span>
+                    <p className="mt-1 text-slate-700 leading-relaxed">{operativoData.comentarioContacto}</p>
+                  </div>
+                ) : null}
+
+                {/* Teléfonos verificados */}
+                {operativoData?.telefonos && operativoData.telefonos.length > 0 ? (
+                  <div className="space-y-1.5 pt-1">
+                    <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Teléfonos Verificados / Actualizados</span>
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      {operativoData.telefonos.map((t, i) => (
+                        <div
+                          key={i}
+                          className={`flex items-center justify-between rounded-xl border p-2.5 text-xs ${
+                            t.funciona ? "border-emerald-200 bg-emerald-50/40" : "border-slate-200 bg-white"
+                          }`}
+                        >
+                          <div className="flex items-center gap-2">
+                            <span className={t.principal ? "text-amber-500 font-bold" : "text-slate-300"}>★</span>
+                            <span className="font-mono font-bold text-slate-900">{t.num}</span>
+                            {t.funciona ? (
+                              <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-bold text-emerald-800">
+                                Funciona
+                              </span>
+                            ) : (
+                              <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-500">
+                                No funciona
+                              </span>
+                            )}
+                          </div>
+                          {t.comentario ? (
+                            <span className="text-[11px] text-slate-500 truncate max-w-[160px]" title={t.comentario}>
+                              {t.comentario}
+                            </span>
+                          ) : null}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+              </section>
+
               <section className="mt-5">
-                <p className="text-xs uppercase tracking-wide text-slate-500">Telefonos</p>
+                <p className="text-xs uppercase tracking-wide text-slate-500">Telefonos Registrados</p>
                 <div className="mt-2 space-y-2">
                   {phoneList.map((phone) => (
                     <div key={phone} className="rounded-lg bg-slate-50 px-3 py-2 text-sm text-slate-800">
@@ -676,15 +1019,22 @@ export function CardDetailModal({ cardId, onClose, onUpdated }: Props) {
 
           {tab === "status" ? (
             <div>
-              <p className="mb-3 text-sm text-slate-600">Selecciona el nuevo status:</p>
+              <div className="mb-3 flex items-center justify-between">
+                <p className="text-sm font-semibold text-slate-700">
+                  Selecciona el nuevo status:
+                </p>
+                <span className="rounded-full bg-slate-100 px-2.5 py-0.5 text-xs text-slate-600 font-medium">
+                  {isDebit ? "Opciones Débito" : "Opciones Crédito"}
+                </span>
+              </div>
               <div className="space-y-2">
-                {statusOptions.map((option) => (
+                {availableStatusOptions.map((option) => (
                   <label
                     key={option}
-                    className={`flex cursor-pointer items-center gap-3 rounded-lg border px-3 py-2 ${
+                    className={`flex cursor-pointer items-center gap-3 rounded-lg border px-3 py-2.5 transition ${
                       statusValue === option
-                        ? "border-blue-400 bg-blue-50"
-                        : "border-slate-200 bg-white"
+                        ? "border-blue-500 bg-blue-50/60 ring-1 ring-blue-300"
+                        : "border-slate-200 bg-white hover:bg-slate-50"
                     }`}
                   >
                     <input
@@ -692,22 +1042,22 @@ export function CardDetailModal({ cardId, onClose, onUpdated }: Props) {
                       name="status_change"
                       checked={statusValue === option}
                       onChange={() => setStatusValue(option)}
-                      className="accent-blue-700"
+                      className="accent-blue-700 h-4 w-4"
                     />
-                    <span className="text-sm text-slate-800">{statusLabel(option)}</span>
+                    <span className="text-sm font-medium text-slate-800">{statusLabel(option)}</span>
                   </label>
                 ))}
               </div>
 
               <div className="mt-4">
                 <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">
-                  Motivo retorno (si aplica)
+                  Motivo retorno {isDebit ? "(opcional para débito)" : "(requerido si retornada/devuelta)"}
                 </label>
                 <select
                   value={returnReason}
                   onChange={(e) => setReturnReason(e.target.value)}
                   className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
-                  disabled={!requiresReturnReason(statusValue)}
+                  disabled={!requiresReturnReason(statusValue, isDebit) && !isDebit}
                 >
                   <option value="">Seleccionar...</option>
                   {motivos.map((motivo) => (
@@ -728,6 +1078,25 @@ export function CardDetailModal({ cardId, onClose, onUpdated }: Props) {
                   />
                   Marcar tarjeta como zona remota
                 </label>
+              </div>
+
+              <div className="mt-3">
+                <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Contrato</label>
+                <label className="inline-flex items-center gap-2 rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-700">
+                  <input
+                    type="checkbox"
+                    checked={hasContractValue}
+                    onChange={(e) => setHasContractValue(e.target.checked)}
+                  />
+                  Tarjeta requiere contrato
+                </label>
+                {card.status === CardStatus.ENTREGA_DIGITAL_SIN_CONTRATO ||
+                card.status === CardStatus.ENTREGA_SIN_CONTRATO ? (
+                  <p className="mt-1 text-xs text-amber-700">
+                    Este cambio no resuelve el estado pendiente por contrato: use el modulo de
+                    &quot;Contratos pendientes&quot; para subir la imagen o marcar la entrega.
+                  </p>
+                ) : null}
               </div>
 
               <div className="mt-3">
@@ -819,7 +1188,7 @@ export function CardDetailModal({ cardId, onClose, onUpdated }: Props) {
                 </div>
                 <button
                   onClick={saveStatus}
-                  disabled={saving || (requiresReturnReason(statusValue) && !returnReason.trim())}
+                  disabled={saving || (requiresReturnReason(statusValue, isDebit) && !returnReason.trim())}
                   className="rounded-lg bg-[#0f2544] px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
                 >
                   {saving ? "Guardando..." : "Guardar cambio"}
@@ -919,6 +1288,19 @@ export function CardDetailModal({ cardId, onClose, onUpdated }: Props) {
           ) : null}
         </div>
       </div>
+
+      {showContactWizard && wizardCard ? (
+        <OperativeContactWizard
+          card={wizardCard}
+          index={0}
+          total={1}
+          provincesList={provincesList}
+          onClose={() => setShowContactWizard(false)}
+          onPrev={() => {}}
+          onNext={() => {}}
+          onSave={handleSaveContactFromWizard}
+        />
+      ) : null}
     </div>
   );
 }

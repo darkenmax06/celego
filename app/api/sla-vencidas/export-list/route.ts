@@ -3,17 +3,11 @@ import { CardStatus } from "@prisma/client";
 import { z } from "zod";
 import { requireApiSession } from "@/lib/api-session";
 import { prisma } from "@/lib/prisma";
+import { displayPhone, displayText } from "@/lib/display";
 import { remainingBusinessDays } from "@/lib/sla";
 import { exportRowsToCsv, exportRowsToPdf, exportRowsToXlsx } from "@/lib/reports/export";
 import { writeAuditEvent } from "@/lib/audit";
-
-const CLOSED_STATUSES: CardStatus[] = [
-  CardStatus.ENTREGADA,
-  CardStatus.ENTREGA_DIGITAL,
-  CardStatus.RETORNADA,
-  CardStatus.ACUSE_RECIBIDO,
-  CardStatus.DEVUELTA_TIENDA,
-];
+import { SLA_CLOSED_STATUSES } from "@/lib/list-query/descriptors/sla-vencidas";
 
 const COLUMN_LABELS = {
   nombre: "Cliente",
@@ -65,7 +59,7 @@ export async function POST(request: Request) {
 
   const cards = await prisma.card.findMany({
     where: {
-      status: { notIn: CLOSED_STATUSES },
+      status: { notIn: [...SLA_CLOSED_STATUSES] },
       slaDueDate: { lt: today },
       ...(messengerId !== "ALL" ? { currentMessengerId: messengerId } : {}),
     },
@@ -108,14 +102,14 @@ export async function POST(request: Request) {
     slaDueDate: formatDate(card.slaDueDate),
     diasVencidos: Math.abs(Math.min(0, remainingBusinessDays(new Date(), card.slaDueDate ?? today))),
     dispatchDate: formatDate(card.dispatchDate),
-    mensajero: card.currentMessenger?.nombre ?? "",
+    mensajero: displayText(card.currentMessenger?.nombre),
     provincia: card.provincia,
     zona: card.zona,
     tipoTarjeta: card.isAdditional ? "ADICIONAL" : "PRINCIPAL",
     adicional: card.isAdditional ? "SI" : "NO",
     adicionalNumero: card.additionalIndex,
-    direccion: card.customer.direccionRaw ?? "",
-    telefonos: card.customer.telefonosRaw ?? "",
+    direccion: displayText(card.customer.direccionRaw),
+    telefonos: displayPhone(card.customer.telefonosRaw),
   }));
 
   const selectedColumns = [...new Set(parsed.data.columns)];

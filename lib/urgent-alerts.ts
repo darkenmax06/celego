@@ -155,13 +155,71 @@ export function urgentStatusLabel(level: number) {
   return `URGENTE_NIVEL_${safeLevel}`;
 }
 
+/**
+ * SDD solicitudes-reclamaciones-urgentes (design D4): tri-state lifecycle
+ * classification. `CLOSED` is the exact pre-existing `isClosedCardStatus`
+ * set. `PENDING_RECEPTION` covers statuses parked awaiting physical return
+ * receipt — the card leaves Tarjetas Urgentes but its `UrgentCase` history
+ * stays open. Everything else is `ACTIVE`.
+ */
+export type CardLifecyclePhase = "CLOSED" | "PENDING_RECEPTION" | "ACTIVE";
+
+const CLOSED_STATUSES = new Set<CardStatus>([
+  CardStatus.ENTREGADA,
+  CardStatus.RETORNADA,
+  CardStatus.ACUSE_RECIBIDO,
+  CardStatus.DEVUELTA_TIENDA,
+  CardStatus.TD_ENTREGADO,
+  CardStatus.TD_DEVUELTO_NO_LOCALIZADO,
+  CardStatus.TD_NO_LE_INTERESA,
+  CardStatus.TD_RETIRADA_EN_OFICINA,
+  CardStatus.TD_SOLICITADA_POR_ERROR,
+  CardStatus.TD_ZONA_FUERA_COBERTURA,
+]);
+
+const PENDING_RECEPTION_STATUSES = new Set<CardStatus>([
+  CardStatus.ENTREGA_DIGITAL,
+  CardStatus.EN_PROCESO_DE_RETORNO,
+]);
+
+export function classifyCardLifecycle(status: CardStatus): CardLifecyclePhase {
+  if (CLOSED_STATUSES.has(status)) return "CLOSED";
+  if (PENDING_RECEPTION_STATUSES.has(status)) return "PENDING_RECEPTION";
+  return "ACTIVE";
+}
+
 export function isClosedCardStatus(status: CardStatus) {
-  return (
-    status === CardStatus.ENTREGADA ||
-    status === CardStatus.RETORNADA ||
-    status === CardStatus.ACUSE_RECIBIDO ||
-    status === CardStatus.DEVUELTA_TIENDA
-  );
+  return classifyCardLifecycle(status) === "CLOSED";
+}
+
+/**
+ * SDD solicitudes-reclamaciones-urgentes (design D4): called from
+ * `applyCardTransition` for `PENDING_RECEPTION` transitions. Sets
+ * `Card.urgent = false` (removes the card from Tarjetas Urgentes) and stops
+ * reminder spam (`nextNotificationAt = null` on the open case), but does
+ * NOT resolve the `UrgentCase` — Pendiente de Recepcion is derived from
+ * `Card.status` + open-case existence, so the case must stay open.
+ */
+export async function parkUrgencyOnPendingReception(args: {
+  cardId: string;
+  nextStatus: CardStatus;
+  byUserId?: string | null;
+  tx?: TxClient;
+}) {
+  const client = args.tx ?? prisma;
+
+  const [clearedUrgentFlag, pausedNotifications] = await Promise.all([
+    client.card.updateMany({
+      where: { id: args.cardId, urgent: true },
+      data: { urgent: false },
+    }),
+    client.urgentCase.updateMany({
+      where: { cardId: args.cardId, resolvedAt: null },
+      data: { nextNotificationAt: null },
+    }),
+  ]);
+
+  return clearedUrgentFlag.count > 0 || pausedNotifications.count > 0;
 }
 
 export async function clearUrgencyOnCardClosure(args: {

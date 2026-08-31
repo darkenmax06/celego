@@ -1,12 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
-import { CardStatus } from "@prisma/client";
-import { parseISO } from "date-fns";
+import { CardStatus, Prisma } from "@prisma/client";
 import { z } from "zod";
 import { requireApiSession } from "@/lib/api-session";
 import { prisma } from "@/lib/prisma";
 import { recalculateAdditionalCardsForGroups } from "@/lib/card-additional";
 import { toCardStatus } from "@/lib/card-status";
+import { buildListEnvelope, compile, ListQueryValidationError } from "@/lib/list-query";
+import { tarjetasListQuery } from "@/lib/list-query/descriptors/tarjetas";
 import { applyCardTransition, RETURN_REASON_REQUIRED } from "@/lib/card-transition";
+import { buildSourceRecordKey, canCreateDispatch, DispatchConflictError } from "@/lib/dispatch-origin";
+
+const originSchema = z.enum(["TORRE_POPULAR", "CENTRO_ACOPIO"]);
 
 const updateSchema = z.object({
   id: z.string().cuid(),
@@ -17,52 +21,60 @@ const updateSchema = z.object({
   messengerId: z.string().cuid().nullable().optional(),
   returnReason: z.string().nullable().optional(),
   note: z.string().optional(),
+  // SDD contrato-tarjetas-pistoleo (spec: hasContract editable after
+  // assignment). Toggling this alone never resolves an exception status
+  // (ENTREGA_DIGITAL_SIN_CONTRATO / ENTREGA_SIN_CONTRATO); only the two
+  // dedicated resolution actions do that.
+  hasContract: z.boolean().optional(),
 });
 
 export async function GET(request: NextRequest) {
   const auth = await requireApiSession(["ADMIN", "OPERADOR", "FACTURACION", "MENSAJERO"]);
   if ("error" in auth) return auth.error;
 
-  const { searchParams } = request.nextUrl;
-  const q = searchParams.get("q")?.trim();
-  const status = searchParams.get("status");
-  const provincia = searchParams.get("provincia");
-  const zona = searchParams.get("zona");
-  const urgent = searchParams.get("urgent");
-  const remote = searchParams.get("remote");
-  const from = searchParams.get("from");
-  const to = searchParams.get("to");
-  const pageRaw = Number(searchParams.get("page") ?? "1");
-  const pageSizeRaw = Number(searchParams.get("pageSize") ?? "25");
-  const page = Number.isFinite(pageRaw) ? Math.max(1, Math.trunc(pageRaw)) : 1;
-  const pageSize = Number.isFinite(pageSizeRaw) ? Math.min(200, Math.max(1, Math.trunc(pageSizeRaw))) : 25;
-
-  const where: Record<string, unknown> = {};
-
-  if (q) {
-    where.OR = [
-      { tc: { contains: q, mode: "insensitive" } },
-      { externalReference: { contains: q, mode: "insensitive" } },
-      { customer: { cedula: { contains: q, mode: "insensitive" } } },
-      { customer: { nombre: { contains: q, mode: "insensitive" } } },
-    ];
+  // Task 10.1: the whole filter/pagination surface now comes from the shared
+  // descriptor. Its `status` coercion and `boundaries: "instant"` date bounds
+  // reproduce this route's historical behaviour exactly — see the descriptor.
+  let query;
+  try {
+    query = compile(tarjetasListQuery, request.nextUrl.searchParams);
+  } catch (error) {
+    if (error instanceof ListQueryValidationError) {
+      return NextResponse.json({ error: error.message }, { status: 400 });
+    }
+    throw error;
   }
-  if (status && status !== "ALL") where.status = toCardStatus(status);
-  if (provincia && provincia !== "ALL") where.provincia = provincia;
-  if (zona && zona !== "ALL") where.zona = zona;
-  if (urgent === "1") where.urgent = true;
-  if (remote === "1") where.isRemote = true;
-  if (remote === "0") where.isRemote = false;
-  if (from || to) {
-    where.dispatchDate = {
-      ...(from ? { gte: parseISO(from) } : {}),
-      ...(to ? { lte: parseISO(to) } : {}),
-    };
+  const contactoEstadoParam = request.nextUrl.searchParams.get("contactoEstado");
+
+  let contactoConstraint: Prisma.CardWhereInput | undefined;
+  if (contactoEstadoParam && contactoEstadoParam !== "ALL") {
+    if (contactoEstadoParam === "CONTACTADA") {
+      contactoConstraint = {
+        metadata: { path: ["operativo", "contactado"], equals: true },
+      };
+    } else if (contactoEstadoParam === "RETORNO_SOLICITADO") {
+      contactoConstraint = {
+        metadata: { path: ["operativo", "solicitudRetorno"], equals: true },
+      };
+    } else if (contactoEstadoParam === "TRASLADO_SOLICITADO") {
+      contactoConstraint = {
+        metadata: { path: ["operativo", "traslado", "provinciaDestino"], not: Prisma.AnyNull },
+      };
+    } else if (contactoEstadoParam === "NO_CONTACTADA") {
+      contactoConstraint = {
+        NOT: { metadata: { path: ["operativo", "contactado"], equals: true } },
+      };
+    }
   }
+
+  const { where } = query;
+  const finalWhere: Prisma.CardWhereInput = contactoConstraint
+    ? { AND: [where, contactoConstraint] }
+    : where;
 
   const [cards, total] = await Promise.all([
     prisma.card.findMany({
-      where,
+      where: finalWhere,
       include: {
         customer: true,
         currentMessenger: true,
@@ -78,22 +90,50 @@ export async function GET(request: NextRequest) {
           },
         },
       },
-      orderBy: [{ updatedAt: "desc" }],
-      skip: (page - 1) * pageSize,
-      take: pageSize,
+      orderBy: query.orderBy,
+      skip: query.skip,
+      take: query.take,
     }),
-    prisma.card.count({ where }),
+    prisma.card.count({ where: finalWhere }),
   ]);
 
-  const totalPages = Math.max(1, Math.ceil(total / pageSize));
-  const normalizedCards = cards.map(({ urgentCases, ...card }) => ({
-    ...card,
-    activeUrgentCase: urgentCases[0] ?? null,
-  }));
+  const normalizedCards = cards.map(({ urgentCases, ...card }) => {
+    const root = (card.metadata && typeof card.metadata === "object" ? card.metadata : {}) as Record<string, unknown>;
+    const op = (root.operativo && typeof root.operativo === "object" ? root.operativo : {}) as Record<string, unknown>;
+    const contactado = Boolean(op.contactado);
+    const solicitudRetorno = Boolean(op.solicitudRetorno);
+    const traslado = op.traslado && typeof op.traslado === "object" ? (op.traslado as Record<string, unknown>) : null;
+    const canalContacto = typeof op.canalContacto === "string" ? op.canalContacto : null;
+    const nuevaDireccion = typeof op.nuevaDireccion === "string" ? op.nuevaDireccion : null;
+    const fechaPreferenciaEntrega = typeof op.fechaPreferenciaEntrega === "string" ? op.fechaPreferenciaEntrega : null;
+    const motivoRetorno = typeof op.motivoRetorno === "string" ? op.motivoRetorno : null;
+    const comentarioContacto = typeof op.comentarioContacto === "string" ? op.comentarioContacto : null;
+    const contactoEstado = solicitudRetorno
+      ? "RETORNO_SOLICITADO"
+      : traslado && Object.keys(traslado).length > 0
+        ? "TRASLADO_SOLICITADO"
+        : contactado
+          ? "CONTACTADA"
+          : "NO_CONTACTADA";
+
+    return {
+      ...card,
+      contactado,
+      contactoEstado,
+      canalContacto,
+      nuevaDireccion,
+      fechaPreferenciaEntrega,
+      solicitudRetorno,
+      motivoRetorno,
+      traslado,
+      comentarioContacto,
+      activeUrgentCase: urgentCases[0] ?? null,
+    };
+  });
 
   return NextResponse.json({
     cards: normalizedCards,
-    pagination: { page, pageSize, total, totalPages },
+    pagination: buildListEnvelope({ page: query.page, pageSize: query.pageSize, total }),
   });
 }
 
@@ -142,8 +182,13 @@ export async function PATCH(request: Request) {
           provincia: parsed.data.provincia ?? undefined,
           zona: parsed.data.zona ?? undefined,
           isRemote: parsed.data.isRemote ?? undefined,
-        currentMessengerId:
-          parsed.data.messengerId === undefined ? undefined : parsed.data.messengerId,
+          currentMessengerId:
+            parsed.data.messengerId === undefined ? undefined : parsed.data.messengerId,
+          hasContract: parsed.data.hasContract ?? undefined,
+          metadata: {
+            ...((card.metadata as Record<string, unknown>) || {}),
+            ...(parsed.data.note ? { comment: parsed.data.note, COMENTARIO: parsed.data.note } : {}),
+          },
         },
       });
 
@@ -170,38 +215,50 @@ export async function POST(request: Request) {
   if ("error" in auth) return auth.error;
 
   const body = await request.json();
-  const { tc, cedula, nombre, provincia, zona, isRemote } = body ?? {};
-  if (!tc || !cedula || !nombre) {
-    return NextResponse.json({ error: "tc, cedula y nombre son requeridos" }, { status: 400 });
+  const { tc, cedula, nombre, provincia, zona, isRemote, origin } = body ?? {};
+  if (!tc || !cedula || !nombre || !originSchema.safeParse(origin).success) {
+    return NextResponse.json({ error: "tc, cedula, nombre y origin valido son requeridos" }, { status: 400 });
   }
 
-  const customer = await prisma.customer.upsert({
-    where: { cedula },
-    update: { nombre, provincia: provincia ?? undefined, zona: zona ?? undefined },
-    create: { cedula, nombre, provincia: provincia ?? null, zona: zona ?? null },
-  });
-
-  const card = await prisma.card.create({
-    data: {
-      tc,
-      customerId: customer.id,
-      provincia: provincia ?? "Santo Domingo",
-      zona: zona ?? "Metro",
-      isRemote: Boolean(isRemote),
-      status: CardStatus.DESPACHADA,
-      dispatchDate: new Date(),
-    },
-    include: { customer: true },
-  });
-
-  await prisma.cardStatusLog.create({
-    data: {
-      cardId: card.id,
-      toStatus: CardStatus.DESPACHADA,
-      note: "Creacion manual",
-      byUserId: auth.session.user.id,
-    },
-  });
+  const dispatchDate = new Date();
+  const sourceRecordKey = buildSourceRecordKey({ origin, tc, cedula, dispatchDate });
+  let card;
+  try {
+    card = await prisma.$transaction(async (tx) => {
+      const customer = await tx.customer.upsert({
+        where: { cedula },
+        update: { nombre, provincia: provincia ?? undefined, zona: zona ?? undefined },
+        create: { cedula, nombre, provincia: provincia ?? null, zona: zona ?? null },
+      });
+      await tx.cardTcGuard.upsert({ where: { tc }, update: {}, create: { tc } });
+      const guard = await tx.cardTcGuard.findUniqueOrThrow({ where: { tc } });
+      canCreateDispatch({ tc, activeCardId: guard.activeCardId, deliveredCardId: guard.deliveredCardId });
+      const created = await tx.card.create({
+        data: {
+          tc,
+          customerId: customer.id,
+          provincia: provincia ?? "Santo Domingo",
+          zona: zona ?? "Metro",
+          isRemote: Boolean(isRemote),
+          status: CardStatus.DESPACHADA,
+          dispatchDate,
+          dispatchOrigin: origin,
+          sourceRecordKey,
+        },
+        include: { customer: true },
+      });
+      await tx.cardTcGuard.update({ where: { tc }, data: { activeCardId: created.id } });
+      await tx.cardStatusLog.create({
+        data: { cardId: created.id, toStatus: CardStatus.DESPACHADA, note: "Creacion manual", byUserId: auth.session.user.id },
+      });
+      return created;
+    });
+  } catch (error) {
+    if (error instanceof DispatchConflictError) {
+      return NextResponse.json({ error: error.code }, { status: 409 });
+    }
+    throw error;
+  }
 
   await recalculateAdditionalCardsForGroups([
     {

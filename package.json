@@ -19,7 +19,9 @@
     "db:clear-demo": "tsx scripts/clear-demo.ts",
     "cards:backfill-additionals": "tsx scripts/backfill-card-additionals.ts",
     "create-admin": "tsx scripts/create-admin.ts",
-    "postinstall": "prisma generate"
+    "postinstall": "prisma generate",
+    "cards:audit-tc": "tsx scripts/audit-tc-integrity.ts",
+    "lots:backfill-typed-columns": "tsx scripts/backfill-lot-typed-columns.ts"
   },
   "dependencies": {
     "@prisma/client": "^6.18.0",
@@ -35,6 +37,7 @@
     "pdf-lib": "^1.17.1",
     "react": "19.2.4",
     "react-dom": "19.2.4",
+    "react-hot-toast": "^2.6.0",
     "recharts": "^3.8.1",
     "sharp": "^0.34.5",
     "xlsx": "^0.18.5",
@@ -43,6 +46,9 @@
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
+    "@testing-library/jest-dom": "^7.0.1",
+    "@testing-library/react": "^16.3.3",
+    "@testing-library/user-event": "^14.6.6",
     "@types/bcryptjs": "^2.4.6",
     "@types/node": "^20",
     "@types/papaparse": "^5.5.2",
@@ -50,6 +56,7 @@
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "16.2.4",
+    "jsdom": "^29.1.1",
     "prisma": "^6.18.0",
     "tailwindcss": "^4",
     "tsx": "^4.21.0",

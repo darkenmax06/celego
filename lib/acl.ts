@@ -10,6 +10,7 @@ const ACCESS: Record<ModuleName, UserRole[]> = {
   sla_vencidas: ["ADMIN", "OPERADOR", "FACTURACION"],
   rutas: ["ADMIN", "OPERADOR"],
   operativo: ["ADMIN", "OPERADOR"],
+  contratos_pendientes: ["ADMIN", "OPERADOR"],
   redaccion: ["ADMIN", "OPERADOR"],
   mensajeros: ["ADMIN", "OPERADOR"],
   facturacion: ["ADMIN", "FACTURACION"],

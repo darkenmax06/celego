@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { CardStatus, Prisma } from "@prisma/client";
 import { z } from "zod";
 import { requireApiSession } from "@/lib/api-session";
+import { buildListEnvelope, compile } from "@/lib/list-query";
+import { lotesListQuery } from "@/lib/list-query/descriptors/lotes";
 import { prisma } from "@/lib/prisma";
 import {
   findOperationalCardCandidates,
@@ -9,7 +11,14 @@ import {
   type OperationalCard,
 } from "@/lib/operational-card-service";
 import { resolveZone } from "@/lib/zone-map";
-import { clearUrgencyOnCardClosure } from "@/lib/urgent-alerts";
+import { mapLotStatus } from "@/lib/lot-status";
+import { RETURN_REASON_REQUIRED } from "@/lib/item-outcome";
+import {
+  applyItemOutcome,
+  CARD_CLOSED_REQUIRES_CONFIRMATION,
+  LOT_ITEM_NOT_FOUND,
+} from "@/lib/item-outcome-service";
+import { emitTransitionObservations, type TransitionObservation } from "@/lib/card-transition-observer";
 
 const createSchema = z.object({
   messengerId: z.string().cuid(),
@@ -75,28 +84,28 @@ function asRecord(value: unknown): Record<string, unknown> {
     : {};
 }
 
-function parsePagination(request: NextRequest) {
-  const pageRaw = Number(request.nextUrl.searchParams.get("page") ?? "1");
-  const pageSizeRaw = Number(request.nextUrl.searchParams.get("pageSize") ?? "20");
-  const page = Number.isFinite(pageRaw) ? Math.max(1, Math.trunc(pageRaw)) : 1;
-  const pageSize = Number.isFinite(pageSizeRaw) ? Math.min(100, Math.max(1, Math.trunc(pageSizeRaw))) : 20;
-  return { page, pageSize };
-}
-
-type LotLifecycleResult = "ACUSE_RECIBIDO" | "DEVUELTA_TIENDA" | "EN_RUTA";
-
 const CLOSED_CARD_STATUSES = [CardStatus.RETORNADA, CardStatus.DEVUELTA_TIENDA] as const;
 const CARD_ASSIGNMENT_CLOSED = "CARD_ASSIGNMENT_CLOSED";
-const CARD_CLOSED_REQUIRES_CONFIRMATION = "CARD_CLOSED_REQUIRES_CONFIRMATION";
 
 function isClosedCardStatus(status: CardStatus | string | null | undefined) {
   return CLOSED_CARD_STATUSES.includes(status as (typeof CLOSED_CARD_STATUSES)[number]);
 }
 
-function normalizeLotResult(value: z.infer<typeof lotResultSchema>): LotLifecycleResult {
-  if (value === "ACUSE_RECIBIDO" || value === "RECIBIDA") return "ACUSE_RECIBIDO";
-  if (value === "DEVUELTA_TIENDA" || value === "RETORNADA") return "DEVUELTA_TIENDA";
-  return "EN_RUTA";
+/**
+ * Best-effort post-commit flush of `CardTransitionPolicy` SHADOW observations
+ * (design D3). `emitTransitionObservations()` already swallows its own
+ * errors via `tryWriteAuditEvent` — this wrapper is deliberate
+ * defense-in-depth so a future change to that contract can never turn a
+ * harmless audit-logging failure into a broken PATCH response.
+ */
+async function flushTransitionObservations(
+  observations: (TransitionObservation | null | undefined)[],
+) {
+  try {
+    await emitTransitionObservations(observations);
+  } catch (error) {
+    console.error("No se pudieron emitir observaciones de CardTransitionPolicy", error);
+  }
 }
 
 async function generateLotNumber(fechaEnvio: Date) {
@@ -117,123 +126,15 @@ async function generateLotNumber(fechaEnvio: Date) {
   return `${prefix}-${String(nextSeq).padStart(3, "0")}`;
 }
 
-async function applyLotItemResult(
-  tx: Prisma.TransactionClient,
-  input: {
-    itemId: string;
-    result: z.infer<typeof lotResultSchema>;
-    comentario?: string;
-  },
-  byUserId?: string,
-  options?: { requireOpenCard?: boolean },
-) {
-  const item = await tx.lotItem.findUnique({
-    where: { id: input.itemId },
-    include: { card: true, lot: true },
-  });
-  if (!item) {
-    throw new Error("LOT_ITEM_NOT_FOUND");
-  }
-
-  if (options?.requireOpenCard && isClosedCardStatus(item.card?.status)) {
-    throw new Error(CARD_CLOSED_REQUIRES_CONFIRMATION);
-  }
-
-  const lifecycleResult = normalizeLotResult(input.result);
-  const nextRecibida = lifecycleResult === "ACUSE_RECIBIDO" ? "SI" : null;
-  const nextRetornada = lifecycleResult === "DEVUELTA_TIENDA" ? "SI" : null;
-  const trimmedComment = input.comentario?.trim();
-  const fallbackReason = item.card?.returnReason?.trim();
-  const returnReason = trimmedComment || fallbackReason || null;
-
-  if (lifecycleResult === "DEVUELTA_TIENDA" && !returnReason) {
-    throw new Error("RETURN_REASON_REQUIRED");
-  }
-
-  await tx.lotItem.update({
-    where: { id: item.id },
-    data: {
-      recibida: nextRecibida,
-      retornada: nextRetornada,
-    },
-  });
-
-  if (item.cardId && item.card) {
-    const nextStatus =
-      lifecycleResult === "ACUSE_RECIBIDO"
-        ? CardStatus.ACUSE_RECIBIDO
-        : lifecycleResult === "DEVUELTA_TIENDA"
-          ? CardStatus.DEVUELTA_TIENDA
-          : CardStatus.EN_RUTA;
-
-    if (lifecycleResult !== "EN_RUTA" || item.card.status !== nextStatus || input.comentario) {
-      await tx.cardStatusLog.create({
-        data: {
-          cardId: item.cardId,
-          fromStatus: item.card.status,
-          toStatus: nextStatus,
-          note:
-            lifecycleResult === "ACUSE_RECIBIDO"
-              ? input.comentario || `Acuse recibido por lote ${item.lot.lotNumber}`
-              : lifecycleResult === "DEVUELTA_TIENDA"
-                ? input.comentario || `Tarjeta devuelta a tienda por lote ${item.lot.lotNumber}`
-                : input.comentario || `Actualizada por lote ${item.lot.lotNumber}`,
-          byUserId,
-        },
-      });
-    }
-
-    const metadataRoot = asRecord(item.card.metadata);
-    const routeMeta = asRecord(metadataRoot.route);
-
-    await tx.card.update({
-      where: { id: item.cardId },
-      data: {
-        status: nextStatus,
-        returnReason: lifecycleResult === "DEVUELTA_TIENDA" ? returnReason : null,
-        currentMessengerId: item.card.currentMessengerId,
-        metadata: {
-          ...metadataRoot,
-          route: {
-            ...routeMeta,
-            result: lifecycleResult,
-            comentario: returnReason ?? "",
-            lotId: item.lotId,
-            updatedAt: new Date().toISOString(),
-          },
-        } as Prisma.InputJsonValue,
-      },
-    });
-
-    await clearUrgencyOnCardClosure({
-      tx,
-      cardId: item.cardId,
-      nextStatus,
-      byUserId,
-    });
-  }
-
-  return { itemId: item.id, lotId: item.lotId, tc: item.tc };
-}
-
 export async function GET(request: NextRequest) {
   const auth = await requireApiSession(["ADMIN", "OPERADOR", "FACTURACION", "MENSAJERO"]);
   if ("error" in auth) return auth.error;
 
-  const date = request.nextUrl.searchParams.get("date");
-  const status = request.nextUrl.searchParams.get("status");
-  const { page, pageSize } = parsePagination(request);
-  const where: Prisma.LotWhereInput = {
-    ...(status && status !== "ALL" ? { estatus: status } : {}),
-    ...(date
-      ? (() => {
-          const start = new Date(date);
-          const end = new Date(start);
-          end.setDate(end.getDate() + 1);
-          return { fechaEnvio: { gte: start, lt: end } };
-        })()
-      : {}),
-  };
+  // `status` keeps its free-string + "ALL" sentinel semantics and `date` stays a
+  // SINGLE param expanded to [start, start + 1 day). No search, no sort: the
+  // route never had either.
+  const query = compile(lotesListQuery, request.nextUrl.searchParams);
+  const where: Prisma.LotWhereInput = query.where;
 
   const [lots, total] = await Promise.all([
     prisma.lot.findMany({
@@ -245,9 +146,9 @@ export async function GET(request: NextRequest) {
           },
         },
       },
-      orderBy: [{ fechaEnvio: "desc" }, { createdAt: "desc" }],
-      skip: (page - 1) * pageSize,
-      take: pageSize,
+      orderBy: query.orderBy,
+      skip: query.skip,
+      take: query.take,
     }),
     prisma.lot.count({ where }),
   ]);
@@ -276,10 +177,9 @@ export async function GET(request: NextRequest) {
     };
   });
 
-  const totalPages = Math.max(1, Math.ceil(total / pageSize));
   return NextResponse.json({
     lots: rows,
-    pagination: { page, pageSize, total, totalPages },
+    pagination: buildListEnvelope({ page: query.page, pageSize: query.pageSize, total }),
   });
 }
 
@@ -395,6 +295,7 @@ export async function POST(request: Request) {
           fechaEnvio,
           fechaRetorno: parsed.data.fechaRetorno ? new Date(parsed.data.fechaRetorno) : null,
           estatus: parsed.data.estatus,
+          estatusTipo: mapLotStatus(parsed.data.estatus),
           notas: parsed.data.notas,
           items: {
             create: uniqueIdentifiers.map((identifier) => {
@@ -475,19 +376,28 @@ export async function PATCH(request: Request) {
   switch (payload.action) {
     case "UPDATE_ITEM_RESULT": {
       try {
-        const result = await prisma.$transaction((tx) =>
-          applyLotItemResult(
+        const outcome = await prisma.$transaction((tx) =>
+          applyItemOutcome({
             tx,
-            { itemId: payload.lotItemId, result: payload.result, comentario: payload.comentario },
-            auth.session.user.id,
-          ),
+            domain: "LOT",
+            itemId: payload.lotItemId,
+            result: payload.result,
+            comentario: payload.comentario,
+            byUserId: auth.session.user.id,
+          }),
         );
-        return NextResponse.json({ updated: true, ...result });
+        await flushTransitionObservations([outcome.observation]);
+        return NextResponse.json({
+          updated: true,
+          itemId: outcome.itemId,
+          lotId: outcome.lotId,
+          tc: outcome.tc,
+        });
       } catch (error) {
-        if (error instanceof Error && error.message === "LOT_ITEM_NOT_FOUND") {
+        if (error instanceof Error && error.message === LOT_ITEM_NOT_FOUND) {
           return NextResponse.json({ error: "Item de lote no encontrado" }, { status: 404 });
         }
-        if (error instanceof Error && error.message === "RETURN_REASON_REQUIRED") {
+        if (error instanceof Error && error.message === RETURN_REASON_REQUIRED) {
           return NextResponse.json(
             { error: "Motivo de devolucion requerido para marcar tarjeta devuelta a tienda" },
             { status: 400 },
@@ -607,21 +517,27 @@ export async function PATCH(request: Request) {
       }
 
       try {
-        const result = await prisma.$transaction((tx) =>
-          applyLotItemResult(
+        const outcome = await prisma.$transaction((tx) =>
+          applyItemOutcome({
             tx,
-            { itemId: item.id, result: payload.result, comentario: payload.comentario },
-            auth.session.user.id,
-            { requireOpenCard: !payload.confirmClosed },
-          ),
+            domain: "LOT",
+            itemId: item.id,
+            result: payload.result,
+            comentario: payload.comentario,
+            byUserId: auth.session.user.id,
+            requireOpenCard: !payload.confirmClosed,
+          }),
         );
+        await flushTransitionObservations([outcome.observation]);
 
         return NextResponse.json({
           scanned: { itemId: item.id, tc: item.tc, cedula: item.cedula },
-          ...result,
+          itemId: outcome.itemId,
+          lotId: outcome.lotId,
+          tc: outcome.tc,
         });
       } catch (error) {
-        if (error instanceof Error && error.message === "RETURN_REASON_REQUIRED") {
+        if (error instanceof Error && error.message === RETURN_REASON_REQUIRED) {
           return NextResponse.json(
             { error: "Motivo de devolucion requerido para marcar tarjeta devuelta a tienda" },
             { status: 400 },
@@ -641,6 +557,7 @@ export async function PATCH(request: Request) {
         where: { id: payload.lotId },
         data: {
           estatus: payload.estatus,
+          estatusTipo: mapLotStatus(payload.estatus),
           fechaRetorno: payload.fechaRetorno ? new Date(payload.fechaRetorno) : null,
           notas: payload.notas,
         },

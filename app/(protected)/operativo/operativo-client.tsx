@@ -1,51 +1,37 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { PageHeader } from "@/components/ui/page-header";
 import { Panel } from "@/components/ui/panel";
-import { notifyInBrowser } from "@/lib/browser-notifications";
 import { usePersistentState } from "@/lib/use-persistent-state";
+import { OperativeContactWizard, type PhoneState, type OperativeWizardCard } from "@/components/operativo/operative-contact-wizard";
+import { SLAExtensionRequestsTable } from "@/components/operativo/sla-extension-requests-table";
+import { FilterBar, ViewType } from "@/components/filters/filter-bar";
+import {
+  Phone,
+  AlertTriangle,
+  Send,
+  CheckCircle2,
+  Clock,
+  FileSpreadsheet,
+  RotateCcw,
+  ChevronDown,
+  ChevronRight,
+} from "lucide-react";
 
-type OperativeTab = "activos" | "urgentes";
+type OperativeTab =
+  | "activos"
+  | "contactadas"
+  | "no-contactadas"
+  | "urgentes"
+  | "traslados"
+  | "retorno"
+  | "extensiones-sla";
+
 type ExportFormat = "xlsx" | "csv" | "pdf";
 
-type PhoneState = {
-  num: string;
-  principal: boolean;
-  funciona: boolean;
-};
-
-type OperativeCard = {
-  id: string;
-  cardId: string | null;
-  urgentCaseId: string | null;
-  tc: string;
-  nombre: string;
-  cedula: string;
-  provincia: string;
-  zona: string;
-  status: string;
-  urgent: boolean;
-  urgentLevel: number | null;
-  urgentLabel: string | null;
-  urgentIntervalMinutes: number | null;
-  urgentNextNotificationAt: string | null;
-  urgentLastNotificationAt: string | null;
-  remaining: number | null;
-  presinto: string | null;
-  fechaDespacho: string | null;
-  tipoEmision: string | null;
-  tipoEntrega: string | null;
-  direcciones: string[];
-  refs: string[];
-  telefonos: PhoneState[];
-  comentarioContacto: string;
-  contactado: boolean;
-  readOnly: boolean;
-};
-
 type PaginationMeta = { page: number; pageSize: number; total: number; totalPages: number };
-type OperativoResponse = { cards: OperativeCard[]; pagination?: PaginationMeta };
+type OperativoResponse = { cards: OperativeWizardCard[]; pagination?: PaginationMeta };
 type UrgentNotification = {
   urgentCaseId: string;
   cardId: string;
@@ -59,18 +45,6 @@ type UrgentNotification = {
   nextNotificationAt: string;
 };
 
-type UrgencyMutationResponse = {
-  urgent?: boolean;
-  urgentCaseId?: string | null;
-  level?: number;
-  label?: string;
-  intervalMinutes?: number;
-  nextNotificationAt?: string;
-  notifyNow?: boolean;
-  notification?: UrgentNotification | null;
-  error?: string;
-};
-
 const STATUS_OPTIONS = [
   { value: "ALL", label: "Todos los status" },
   { value: "DESPACHADA", label: "Despachada" },
@@ -81,6 +55,13 @@ const STATUS_OPTIONS = [
   { value: "ENTREGADA", label: "Entregada" },
   { value: "RETORNADA", label: "Retornada" },
   { value: "EN_PROCESO", label: "En proceso" },
+  { value: "TD_ENTREGADO", label: "TD- Entregado" },
+  { value: "TD_DEVUELTO_NO_LOCALIZADO", label: "TD- Devuelto No Localizado" },
+  { value: "TD_NO_LE_INTERESA", label: "TD- No le Interesa" },
+  { value: "TD_RETIRADA_EN_OFICINA", label: "TD- Retirada en Oficina" },
+  { value: "TD_SOLICITADA_POR_ERROR", label: "TD- Solicitada por Error" },
+  { value: "TD_ZONA_FUERA_COBERTURA", label: "TD- Fuera de Cobertura" },
+  { value: "NO_LOCALIZADO", label: "No Localizado" },
 ] as const;
 
 function normalizeStatus(value: string) {
@@ -97,12 +78,12 @@ function statusLabel(value: string) {
 
 function statusClasses(value: string) {
   const key = normalizeStatus(value);
-  if (key === "RETORNADA" || key === "DEVUELTA_TIENDA") return "text-rose-700 bg-rose-50";
-  if (key === "ACUSE_RECIBIDO") return "text-emerald-700 bg-emerald-50";
-  if (key === "ENTREGADA" || key === "ENTREGA_DIGITAL") return "text-emerald-700 bg-emerald-50";
-  if (key === "EN_RUTA" || key === "EN_PROCESO") return "text-sky-700 bg-sky-50";
-  if (key === "DESPACHADA") return "text-indigo-700 bg-indigo-50";
-  return "text-slate-700 bg-slate-100";
+  if (key === "RETORNADA" || key === "DEVUELTA_TIENDA") return "text-rose-700 bg-rose-50 border-rose-200";
+  if (key === "ACUSE_RECIBIDO" || key === "ENTREGADA" || key === "ENTREGA_DIGITAL")
+    return "text-emerald-700 bg-emerald-50 border-emerald-200";
+  if (key === "EN_RUTA" || key === "EN_PROCESO") return "text-sky-700 bg-sky-50 border-sky-200";
+  if (key === "DESPACHADA") return "text-indigo-700 bg-indigo-50 border-indigo-200";
+  return "text-slate-700 bg-slate-100 border-slate-200";
 }
 
 function urgencyClasses(level: number | null) {
@@ -114,65 +95,8 @@ function urgencyClasses(level: number | null) {
   return "border-slate-300 bg-slate-100 text-slate-700";
 }
 
-function principalPhone(card: OperativeCard) {
+function principalPhone(card: OperativeWizardCard) {
   return card.telefonos.find((item) => item.principal)?.num ?? card.telefonos[0]?.num ?? "-";
-}
-
-function chunkAddress(lines: string[]) {
-  if (!lines.length) return "-";
-  return lines.join(" · ");
-}
-
-function normalizePhoneForSave(raw: string) {
-  return raw.trim().replace(/[^\d+]/g, "");
-}
-
-function normalizePhonesForSave(phones: PhoneState[]) {
-  const deduped: PhoneState[] = [];
-  const seen = new Set<string>();
-
-  for (const phone of phones) {
-    const num = normalizePhoneForSave(phone.num);
-    if (!num) continue;
-
-    const key = num.replace(/\D/g, "") || num.toUpperCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-
-    deduped.push({
-      num,
-      principal: Boolean(phone.principal),
-      funciona: Boolean(phone.funciona),
-    });
-  }
-
-  if (!deduped.length) return deduped;
-
-  let principalFound = false;
-  for (let index = 0; index < deduped.length; index += 1) {
-    if (deduped[index].principal && !principalFound) {
-      principalFound = true;
-      continue;
-    }
-    deduped[index].principal = false;
-  }
-
-  if (!principalFound) {
-    deduped[0].principal = true;
-  }
-
-  return deduped;
-}
-
-function buildContactSignature(input: {
-  telefonos: PhoneState[];
-  comentario: string;
-  contactado: boolean;
-}) {
-  const phonesSig = normalizePhonesForSave(input.telefonos)
-    .map((phone) => `${phone.num}|${phone.principal ? 1 : 0}|${phone.funciona ? 1 : 0}`)
-    .join(";");
-  return `${phonesSig}::${input.comentario.trim()}::${input.contactado ? 1 : 0}`;
 }
 
 function formatUrgentClock(value: string | null) {
@@ -182,32 +106,81 @@ function formatUrgentClock(value: string | null) {
   return date.toLocaleString("es-DO");
 }
 
+function getOperativeGroupKey(card: OperativeWizardCard, groupBy: string): { key: string; label: string } {
+  switch (groupBy) {
+    case "provincia":
+      return { key: card.provincia || "SIN_PROVINCIA", label: card.provincia || "Sin Provincia" };
+    case "zona":
+      return { key: card.zona || "SIN_ZONA", label: card.zona || "Sin Zona" };
+    case "status":
+      return { key: card.status || "SIN_ESTADO", label: statusLabel(card.status || "Sin Estado") };
+    case "canalContacto":
+      return {
+        key: card.canalContacto || "NO_ESPECIFICADO",
+        label:
+          card.canalContacto === "WHATSAPP"
+            ? "WhatsApp"
+            : card.canalContacto === "LLAMADA_DIRECTA"
+              ? "Llamada Directa"
+              : "Sin Canal Específico",
+      };
+    case "mensajero":
+      return { key: card.mensajero || "SIN_ASIGNAR", label: card.mensajero || "Sin Asignar" };
+    case "urgent":
+      return card.urgent ? { key: "URGENTE", label: "Casos Urgentes" } : { key: "NORMAL", label: "Normales" };
+    case "gestion":
+      if (card.solicitudRetorno) return { key: "RETORNO", label: "Solicitud de Retorno" };
+      if (card.traslado && Object.keys(card.traslado).length > 0) return { key: "TRASLADO", label: "Traslado / Cambio de Provincia" };
+      if (card.contactado) return { key: "CONTACTADA", label: "Contactada Exitosamente" };
+      if (card.hasAttempt) return { key: "NO_CONTACTADA", label: "No Contactada (Intentos)" };
+      return { key: "PENDIENTE", label: "Por Llamar (Sin Gestión)" };
+    default: {
+      const val = (card as unknown as Record<string, unknown>)[groupBy];
+      if (val !== undefined && val !== null) {
+        return { key: String(val), label: String(val) };
+      }
+      return { key: "ALL", label: "General" };
+    }
+  }
+}
+
 export default function OperativoClient() {
-  const [cards, setCards] = useState<OperativeCard[]>([]);
+  const [cards, setCards] = useState<OperativeWizardCard[]>([]);
   const [tab, setTab] = usePersistentState<OperativeTab>("operativo:tab", "activos");
-  const [provincia, setProvincia] = usePersistentState("operativo:province", "ALL");
-  const [status, setStatus] = usePersistentState("operativo:status", "ALL");
-  const [search, setSearch] = usePersistentState("operativo:search", "");
-  const [days, setDays] = usePersistentState("operativo:days", 3);
+  const [filters, setFilters] = useState<Record<string, string>>(() => ({
+    page: "1",
+    pageSize: "25",
+    days: "3",
+  }));
+  const [viewMode, setViewMode] = useState<ViewType>("list");
+  const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
   const [loading, setLoading] = useState(false);
   const [selectedCardId, setSelectedCardId] = usePersistentState<string | null>(
     "operativo:selected-card",
     null,
   );
   const [showReport, setShowReport] = usePersistentState("operativo:report-modal", false);
-  const [tabCounts, setTabCounts] = useState<{ activos: number; urgentes: number }>({
-    activos: 0,
-    urgentes: 0,
-  });
   const [pagination, setPagination] = useState<PaginationMeta>({
     page: 1,
     pageSize: 25,
     total: 0,
     totalPages: 1,
   });
-  const [page, setPage] = usePersistentState("operativo:page", 1);
   const [message, setMessage] = useState("");
+  const [provinciasList, setProvinciasList] = useState<string[]>([]);
   const [urgentNotifications, setUrgentNotifications] = useState<UrgentNotification[]>([]);
+
+  // Load registered provinces
+  useEffect(() => {
+    fetch("/api/config/provincias", { cache: "no-store" })
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.provincias) {
+          setProvinciasList(data.provincias.map((p: { nombre: string }) => p.nombre).sort());
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   async function pullUrgentNotifications() {
     const res = await fetch("/api/operativo/urgencias", { cache: "no-store" });
@@ -216,25 +189,26 @@ export default function OperativoClient() {
     const notifications = (json.notifications ?? []) as UrgentNotification[];
     if (!notifications.length) return;
     setUrgentNotifications(notifications);
-    setMessage(
-      `Recordatorios urgentes: ${notifications
-        .map((item) => `${item.tc} (${item.label})`)
-        .slice(0, 3)
-        .join(", ")}`,
-    );
   }
 
-  async function loadCards(keepSelectedId?: string) {
+  async function loadCards(keepSelectedId?: string, currentFilters = filters) {
+    if (tab === "extensiones-sla") {
+      setLoading(false);
+      return;
+    }
+
     setLoading(true);
-    const params = new URLSearchParams({
-      tab,
-      days: String(days),
-      status,
-      page: String(page),
-      pageSize: String(pagination.pageSize),
+    const params = new URLSearchParams();
+    params.set("tab", tab);
+    params.set("page", currentFilters.page || "1");
+    params.set("pageSize", currentFilters.pageSize || "25");
+    if (currentFilters.days) params.set("days", currentFilters.days);
+
+    Object.entries(currentFilters).forEach(([k, v]) => {
+      if (v && v !== "ALL" && k !== "page" && k !== "pageSize" && k !== "days" && k !== "groupBy") {
+        params.set(k, v);
+      }
     });
-    if (provincia !== "ALL") params.set("provincia", provincia);
-    if (search.trim()) params.set("q", search.trim());
 
     const res = await fetch(`/api/operativo/contacto?${params.toString()}`, { cache: "no-store" });
     const json = (await res.json()) as OperativoResponse;
@@ -243,12 +217,6 @@ export default function OperativoClient() {
     setCards(nextCards);
     if (meta) {
       setPagination(meta);
-      setTabCounts((prev) => ({ ...prev, [tab]: meta.total }));
-      if (page > meta.totalPages) {
-        setPage(meta.totalPages);
-      }
-    } else {
-      setTabCounts((prev) => ({ ...prev, [tab]: nextCards.length }));
     }
 
     if (keepSelectedId) {
@@ -260,13 +228,12 @@ export default function OperativoClient() {
   }
 
   useEffect(() => {
-    setPage(1);
-    setPagination((prev) => ({ ...prev, page: 1 }));
-  }, [tab, provincia, status, search, days]);
+    setFilters((prev) => ({ ...prev, page: "1" }));
+  }, [tab]);
 
   useEffect(() => {
-    void loadCards();
-  }, [tab, provincia, status, search, days, page]);
+    void loadCards(undefined, filters);
+  }, [tab, filters]);
 
   useEffect(() => {
     let mounted = true;
@@ -284,20 +251,36 @@ export default function OperativoClient() {
     };
   }, []);
 
-  const provincias = useMemo(() => Array.from(new Set(cards.map((c) => c.provincia))).sort(), [cards]);
-  const contactadas = useMemo(() => cards.filter((card) => card.contactado).length, [cards]);
-  const selectedIndex = selectedCardId
-    ? cards.findIndex((card) => card.id === selectedCardId)
-    : -1;
+  const groupedCards = useMemo(() => {
+    if (!filters.groupBy) return null;
+    const groups: Record<string, { groupKey: string; groupLabel: string; items: OperativeWizardCard[] }> = {};
+    for (const card of cards) {
+      const { key, label } = getOperativeGroupKey(card, filters.groupBy);
+      if (!groups[key]) {
+        groups[key] = { groupKey: key, groupLabel: label, items: [] };
+      }
+      groups[key].items.push(card);
+    }
+    return Object.values(groups);
+  }, [cards, filters.groupBy]);
+
+  const selectedIndex = selectedCardId ? cards.findIndex((card) => card.id === selectedCardId) : -1;
   const current = selectedIndex >= 0 ? cards[selectedIndex] : undefined;
 
   async function saveContact(payload: {
     telefonos: PhoneState[];
     comentario: string;
     contactado: boolean;
+    canalContacto?: "WHATSAPP" | "LLAMADA_DIRECTA" | null;
+    nuevaDireccion?: string | null;
+    fechaPreferenciaEntrega?: string | null;
+    solicitudRetorno?: boolean;
+    motivoRetorno?: string | null;
+    trasladoProvincia?: string | null;
+    trasladoMotivo?: string | null;
   }) {
     if (!current || !current.cardId) {
-      return "No se puede guardar: tarjeta sin vinculo en la base de datos.";
+      return "No se puede guardar: tarjeta sin vínculo en la base de datos.";
     }
 
     const res = await fetch("/api/operativo/contacto", {
@@ -305,9 +288,7 @@ export default function OperativoClient() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         cardId: current.cardId,
-        telefonos: payload.telefonos,
-        comentario: payload.comentario,
-        contactado: payload.contactado,
+        ...payload,
       }),
     });
 
@@ -316,72 +297,8 @@ export default function OperativoClient() {
       return data.error ?? "No se pudo registrar contacto";
     }
 
-    setCards((prev) =>
-      prev.map((item) =>
-        item.id === current.id
-          ? {
-              ...item,
-              telefonos: normalizePhonesForSave(payload.telefonos),
-              comentarioContacto: payload.comentario,
-              contactado: payload.contactado,
-            }
-          : item,
-      ),
-    );
-    return null;
-  }
-
-  async function saveUrgency(payload: {
-    cardId: string;
-    urgent: boolean;
-    level?: number;
-    resolve?: boolean;
-    note?: string;
-  }) {
-    const res = await fetch("/api/operativo/urgencias", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    const json = (await res
-      .json()
-      .catch(() => ({ error: "No se pudo actualizar urgencia" }))) as UrgencyMutationResponse;
-    if (!res.ok) {
-      return json.error ?? "No se pudo actualizar urgencia";
-    }
-
-    const updatedLevel = typeof json.level === "number" ? Number(json.level) : null;
-    setCards((prev) =>
-      prev.map((item) =>
-        item.cardId === payload.cardId
-          ? {
-              ...item,
-              urgent: Boolean(json.urgent),
-              urgentCaseId: (json.urgentCaseId as string | null | undefined) ?? item.urgentCaseId,
-              urgentLevel: json.urgent ? updatedLevel : null,
-              urgentLabel: json.urgent ? ((json.label as string | undefined) ?? item.urgentLabel) : null,
-              urgentIntervalMinutes:
-                json.urgent && typeof json.intervalMinutes === "number"
-                  ? Number(json.intervalMinutes)
-                  : null,
-              urgentNextNotificationAt:
-                json.urgent && typeof json.nextNotificationAt === "string"
-                  ? json.nextNotificationAt
-                  : null,
-            }
-          : item,
-        ),
-    );
-
-    if (json.notifyNow && json.notification) {
-      await notifyInBrowser({
-        title: `Urgencia activa: ${json.notification.label}`,
-        body: `${json.notification.cliente} - TC ${json.notification.tc}. Primera notificacion enviada.`,
-        tag: `urgent-now-${json.notification.urgentCaseId}`,
-        requireInteraction: true,
-      });
-    }
-
+    // Refresh cards and keep state
+    await loadCards(current.id, filters);
     return null;
   }
 
@@ -393,8 +310,8 @@ export default function OperativoClient() {
 
     const res = await fetch(`/api/reportes/export?${params.toString()}`);
     if (!res.ok) {
-      const json = await res.json().catch(() => ({ error: "No se pudo exportar contactos" }));
-      setMessage(json.error ?? "No se pudo exportar contactos");
+      const json = await res.json().catch(() => ({ error: "Error en exportación" }));
+      setMessage(json.error ?? "No se pudo exportar el reporte.");
       return;
     }
 
@@ -402,20 +319,20 @@ export default function OperativoClient() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    const scope = provinciaFilter && provinciaFilter !== "ALL" ? `-${provinciaFilter}` : "";
-    a.download = `contactos${scope}.${format}`;
+    a.download = `reporte-contactos-${new Date().toISOString().slice(0, 10)}.${format}`;
     a.click();
     URL.revokeObjectURL(url);
-    setMessage(`Reporte exportado en ${format.toUpperCase()}`);
+    setMessage(`Reporte descargado en formato ${format.toUpperCase()}`);
   }
 
   async function exportDailyZip(date: string) {
     const res = await fetch(`/api/operativo/contacto/reportes?date=${date}`);
     if (!res.ok) {
-      const json = await res.json().catch(() => ({ error: "No se pudo exportar ZIP" }));
-      setMessage(json.error ?? "No se pudo exportar ZIP");
+      const json = await res.json().catch(() => ({ error: "Error en descarga diaria" }));
+      setMessage(json.error ?? "No se pudo generar el ZIP operativo");
       return;
     }
+
     const blob = await res.blob();
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -426,229 +343,574 @@ export default function OperativoClient() {
     setMessage(`ZIP operativo generado para ${date}`);
   }
 
-  return (
-    <div>
-      <PageHeader title="Operativo de llamadas" subtitle={`${pagination.total} tarjetas · ${contactadas} contactadas`} />
+  const renderCardItem = (card: OperativeWizardCard, mode: ViewType) => {
+    if (mode === "cards") {
+      return (
+        <div
+          key={card.id}
+          onClick={() => setSelectedCardId(card.id)}
+          className={`group cursor-pointer rounded-2xl border p-4 transition-all hover:shadow-md flex flex-col justify-between ${
+            card.contactado
+              ? "border-emerald-200 bg-emerald-50/40 hover:bg-emerald-50/70"
+              : card.solicitudRetorno
+                ? "border-rose-200 bg-rose-50/40 hover:bg-rose-50/70"
+                : card.traslado && Object.keys(card.traslado).length > 0
+                  ? "border-indigo-200 bg-indigo-50/40 hover:bg-indigo-50/70"
+                  : tab === "urgentes" && card.urgentLevel
+                    ? urgencyClasses(card.urgentLevel)
+                    : "border-slate-200 bg-white hover:border-blue-300"
+          }`}
+        >
+          <div className="space-y-2">
+            <div className="flex items-start justify-between gap-2 flex-wrap">
+              <span className="font-mono text-xs font-bold text-blue-700 bg-blue-50 px-2 py-0.5 rounded border border-blue-200">
+                {card.tc}
+              </span>
+              <span className={`rounded-lg border px-2 py-0.5 text-[11px] font-bold ${statusClasses(card.status)}`}>
+                {statusLabel(card.status)}
+              </span>
+            </div>
 
-      <Panel>
-        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-          <div className="flex items-center gap-2">
+            <div>
+              <h4 className="font-bold text-slate-900 text-sm group-hover:text-blue-700 transition-colors">
+                {card.nombre}
+              </h4>
+              <p className="text-xs text-slate-500">Cédula: {card.cedula}</p>
+              <p className="text-xs text-slate-600 mt-0.5">
+                {card.provincia} ({card.zona})
+                {principalPhone(card) !== "-" ? ` · Tel: ${principalPhone(card)}` : ""}
+              </p>
+            </div>
+
+            {card.contactado ? (
+              <span className="inline-flex items-center gap-1 rounded-md bg-emerald-100 px-2 py-0.5 text-xs font-bold text-emerald-800">
+                <CheckCircle2 className="h-3 w-3" /> Contactada {card.canalContacto ? `(${card.canalContacto})` : ""}
+              </span>
+            ) : card.solicitudRetorno ? (
+              <span className="inline-flex items-center gap-1 rounded-md bg-rose-100 px-2 py-0.5 text-xs font-bold text-rose-800">
+                <RotateCcw className="h-3 w-3" /> Retorno Solicitado
+              </span>
+            ) : card.traslado && Object.keys(card.traslado).length > 0 ? (
+              <span className="inline-flex items-center gap-1 rounded-md bg-indigo-100 px-2 py-0.5 text-xs font-bold text-indigo-800">
+                <Send className="h-3 w-3" /> Traslado Solicitado
+              </span>
+            ) : null}
+
+            {card.nuevaDireccion ? (
+              <p className="text-xs text-emerald-800 font-medium bg-emerald-50/70 rounded p-1.5 line-clamp-2">
+                📍 {card.nuevaDireccion}
+              </p>
+            ) : null}
+
+            {card.fechaPreferenciaEntrega ? (
+              <p className="text-xs text-blue-800 font-medium bg-blue-50/70 rounded px-1.5 py-0.5">
+                📅 Entrega: {new Date(card.fechaPreferenciaEntrega).toLocaleDateString("es-DO")}
+              </p>
+            ) : null}
+
+            {card.comentarioContacto ? (
+              <p className="text-xs italic text-slate-600 line-clamp-2">&quot;{card.comentarioContacto}&quot;</p>
+            ) : null}
+          </div>
+
+          <div className="mt-3 flex items-center justify-between border-t border-slate-100 pt-2.5">
+            {card.remaining !== null && card.remaining !== undefined ? (
+              <span className="rounded-md bg-rose-50 border border-rose-200 px-2 py-0.5 text-[11px] font-bold text-rose-700">
+                SLA: {card.remaining}d
+              </span>
+            ) : <span />}
             <button
-              onClick={() => setTab("activos")}
-              className={`rounded-lg border px-4 py-2 text-sm font-semibold ${
-                tab === "activos"
-                  ? "border-blue-700 bg-blue-50 text-blue-700"
-                  : "border-slate-300 bg-white text-slate-700"
-              }`}
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                setSelectedCardId(card.id);
+              }}
+              className="rounded-lg bg-[#0f2544] px-3 py-1 text-xs font-bold text-white hover:bg-slate-800 shadow-2xs"
             >
-              Tarjetas Activas ({tab === "activos" ? cards.length : tabCounts.activos})
-            </button>
-            <button
-              onClick={() => setTab("urgentes")}
-              className={`rounded-lg border px-4 py-2 text-sm font-semibold ${
-                tab === "urgentes"
-                  ? "border-rose-600 bg-rose-50 text-rose-700"
-                  : "border-slate-300 bg-white text-slate-700"
-              }`}
-            >
-              Urgentes ({tab === "urgentes" ? cards.length : tabCounts.urgentes})
+              Abrir Wizard
             </button>
           </div>
+        </div>
+      );
+    }
+
+    // Default List Mode
+    return (
+      <div
+        key={card.id}
+        onClick={() => setSelectedCardId(card.id)}
+        className={`group cursor-pointer rounded-2xl border p-4 transition-all hover:shadow-md ${
+          card.contactado
+            ? "border-emerald-200 bg-emerald-50/40 hover:bg-emerald-50/70"
+            : card.solicitudRetorno
+              ? "border-rose-200 bg-rose-50/40 hover:bg-rose-50/70"
+              : card.traslado && Object.keys(card.traslado).length > 0
+                ? "border-indigo-200 bg-indigo-50/40 hover:bg-indigo-50/70"
+                : tab === "urgentes" && card.urgentLevel
+                  ? urgencyClasses(card.urgentLevel)
+                  : "border-slate-200 bg-white hover:border-blue-300"
+        }`}
+      >
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="flex-1 space-y-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="font-display text-base font-bold text-slate-900 group-hover:text-blue-700">
+                {card.nombre}
+              </span>
+              <span className="font-mono text-xs font-bold text-blue-700 bg-blue-50 px-2 py-0.5 rounded border border-blue-200">
+                {card.tc}
+              </span>
+              {card.contactado ? (
+                <span className="inline-flex items-center gap-1 rounded-md bg-emerald-100 px-2 py-0.5 text-xs font-bold text-emerald-800">
+                  <CheckCircle2 className="h-3 w-3" /> Contactada
+                </span>
+              ) : card.solicitudRetorno ? (
+                <span className="inline-flex items-center gap-1 rounded-md bg-rose-100 px-2 py-0.5 text-xs font-bold text-rose-800">
+                  <RotateCcw className="h-3 w-3" /> Retorno Solicitado
+                </span>
+              ) : card.traslado && Object.keys(card.traslado).length > 0 ? (
+                <span className="inline-flex items-center gap-1 rounded-md bg-indigo-100 px-2 py-0.5 text-xs font-bold text-indigo-800">
+                  <Send className="h-3 w-3" /> Traslado Solicitado
+                </span>
+              ) : null}
+              {card.canalContacto ? (
+                <span className="rounded-md bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-600">
+                  Canal: {card.canalContacto === "WHATSAPP" ? "WhatsApp" : "Llamada Directa"}
+                </span>
+              ) : null}
+              {card.urgent && card.urgentLevel ? (
+                <span
+                  className={`rounded-md border px-2 py-0.5 text-xs font-bold ${urgencyClasses(card.urgentLevel)}`}
+                >
+                  {card.urgentLabel ?? `Nivel ${card.urgentLevel}`}
+                </span>
+              ) : null}
+            </div>
+
+            <p className="text-xs text-slate-500">
+              Cédula: <strong className="text-slate-700">{card.cedula}</strong> ·{" "}
+              {card.provincia} ({card.zona})
+              {principalPhone(card) !== "-" ? ` · Tel: ${principalPhone(card)}` : ""}
+              {card.mensajero ? ` · Mensajero: ${card.mensajero}` : ""}
+            </p>
+
+            {card.nuevaDireccion ? (
+              <p className="text-xs text-emerald-800 font-medium bg-emerald-50/70 rounded px-2 py-0.5 inline-block">
+                📍 Dirección confirmada: {card.nuevaDireccion}
+              </p>
+            ) : null}
+
+            {card.fechaPreferenciaEntrega ? (
+              <p className="text-xs text-blue-800 font-medium bg-blue-50/70 rounded px-2 py-0.5 inline-block">
+                📅 Entrega acordada para: {new Date(card.fechaPreferenciaEntrega).toLocaleDateString("es-DO")}
+              </p>
+            ) : null}
+
+            {card.motivoRetorno ? (
+              <p className="text-xs text-rose-800 font-medium bg-rose-50/70 rounded px-2 py-0.5 inline-block">
+                ⚠ Motivo retorno: {card.motivoRetorno}
+              </p>
+            ) : null}
+
+            {card.traslado && typeof card.traslado === "object" && (card.traslado as Record<string, unknown>).provinciaDestino ? (
+              <p className="text-xs text-indigo-800 font-medium bg-indigo-50/70 rounded px-2 py-0.5 inline-block">
+                ✈ Destino traslado: {String((card.traslado as Record<string, unknown>).provinciaDestino)}
+              </p>
+            ) : null}
+
+            {card.comentarioContacto ? (
+              <p className="text-xs italic text-slate-600">&quot;{card.comentarioContacto}&quot;</p>
+            ) : null}
+          </div>
+
+          <div className="flex items-center gap-2">
+            <span className={`rounded-xl border px-2.5 py-1 text-xs font-bold ${statusClasses(card.status)}`}>
+              {statusLabel(card.status)}
+            </span>
+            {card.remaining !== null && card.remaining !== undefined ? (
+              <span className="rounded-xl bg-rose-50 border border-rose-200 px-2.5 py-1 text-xs font-bold text-rose-700">
+                SLA: {card.remaining}d
+              </span>
+            ) : null}
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                setSelectedCardId(card.id);
+              }}
+              className="rounded-xl bg-[#0f2544] px-4 py-1.5 text-xs font-bold text-white hover:bg-slate-800 shadow-xs"
+            >
+              Abrir Wizard
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <div className="space-y-5">
+      <PageHeader
+        title="Operativo de Llamadas & Agilizaciones"
+        subtitle={`${pagination.total} tarjetas registradas en esta vista`}
+      />
+
+      <Panel>
+        {/* TAB BUTTONS BAR */}
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              onClick={() => setTab("activos")}
+              className={`flex items-center gap-1.5 rounded-xl border px-3.5 py-2 text-xs font-bold transition-all ${
+                tab === "activos"
+                  ? "border-blue-700 bg-blue-50 text-blue-700 shadow-2xs"
+                  : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+              }`}
+            >
+              <Phone className="h-3.5 w-3.5" />
+              Tarjetas Activas (Por llamar)
+            </button>
+
+            <button
+              onClick={() => setTab("contactadas")}
+              className={`flex items-center gap-1.5 rounded-xl border px-3.5 py-2 text-xs font-bold transition-all ${
+                tab === "contactadas"
+                  ? "border-emerald-600 bg-emerald-50 text-emerald-700 shadow-2xs"
+                  : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+              }`}
+            >
+              <CheckCircle2 className="h-3.5 w-3.5" />
+              Contactadas
+            </button>
+
+            <button
+              onClick={() => setTab("no-contactadas")}
+              className={`flex items-center gap-1.5 rounded-xl border-2 px-3.5 py-2 text-xs font-bold transition-all ${
+                tab === "no-contactadas"
+                  ? "border-amber-500 bg-amber-100 text-amber-800 shadow-2xs"
+                  : "border border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+              }`}
+            >
+              <Clock className="h-3.5 w-3.5" />
+              No Contactadas (Intentos)
+            </button>
+
+            <button
+              onClick={() => setTab("urgentes")}
+              className={`flex items-center gap-1.5 rounded-xl border px-3.5 py-2 text-xs font-bold transition-all ${
+                tab === "urgentes"
+                  ? "border-rose-600 bg-rose-50 text-rose-700 shadow-2xs"
+                  : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+              }`}
+            >
+              <AlertTriangle className="h-3.5 w-3.5" />
+              Casos Urgentes
+            </button>
+
+            <button
+              onClick={() => setTab("traslados")}
+              className={`flex items-center gap-1.5 rounded-xl border px-3.5 py-2 text-xs font-bold transition-all ${
+                tab === "traslados"
+                  ? "border-indigo-600 bg-indigo-50 text-indigo-700 shadow-2xs"
+                  : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+              }`}
+            >
+              <Send className="h-3.5 w-3.5" />
+              Traslados (Cambio Prov.)
+            </button>
+
+            <button
+              onClick={() => setTab("retorno")}
+              className={`flex items-center gap-1.5 rounded-xl border px-3.5 py-2 text-xs font-bold transition-all ${
+                tab === "retorno"
+                  ? "border-red-600 bg-red-50 text-red-700 shadow-2xs"
+                  : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+              }`}
+            >
+              <RotateCcw className="h-3.5 w-3.5" />
+              Solicitudes de Retorno
+            </button>
+
+            <button
+              onClick={() => setTab("extensiones-sla")}
+              className={`flex items-center gap-1.5 rounded-xl border px-3.5 py-2 text-xs font-bold transition-all ${
+                tab === "extensiones-sla"
+                  ? "border-[#0f2544] bg-[#0f2544] text-white shadow-2xs"
+                  : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+              }`}
+            >
+              <FileSpreadsheet className="h-3.5 w-3.5" />
+              Extensiones SLA (Banco)
+            </button>
+          </div>
+
           <button
             onClick={() => setShowReport(true)}
-            className="rounded-lg bg-[#0f2544] px-3 py-2 text-sm font-semibold text-white"
+            className="flex items-center gap-1.5 rounded-xl bg-slate-900 px-3.5 py-2 text-xs font-bold text-white hover:bg-slate-800 shadow-2xs"
           >
-            Reporte de contactos
-          </button>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-2">
-          <input
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-            placeholder="Buscar TC, cedula o nombre..."
-            className="min-w-72 flex-1 rounded-xl border border-slate-300 px-3 py-2"
-          />
-          <select
-            value={provincia}
-            onChange={(e) => setProvincia(e.target.value)}
-            className="rounded-xl border border-slate-300 px-3 py-2"
-          >
-            <option value="ALL">Todas las provincias</option>
-            {provincias.map((item) => (
-              <option key={item} value={item}>
-                {item}
-              </option>
-            ))}
-          </select>
-          <select
-            value={status}
-            onChange={(event) => setStatus(event.target.value)}
-            className="rounded-xl border border-slate-300 px-3 py-2"
-          >
-            {STATUS_OPTIONS.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-          {tab === "activos" ? (
-            <select
-              value={days}
-              onChange={(e) => setDays(Number(e.target.value))}
-              className="rounded-xl border border-slate-300 px-3 py-2"
-            >
-              <option value={3}>SLA &lt;= 3 dias</option>
-              <option value={2}>SLA &lt;= 2 dias</option>
-              <option value={1}>SLA &lt;= 1 dia</option>
-            </select>
-          ) : null}
-          <button
-            onClick={() => void loadCards()}
-            className="rounded-xl border border-slate-300 px-3 py-2 text-sm"
-          >
-            Actualizar
+            Reporte de Contactos
           </button>
         </div>
       </Panel>
 
+      {/* FILTERBAR: BUSCADOR, FACETAS Y AGRUPACIONES (ODOO STYLE) */}
+      {tab !== "extensiones-sla" ? (
+        <FilterBar
+          resource="operativo"
+          sectionKey="operativo"
+          filters={filters}
+          onFilterChange={(next) => setFilters({ ...next, page: "1", pageSize: filters.pageSize || "25" })}
+          onReset={() => setFilters({ page: "1", pageSize: "25", days: "3" })}
+          searchPlaceholder="Buscar por TC, cédula, nombre o referencia..."
+          allowedViews={["list", "cards"]}
+          currentView={viewMode}
+          onViewChange={setViewMode}
+          facets={[
+            {
+              field: "provincia",
+              label: "Provincia",
+              multi: true,
+              options: provinciasList.map((p) => ({ label: p, value: p })),
+            },
+            {
+              field: "zona",
+              label: "Zona",
+              multi: true,
+              options: [
+                { label: "Metro", value: "Metro" },
+                { label: "Norte", value: "Norte" },
+                { label: "Sur", value: "Sur" },
+                { label: "Este", value: "Este" },
+              ],
+            },
+            {
+              field: "status",
+              label: "Estado",
+              multi: true,
+              options: STATUS_OPTIONS.filter((o) => o.value !== "ALL").map((o) => ({
+                label: o.label,
+                value: o.value,
+              })),
+            },
+            {
+              field: "canalContacto",
+              label: "Canal de Contacto",
+              options: [
+                { label: "WhatsApp", value: "WHATSAPP" },
+                { label: "Llamada Directa", value: "LLAMADA_DIRECTA" },
+              ],
+            },
+            {
+              field: "gestion",
+              label: "Estado de Contacto",
+              options: [
+                { label: "Contactadas", value: "contactadas" },
+                { label: "No Contactadas (Intentos)", value: "no-contactadas" },
+                { label: "Traslado (Cambio Prov.)", value: "traslados" },
+                { label: "Retorno Solicitado", value: "retorno" },
+              ],
+            },
+            {
+              field: "urgent",
+              label: "Urgente",
+              options: [{ label: "Solo casos urgentes", value: "1" }],
+            },
+            ...(tab === "activos"
+              ? [
+                  {
+                    field: "days",
+                    label: "Días SLA",
+                    options: [
+                      { label: "SLA <= 1 día", value: "1" },
+                      { label: "SLA <= 2 días", value: "2" },
+                      { label: "SLA <= 3 días", value: "3" },
+                      { label: "SLA <= 5 días", value: "5" },
+                    ],
+                  },
+                ]
+              : []),
+          ]}
+          groupByOptions={[
+            { field: "provincia", label: "Provincia" },
+            { field: "zona", label: "Zona" },
+            { field: "status", label: "Estado" },
+            { field: "canalContacto", label: "Canal de Contacto" },
+            { field: "mensajero", label: "Mensajero" },
+            { field: "gestion", label: "Estado de Gestión" },
+          ]}
+        />
+      ) : null}
+
+      {/* URGENT NOTIFICATIONS PANEL */}
       {urgentNotifications.length ? (
-        <Panel className="mt-5" title="Notificaciones de urgencia">
+        <Panel title="Alertas Urgentes de Operativo">
           <div className="space-y-2">
             {urgentNotifications.map((item) => (
-              <div key={`${item.urgentCaseId}-${item.nextNotificationAt}`} className="rounded-xl border border-rose-300 bg-rose-50 px-3 py-2">
-                <p className="text-sm font-semibold text-rose-900">
-                  {item.label} - {item.cliente} ({item.tc})
-                </p>
-                <p className="text-xs text-rose-800">
-                  {item.provincia} - siguiente en {item.intervalMinutes} minutos ({formatUrgentClock(item.nextNotificationAt)})
-                </p>
+              <div
+                key={`${item.urgentCaseId}-${item.nextNotificationAt}`}
+                className="rounded-xl border border-rose-300 bg-rose-50 px-3 py-2 text-xs flex justify-between items-center"
+              >
+                <div>
+                  <p className="font-bold text-rose-900">
+                    {item.label} - {item.cliente} ({item.tc})
+                  </p>
+                  <p className="text-rose-800">
+                    {item.provincia} - Próxima alerta: {formatUrgentClock(item.nextNotificationAt)}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setSelectedCardId(item.cardId)}
+                  className="rounded-lg bg-rose-700 px-2.5 py-1 text-xs font-bold text-white hover:bg-rose-800"
+                >
+                  Abrir Wizard
+                </button>
               </div>
             ))}
-            <button
-              type="button"
-              onClick={() => setUrgentNotifications([])}
-              className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs"
-            >
-              Limpiar notificaciones
-            </button>
           </div>
         </Panel>
       ) : null}
 
-      <Panel className="mt-5" title={tab === "activos" ? "Cola de clientes" : "Casos urgentes"}>
-        <div className="space-y-2">
-          {cards.map((card) => (
-            <div
-              key={card.id}
-              className={`rounded-xl border px-3 py-3 ${
-                card.contactado
-                  ? "border-emerald-200 bg-emerald-50/40"
-                  : tab === "urgentes" && card.urgentLevel
-                    ? urgencyClasses(card.urgentLevel)
-                    : "border-slate-200 bg-white"
-              }`}
-            >
-              <div className="flex flex-wrap items-start justify-between gap-2">
-                <div className="flex-1">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <p className="text-sm font-semibold text-slate-900">{card.nombre}</p>
-                    <span className="font-display text-xs text-slate-500">{card.tc}</span>
-                    {card.contactado ? (
-                      <span className="rounded-md bg-emerald-100 px-2 py-0.5 text-xs font-semibold text-emerald-700">
-                        Contactado
-                      </span>
-                    ) : null}
-                    {card.urgent && card.urgentLevel ? (
-                      <span className={`rounded-md border px-2 py-0.5 text-xs font-semibold ${urgencyClasses(card.urgentLevel)}`}>
-                        {card.urgentLabel ?? `Nivel ${card.urgentLevel}`}
-                      </span>
+      {/* MAIN VIEW CONTENT */}
+      {tab === "extensiones-sla" ? (
+        <SLAExtensionRequestsTable isAdmin={true} />
+      ) : (
+        <Panel
+          title={
+            tab === "activos"
+              ? "Cola de Clientes Activos (Por Llamar)"
+              : tab === "contactadas"
+                ? "Tarjetas Contactadas Exitosamente"
+                : tab === "urgentes"
+                  ? "Casos Urgentes"
+                  : tab === "no-contactadas"
+                    ? "Tarjetas No Contactadas (Intentos Realizados)"
+                    : tab === "traslados"
+                      ? "Tarjetas con Solicitud de Traslado"
+                      : "Solicitudes de Retorno al Banco"
+          }
+        >
+          {groupedCards ? (
+            /* GROUPED ACCORDION VIEW */
+            <div className="space-y-4">
+              {groupedCards.map((group) => {
+                const isCollapsed = Boolean(collapsedGroups[group.groupKey]);
+                return (
+                  <div key={group.groupKey} className="space-y-3">
+                    <div
+                      onClick={() =>
+                        setCollapsedGroups((prev) => ({
+                          ...prev,
+                          [group.groupKey]: !prev[group.groupKey],
+                        }))
+                      }
+                      className="flex cursor-pointer select-none items-center justify-between rounded-xl bg-slate-100/90 px-4 py-2.5 transition hover:bg-slate-200/80 border border-slate-200"
+                    >
+                      <div className="flex items-center gap-2">
+                        {isCollapsed ? (
+                          <ChevronRight className="h-4 w-4 text-slate-600" />
+                        ) : (
+                          <ChevronDown className="h-4 w-4 text-slate-600" />
+                        )}
+                        <span className="text-xs font-bold uppercase tracking-wider text-slate-500">
+                          Grupo:
+                        </span>
+                        <span className="text-sm font-bold text-slate-900">{group.groupLabel}</span>
+                        <span className="rounded-full bg-slate-200/90 px-2 py-0.5 text-xs font-semibold text-slate-700">
+                          {group.items.length} {group.items.length === 1 ? "tarjeta" : "tarjetas"}
+                        </span>
+                      </div>
+                    </div>
+
+                    {!isCollapsed ? (
+                      viewMode === "cards" ? (
+                        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+                          {group.items.map((card) => renderCardItem(card, "cards"))}
+                        </div>
+                      ) : (
+                        <div className="space-y-2.5">
+                          {group.items.map((card) => renderCardItem(card, "list"))}
+                        </div>
+                      )
                     ) : null}
                   </div>
-                  <p className="mt-1 text-xs text-slate-500">
-                    {card.cedula} · {card.provincia}
-                    {principalPhone(card) !== "-" ? ` · ${principalPhone(card)}` : ""}
-                  </p>
-                  {card.comentarioContacto ? (
-                    <p className="mt-1 text-xs italic text-slate-600">{`"${card.comentarioContacto}"`}</p>
-                  ) : null}
-                  {card.urgent && card.urgentNextNotificationAt ? (
-                    <p className="mt-1 text-xs font-medium text-rose-700">
-                      Proxima alerta: {formatUrgentClock(card.urgentNextNotificationAt)}
-                    </p>
-                  ) : null}
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className={`rounded-md px-2 py-1 text-xs font-semibold ${statusClasses(card.status)}`}>
-                    {statusLabel(card.status)}
-                  </span>
-                  {card.remaining !== null ? (
-                    <span className="text-xs font-semibold text-rose-700">SLA: {card.remaining} dias</span>
-                  ) : null}
-                  <button
-                    type="button"
-                    onClick={() => setSelectedCardId(card.id)}
-                    className="rounded-md bg-[#0f2544] px-3 py-1.5 text-xs font-semibold text-white"
-                  >
-                    Contactar
-                  </button>
-                </div>
-              </div>
-              {card.readOnly ? (
-                <p className="mt-2 text-[11px] text-amber-700">
-                  Caso urgente sin tarjeta vinculada. Importa o corrige la tarjeta para guardar contacto.
+                );
+              })}
+              {!groupedCards.length && !loading ? (
+                <p className="py-12 text-center text-sm text-slate-500">
+                  No hay tarjetas con esos filtros.
                 </p>
               ) : null}
             </div>
-          ))}
-          {!cards.length ? (
-            <p className="py-8 text-center text-sm text-slate-500">
-              {loading ? "Cargando..." : "No hay tarjetas con esos filtros."}
-            </p>
-          ) : null}
-        </div>
-        <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-200 px-3 py-2 text-xs text-slate-600">
-          <span>
-            Pagina {pagination.page} de {pagination.totalPages} · {pagination.total} registros
-          </span>
-          <div className="flex gap-2">
-            <button
-              type="button"
-              onClick={() => setPage((prev) => Math.max(1, prev - 1))}
-              disabled={page <= 1}
-              className="rounded-md border border-slate-300 px-2 py-1 disabled:opacity-40"
-            >
-              Anterior
-            </button>
-            <button
-              type="button"
-              onClick={() => setPage((prev) => Math.min(pagination.totalPages, prev + 1))}
-              disabled={page >= pagination.totalPages}
-              className="rounded-md border border-slate-300 px-2 py-1 disabled:opacity-40"
-            >
-              Siguiente
-            </button>
+          ) : viewMode === "cards" ? (
+            /* UNGROUPED CARDS VIEW */
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+              {cards.map((card) => renderCardItem(card, "cards"))}
+              {!cards.length && !loading ? (
+                <p className="col-span-full py-12 text-center text-sm text-slate-500">
+                  No hay tarjetas con esos filtros.
+                </p>
+              ) : null}
+            </div>
+          ) : (
+            /* UNGROUPED LIST VIEW */
+            <div className="space-y-2.5">
+              {cards.map((card) => renderCardItem(card, "list"))}
+              {!cards.length && !loading ? (
+                <p className="py-12 text-center text-sm text-slate-500">
+                  No hay tarjetas con esos filtros.
+                </p>
+              ) : null}
+            </div>
+          )}
+
+          {/* PAGINATOR */}
+          <div className="mt-4 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-200 px-4 py-2.5 text-xs text-slate-600 bg-white">
+            <span>
+              Página <strong>{pagination.page}</strong> de <strong>{pagination.totalPages}</strong> ·{" "}
+              <strong>{pagination.total}</strong> registros
+            </span>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => setFilters((prev) => ({ ...prev, page: String(Math.max(1, (Number(prev.page) || 1) - 1)) }))}
+                disabled={(Number(filters.page) || 1) <= 1}
+                className="rounded-lg border border-slate-300 px-3 py-1 font-semibold hover:bg-slate-50 disabled:opacity-40"
+              >
+                Anterior
+              </button>
+              <button
+                type="button"
+                onClick={() => setFilters((prev) => ({ ...prev, page: String(Math.min(pagination.totalPages, (Number(prev.page) || 1) + 1)) }))}
+                disabled={(Number(filters.page) || 1) >= pagination.totalPages}
+                className="rounded-lg border border-slate-300 px-3 py-1 font-semibold hover:bg-slate-50 disabled:opacity-40"
+              >
+                Siguiente
+              </button>
+            </div>
           </div>
-        </div>
-      </Panel>
+        </Panel>
+      )}
 
-      {message ? <p className="mt-4 text-sm text-emerald-700">{message}</p> : null}
+      {message ? <p className="text-sm font-semibold text-emerald-700">{message}</p> : null}
 
+      {/* 3-COLUMN FULL-SCREEN WIZARD MODAL */}
       {selectedIndex >= 0 && current ? (
-        <ContactModal
+        <OperativeContactWizard
           card={current}
           index={selectedIndex}
           total={cards.length}
+          provincesList={provinciasList}
           onClose={() => setSelectedCardId(null)}
           onPrev={() => setSelectedCardId(cards[Math.max(selectedIndex - 1, 0)]?.id ?? null)}
           onNext={() =>
             setSelectedCardId(cards[Math.min(selectedIndex + 1, cards.length - 1)]?.id ?? null)
           }
           onSave={saveContact}
-          onUrgencyChange={saveUrgency}
         />
       ) : null}
 
+      {/* REPORT MODAL */}
       {showReport ? (
         <ContactReportModal
           data={cards}
@@ -661,507 +923,13 @@ export default function OperativoClient() {
   );
 }
 
-function ContactModal({
-  card,
-  index,
-  total,
-  onClose,
-  onPrev,
-  onNext,
-  onSave,
-  onUrgencyChange,
-}: {
-  card: OperativeCard;
-  index: number;
-  total: number;
-  onClose: () => void;
-  onPrev: () => void;
-  onNext: () => void;
-  onSave: (payload: { telefonos: PhoneState[]; comentario: string; contactado: boolean }) => Promise<string | null>;
-  onUrgencyChange: (payload: {
-    cardId: string;
-    urgent: boolean;
-    level?: number;
-    resolve?: boolean;
-    note?: string;
-  }) => Promise<string | null>;
-}) {
-  const [telefonos, setTelefonos] = useState<PhoneState[]>([]);
-  const [comentario, setComentario] = useState("");
-  const [contactado, setContactado] = useState(false);
-  const [newPhone, setNewPhone] = useState("");
-  const [saving, setSaving] = useState(false);
-  const [sharing, setSharing] = useState(false);
-  const [savingUrgency, setSavingUrgency] = useState(false);
-  const [urgentEnabled, setUrgentEnabled] = useState(false);
-  const [urgencyLevel, setUrgencyLevel] = useState(3);
-  const [urgencyComment, setUrgencyComment] = useState("");
-  const [feedback, setFeedback] = useState("");
-  const skipAutoSave = useRef(true);
-  const autoSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const lastSavedSignature = useRef("");
-  const onSaveRef = useRef(onSave);
-
-  useEffect(() => {
-    onSaveRef.current = onSave;
-  }, [onSave]);
-
-  useEffect(() => {
-    skipAutoSave.current = true;
-    const basePhones = card.telefonos.length
-      ? card.telefonos.map((phone) => ({ ...phone }))
-      : [{ num: "", principal: true, funciona: false }];
-    setTelefonos(basePhones);
-    setComentario(card.comentarioContacto ?? "");
-    setContactado(card.contactado);
-    setUrgentEnabled(card.urgent);
-    setUrgencyLevel(card.urgentLevel ?? 3);
-    setUrgencyComment("");
-    lastSavedSignature.current = buildContactSignature({
-      telefonos: basePhones,
-      comentario: card.comentarioContacto ?? "",
-      contactado: card.contactado,
-    });
-    setNewPhone("");
-    setFeedback("");
-  }, [card.id, card.comentarioContacto, card.contactado, card.telefonos, card.urgent, card.urgentLevel]);
-
-  useEffect(() => {
-    const onEsc = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onEsc);
-    const prev = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    return () => {
-      window.removeEventListener("keydown", onEsc);
-      document.body.style.overflow = prev;
-    };
-  }, [onClose]);
-
-  useEffect(() => {
-    if (skipAutoSave.current) {
-      skipAutoSave.current = false;
-      return;
-    }
-    if (card.readOnly) return;
-
-    const normalizedPhones = normalizePhonesForSave(telefonos);
-    const signature = buildContactSignature({
-      telefonos: normalizedPhones,
-      comentario,
-      contactado,
-    });
-    if (signature === lastSavedSignature.current) {
-      return;
-    }
-
-    if (autoSaveTimer.current) {
-      clearTimeout(autoSaveTimer.current);
-    }
-
-    autoSaveTimer.current = setTimeout(() => {
-      void (async () => {
-        setSaving(true);
-        const error = await onSaveRef.current({
-          telefonos: normalizedPhones,
-          comentario,
-          contactado,
-        });
-        if (error) {
-          setFeedback(error);
-          setSaving(false);
-          return;
-        }
-        lastSavedSignature.current = signature;
-        setFeedback("Cambios guardados automaticamente");
-        setSaving(false);
-      })();
-    }, 800);
-
-    return () => {
-      if (autoSaveTimer.current) {
-        clearTimeout(autoSaveTimer.current);
-      }
-    };
-  }, [telefonos, comentario, contactado, card.readOnly]);
-
-  function setPrincipal(phoneIndex: number) {
-    setTelefonos((prev) =>
-      prev.map((phone, indexRow) => ({ ...phone, principal: indexRow === phoneIndex })),
-    );
-  }
-
-  function toggleFunciona(phoneIndex: number) {
-    setTelefonos((prev) =>
-      prev.map((phone, indexRow) =>
-        indexRow === phoneIndex ? { ...phone, funciona: !phone.funciona } : phone,
-      ),
-    );
-  }
-
-  function removePhone(phoneIndex: number) {
-    setTelefonos((prev) => {
-      const next = prev.filter((_, indexRow) => indexRow !== phoneIndex);
-      if (next.length && !next.some((phone) => phone.principal)) {
-        next[0].principal = true;
-      }
-      return next;
-    });
-  }
-
-  function addPhone() {
-    const value = newPhone.trim();
-    if (!value) return;
-
-    setTelefonos((prev) => {
-      const normalized = value.replace(/\D/g, "");
-      const alreadyExists = prev.some(
-        (phone) => (phone.num.replace(/\D/g, "") || phone.num) === (normalized || value),
-      );
-      if (alreadyExists) return prev;
-      return [...prev, { num: value, principal: prev.length === 0, funciona: false }];
-    });
-    setNewPhone("");
-  }
-
-  async function shareContact() {
-    if (!card.cardId) {
-      setFeedback("No hay tarjeta vinculada para generar imagen");
-      return;
-    }
-
-    setSharing(true);
-    const res = await fetch(`/api/operativo/contacto/share?cardId=${card.cardId}`);
-    if (!res.ok) {
-      const json = await res.json().catch(() => ({ error: "No se pudo generar imagen" }));
-      setFeedback(json.error ?? "No se pudo generar imagen");
-      setSharing(false);
-      return;
-    }
-
-    const blob = await res.blob();
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `contacto-${card.tc}.jpg`;
-    a.click();
-    URL.revokeObjectURL(url);
-    setFeedback("Imagen generada");
-    setSharing(false);
-  }
-
-  async function saveUrgencySettings() {
-    if (!card.cardId) {
-      setFeedback("No hay tarjeta vinculada para actualizar urgencia");
-      return;
-    }
-    setSavingUrgency(true);
-    const error = await onUrgencyChange({
-      cardId: card.cardId,
-      urgent: urgentEnabled,
-      level: urgentEnabled ? urgencyLevel : undefined,
-      note: urgencyComment.trim() || undefined,
-    });
-    if (error) {
-      setFeedback(error);
-      setSavingUrgency(false);
-      return;
-    }
-    setFeedback(urgentEnabled ? "Urgencia actualizada" : "Urgencia desactivada");
-    setSavingUrgency(false);
-  }
-
-  async function resolveUrgency() {
-    if (!card.cardId) {
-      setFeedback("No hay tarjeta vinculada para resolver urgencia");
-      return;
-    }
-    setSavingUrgency(true);
-    const error = await onUrgencyChange({
-      cardId: card.cardId,
-      urgent: false,
-      resolve: true,
-      note: urgencyComment.trim() || undefined,
-    });
-    if (error) {
-      setFeedback(error);
-      setSavingUrgency(false);
-      return;
-    }
-    setUrgentEnabled(false);
-    setFeedback("Caso urgente marcado como resuelto");
-    setSavingUrgency(false);
-  }
-
-  return (
-    <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/40 px-4 py-6" onClick={onClose}>
-      <div
-        className="flex max-h-[90vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl"
-        onClick={(event) => event.stopPropagation()}
-      >
-        <div className="flex items-start justify-between border-b border-slate-200 px-5 py-4">
-          <div className="flex items-start gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-700 text-xs font-bold text-white">
-              {card.nombre
-                .split(" ")
-                .slice(0, 2)
-                .map((chunk) => chunk[0])
-                .join("")}
-            </div>
-            <div>
-              <p className="font-display text-lg font-bold text-slate-900">{card.nombre}</p>
-              <p className="text-xs text-slate-500">
-                {card.tc} · {card.provincia}
-              </p>
-              <span className={`mt-2 inline-block rounded-md px-2 py-1 text-xs font-semibold ${statusClasses(card.status)}`}>
-                {statusLabel(card.status)}
-              </span>
-              {card.urgent && card.urgentLevel ? (
-                <span className={`ml-2 mt-2 inline-block rounded-md border px-2 py-1 text-xs font-semibold ${urgencyClasses(card.urgentLevel)}`}>
-                  {card.urgentLabel ?? `Nivel ${card.urgentLevel}`}
-                </span>
-              ) : null}
-            </div>
-          </div>
-
-          <div className="flex items-center gap-1">
-            <span className="rounded-md bg-slate-100 px-2 py-1 text-xs text-slate-600">
-              {index + 1} / {total}
-            </span>
-            <button
-              onClick={onPrev}
-              disabled={index === 0}
-              className="rounded-md bg-slate-100 px-2 py-1 text-sm text-slate-700 disabled:opacity-40"
-            >
-              ←
-            </button>
-            <button
-              onClick={onNext}
-              disabled={index >= total - 1}
-              className="rounded-md bg-slate-100 px-2 py-1 text-sm text-slate-700 disabled:opacity-40"
-            >
-              →
-            </button>
-            <button onClick={onClose} className="rounded-md bg-slate-100 px-2 py-1 text-sm text-slate-700">
-              ✕
-            </button>
-          </div>
-        </div>
-
-        <div className="flex-1 space-y-4 overflow-y-auto px-5 py-4">
-          <div className="grid gap-2 rounded-xl bg-slate-50 p-3 text-sm sm:grid-cols-4">
-            <InfoCell label="Cedula" value={card.cedula} />
-            <InfoCell label="Presinto" value={card.presinto || "-"} />
-            <InfoCell
-              label="Despacho"
-              value={card.fechaDespacho ? new Date(card.fechaDespacho).toLocaleDateString("es-DO") : "-"}
-            />
-            <InfoCell label="Emision" value={card.tipoEmision || "-"} />
-          </div>
-
-          <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
-            <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">Direccion</p>
-            <p className="text-sm text-slate-700">{chunkAddress(card.direcciones)}</p>
-            {card.refs.length ? (
-              <div className="mt-2 flex flex-wrap gap-1">
-                {card.refs.map((item) => (
-                  <span key={item} className="rounded-md bg-slate-200 px-2 py-0.5 text-xs text-slate-700">
-                    {item}
-                  </span>
-                ))}
-              </div>
-            ) : null}
-          </div>
-
-          <div>
-            <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Telefonos</p>
-            <div className="space-y-2">
-              {telefonos.map((phone, phoneIndex) => (
-                <div key={`${phone.num}-${phoneIndex}`} className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2">
-                  <button
-                    onClick={() => setPrincipal(phoneIndex)}
-                    title="Marcar principal"
-                    className={`text-lg leading-none ${phone.principal ? "text-amber-500" : "text-slate-300"}`}
-                  >
-                    ★
-                  </button>
-                  <input
-                    value={phone.num}
-                    onChange={(event) => {
-                      const value = event.target.value;
-                      setTelefonos((prev) =>
-                        prev.map((item, indexRow) =>
-                          indexRow === phoneIndex ? { ...item, num: value } : item,
-                        ),
-                      );
-                    }}
-                    className="flex-1 rounded-md border border-slate-300 px-2 py-1 text-sm"
-                  />
-                  {phone.principal ? (
-                    <span className="rounded bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-700">
-                      Principal
-                    </span>
-                  ) : null}
-                  <label className="flex items-center gap-1 text-xs text-slate-600">
-                    <input
-                      type="checkbox"
-                      checked={phone.funciona}
-                      onChange={() => toggleFunciona(phoneIndex)}
-                    />
-                    {phone.funciona ? "Funciona" : "No funciona"}
-                  </label>
-                  <button onClick={() => removePhone(phoneIndex)} className="rounded px-1 text-xs text-slate-500 hover:text-rose-600">
-                    ✕
-                  </button>
-                </div>
-              ))}
-
-              <div className="flex items-center gap-2">
-                <input
-                  value={newPhone}
-                  onChange={(event) => setNewPhone(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") {
-                      event.preventDefault();
-                      addPhone();
-                    }
-                  }}
-                  className="flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm"
-                  placeholder="Agregar telefono..."
-                />
-                <button onClick={addPhone} className="rounded-lg border border-slate-300 px-3 py-2 text-sm">
-                  + Agregar
-                </button>
-              </div>
-            </div>
-          </div>
-
-          <div>
-            <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">
-              Comentario de contacto
-            </label>
-            <textarea
-              value={comentario}
-              onChange={(event) => setComentario(event.target.value)}
-              rows={3}
-              className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
-              placeholder="Direccion confirmada, horario, referencia..."
-            />
-          </div>
-
-          <label className={`flex items-center gap-2 rounded-xl border px-3 py-2 ${contactado ? "border-emerald-300 bg-emerald-50" : "border-slate-200 bg-white"}`}>
-            <input type="checkbox" checked={contactado} onChange={(event) => setContactado(event.target.checked)} />
-            <span className="text-sm text-slate-700">Marcar como contactado</span>
-          </label>
-
-          {!card.readOnly ? (
-            <div className="rounded-xl border border-rose-200 bg-rose-50/40 px-3 py-3">
-              <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-rose-700">Gestion de urgencia</p>
-              <label className="mb-2 flex items-center gap-2 text-sm text-slate-700">
-                <input
-                  type="checkbox"
-                  checked={urgentEnabled}
-                  onChange={(event) => setUrgentEnabled(event.target.checked)}
-                />
-                Marcar tarjeta como urgente
-              </label>
-
-              {urgentEnabled ? (
-                <div className="grid gap-2 sm:grid-cols-2">
-                  <label className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                    Nivel de urgencia
-                    <select
-                      value={urgencyLevel}
-                      onChange={(event) => setUrgencyLevel(Number(event.target.value))}
-                      className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm font-normal text-slate-700"
-                    >
-                      <option value={1}>Nivel 1 (Leve) - cada 4.5 horas</option>
-                      <option value={2}>Nivel 2 (Moderada) - cada 3.5 horas</option>
-                      <option value={3}>Nivel 3 (Alta) - cada 2.5 horas</option>
-                      <option value={4}>Nivel 4 (Muy urgente) - cada 1.5 horas</option>
-                      <option value={5}>Nivel 5 (Extremadamente urgente) - cada 30 min</option>
-                    </select>
-                  </label>
-                  <div className="text-xs text-slate-600">
-                    <p className="font-semibold text-slate-700">Programacion actual</p>
-                    <p>Ultima alerta: {formatUrgentClock(card.urgentLastNotificationAt)}</p>
-                    <p>Proxima alerta: {formatUrgentClock(card.urgentNextNotificationAt)}</p>
-                  </div>
-                </div>
-              ) : null}
-
-              <div className="mt-2">
-                <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">
-                  Comentario de urgencia
-                </label>
-                <textarea
-                  value={urgencyComment}
-                  onChange={(event) => setUrgencyComment(event.target.value)}
-                  rows={2}
-                  className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
-                  placeholder="Ej: cliente confirma entrega hoy, requiere seguimiento prioritario..."
-                />
-              </div>
-
-              <div className="mt-3 flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  onClick={() => void saveUrgencySettings()}
-                  disabled={savingUrgency}
-                  className="rounded-lg bg-rose-700 px-3 py-2 text-xs font-semibold text-white disabled:opacity-60"
-                >
-                  {savingUrgency ? "Guardando..." : "Guardar urgencia"}
-                </button>
-                {card.urgent ? (
-                  <button
-                    type="button"
-                    onClick={() => void resolveUrgency()}
-                    disabled={savingUrgency}
-                    className="rounded-lg border border-rose-300 bg-white px-3 py-2 text-xs font-semibold text-rose-700 disabled:opacity-60"
-                  >
-                    Marcar urgente como resuelto
-                  </button>
-                ) : null}
-              </div>
-            </div>
-          ) : null}
-
-          {card.readOnly ? (
-            <p className="text-sm text-amber-700">
-              Este caso urgente no tiene tarjeta vinculada. No se puede guardar contacto todavia.
-            </p>
-          ) : null}
-        </div>
-
-        <div className="flex items-center justify-end gap-2 border-t border-slate-200 px-5 py-3">
-          {feedback ? <p className="mr-auto text-sm text-emerald-700">{feedback}</p> : null}
-          <button onClick={onClose} className="rounded-lg border border-slate-300 px-3 py-2 text-sm">
-            Cerrar
-          </button>
-          <button
-            onClick={() => void shareContact()}
-            disabled={sharing || !card.cardId}
-            className="rounded-lg border border-slate-300 px-3 py-2 text-sm disabled:opacity-50"
-          >
-            {sharing ? "Generando..." : "Generar imagen"}
-          </button>
-          {saving ? (
-            <span className="text-xs font-semibold text-slate-500">Guardando...</span>
-          ) : null}
-        </div>
-      </div>
-    </div>
-  );
-}
-
 function ContactReportModal({
   data,
   onClose,
   onExport,
   onExportDailyZip,
 }: {
-  data: OperativeCard[];
+  data: OperativeWizardCard[];
   onClose: () => void;
   onExport: (format: ExportFormat, provincia?: string) => Promise<void>;
   onExportDailyZip: (date: string) => Promise<void>;
@@ -1172,7 +940,7 @@ function ContactReportModal({
   const pendientes = data.filter((item) => !item.contactado);
 
   const groupedByProvince = useMemo(() => {
-    const grouped = new Map<string, OperativeCard[]>();
+    const grouped = new Map<string, OperativeWizardCard[]>();
     data.forEach((item) => {
       const key = item.provincia || item.zona || "SIN PROVINCIA";
       const rows = grouped.get(key) ?? [];
@@ -1203,53 +971,59 @@ function ContactReportModal({
   }
 
   return (
-    <div className="fixed inset-0 z-[130] flex items-center justify-center bg-black/40 px-4 py-6" onClick={onClose}>
+    <div
+      className="fixed inset-0 z-[150] flex items-center justify-center bg-black/50 p-4"
+      onClick={onClose}
+    >
       <div
-        className="flex max-h-[90vh] w-full max-w-4xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl"
+        className="flex max-h-[90vh] w-full max-w-4xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl border border-slate-200"
         onClick={(event) => event.stopPropagation()}
       >
-        <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
-          <h3 className="font-display text-xl font-bold text-slate-900">Reporte de contactos</h3>
-          <button onClick={onClose} className="rounded-md bg-slate-100 px-2 py-1 text-sm text-slate-700">
+        <div className="flex items-center justify-between border-b border-slate-200 px-6 py-4 bg-slate-50">
+          <h3 className="font-display text-lg font-bold text-slate-900">Reporte de Contactos</h3>
+          <button
+            onClick={onClose}
+            className="rounded-lg bg-white border border-slate-200 px-2.5 py-1 text-sm font-semibold text-slate-700"
+          >
             ✕
           </button>
         </div>
 
-        <div className="flex-1 space-y-4 overflow-y-auto px-5 py-4">
+        <div className="flex-1 space-y-5 overflow-y-auto p-6">
           <div className="grid gap-3 sm:grid-cols-3">
-            <StatCard label="Total" value={data.length} color="text-slate-900" />
+            <StatCard label="Total en Lista" value={data.length} color="text-slate-900" />
             <StatCard label="Contactadas" value={contactadas.length} color="text-emerald-700" />
-            <StatCard label="Pendientes" value={pendientes.length} color="text-rose-700" />
+            <StatCard label="Pendientes / No Contactadas" value={pendientes.length} color="text-rose-700" />
           </div>
 
           <div className="overflow-x-auto rounded-xl border border-slate-200">
-            <table className="w-full text-left text-sm">
-              <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+            <table className="w-full text-left text-xs">
+              <thead className="bg-slate-50 text-[11px] uppercase tracking-wide text-slate-500 font-bold border-b border-slate-200">
                 <tr>
-                  <th className="px-3 py-2">Cliente / TC</th>
-                  <th className="px-3 py-2">Tel principal</th>
-                  <th className="px-3 py-2">Status</th>
-                  <th className="px-3 py-2 text-center">Contactado</th>
+                  <th className="px-3 py-2.5">Cliente / TC</th>
+                  <th className="px-3 py-2.5">Tel. Principal</th>
+                  <th className="px-3 py-2.5">Status</th>
+                  <th className="px-3 py-2.5 text-center">Contactado</th>
                 </tr>
               </thead>
-              <tbody>
+              <tbody className="divide-y divide-slate-100">
                 {data.map((item) => (
-                  <tr key={item.id} className="border-t border-slate-100">
-                    <td className="px-3 py-2">
-                      <p className="text-sm font-medium text-slate-800">{item.nombre}</p>
-                      <p className="font-display text-xs text-slate-500">{item.tc}</p>
+                  <tr key={item.id} className="hover:bg-slate-50">
+                    <td className="px-3 py-2.5">
+                      <p className="font-semibold text-slate-900">{item.nombre}</p>
+                      <p className="font-mono text-[11px] text-slate-500">{item.tc}</p>
                     </td>
-                    <td className="px-3 py-2">{principalPhone(item)}</td>
-                    <td className="px-3 py-2">
-                      <span className={`rounded-md px-2 py-1 text-xs font-semibold ${statusClasses(item.status)}`}>
+                    <td className="px-3 py-2.5 font-mono text-slate-700">{principalPhone(item)}</td>
+                    <td className="px-3 py-2.5">
+                      <span className={`rounded-md px-2 py-0.5 text-[11px] font-bold ${statusClasses(item.status)}`}>
                         {statusLabel(item.status)}
                       </span>
                     </td>
-                    <td className="px-3 py-2 text-center">
+                    <td className="px-3 py-2.5 text-center">
                       {item.contactado ? (
-                        <span className="text-lg font-bold text-emerald-600">✓</span>
+                        <span className="font-bold text-emerald-600">✓ Sí</span>
                       ) : (
-                        <span className="text-base text-slate-300">○</span>
+                        <span className="text-slate-400">○ No</span>
                       )}
                     </td>
                   </tr>
@@ -1258,94 +1032,77 @@ function ContactReportModal({
             </table>
           </div>
 
+          {/* EXPORTS POR PROVINCIA */}
           <div>
-            <p className="mb-2 text-sm font-semibold text-slate-700">Generar reporte por provincia</p>
+            <p className="mb-2 text-xs font-bold uppercase tracking-wide text-slate-700">
+              Exportar reporte por provincia
+            </p>
             <div className="space-y-2">
-              {groupedByProvince.map(([province, rows]) => (
-                <div key={province} className="flex flex-wrap items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
-                  <p className="mr-auto text-sm font-medium text-slate-800">
-                    {province} <span className="text-xs text-slate-500">({rows.length} tarjetas)</span>
-                  </p>
-                  <button
-                    onClick={() => void handleExport("xlsx", province)}
-                    disabled={busy}
-                    className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs"
-                  >
-                    Excel
-                  </button>
-                  <button
-                    onClick={() => void handleExport("pdf", province)}
-                    disabled={busy}
-                    className="rounded-lg bg-[#0f2544] px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-60"
-                  >
-                    PDF
-                  </button>
+              {groupedByProvince.map(([prov, rows]) => (
+                <div
+                  key={prov}
+                  className="flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50/70 p-3 text-xs"
+                >
+                  <div>
+                    <span className="font-bold text-slate-900">{prov}</span>
+                    <span className="ml-2 font-medium text-slate-500">({rows.length} tarjetas)</span>
+                  </div>
+                  <div className="flex gap-1.5">
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => handleExport("xlsx", prov)}
+                      className="rounded-lg border border-slate-300 bg-white px-3 py-1 font-bold text-slate-700 hover:bg-slate-100"
+                    >
+                      Excel
+                    </button>
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => handleExport("pdf", prov)}
+                      className="rounded-lg bg-[#0f2544] px-3 py-1 font-bold text-white hover:bg-slate-800"
+                    >
+                      PDF
+                    </button>
+                  </div>
                 </div>
               ))}
             </div>
           </div>
 
-          <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-            <p className="mb-2 text-sm font-semibold text-slate-700">Reporte general operativo por día</p>
-            <div className="flex flex-wrap items-center gap-2">
+          {/* REPORTE DIARIO ZIP */}
+          <div className="rounded-2xl border border-blue-200 bg-blue-50/50 p-4">
+            <p className="mb-2 text-xs font-bold uppercase tracking-wide text-blue-900">
+              Reporte General Operativo por Día (ZIP)
+            </p>
+            <div className="flex flex-wrap items-center gap-3">
               <input
                 type="date"
                 value={reportDate}
-                onChange={(event) => setReportDate(event.target.value)}
-                className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                onChange={(e) => setReportDate(e.target.value)}
+                className="rounded-xl border border-blue-200 bg-white px-3 py-1.5 text-xs text-slate-800"
               />
               <button
-                onClick={() => void handleDailyZip()}
+                type="button"
                 disabled={busy}
-                className="rounded-lg bg-[#0f2544] px-3 py-2 text-xs font-semibold text-white disabled:opacity-60"
+                onClick={handleDailyZip}
+                className="rounded-xl bg-blue-700 px-4 py-1.5 text-xs font-bold text-white hover:bg-blue-800"
               >
-                Exportar ZIP (JPG por provincia)
+                Generar ZIP Operativo
               </button>
             </div>
-            <p className="mt-2 text-xs text-slate-500">
-              Genera carpetas por provincia y una imagen por cliente para agilizar mensajeros.
-            </p>
           </div>
-        </div>
-
-        <div className="flex items-center justify-end gap-2 border-t border-slate-200 px-5 py-3">
-          <button onClick={onClose} className="rounded-lg border border-slate-300 px-3 py-2 text-sm">
-            Cerrar
-          </button>
-          <button
-            onClick={() => void handleExport("csv")}
-            disabled={busy}
-            className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
-          >
-            Exportar CSV
-          </button>
-          <button
-            onClick={() => void handleExport("xlsx")}
-            disabled={busy}
-            className="rounded-lg bg-[#0f2544] px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
-          >
-            Exportar completo
-          </button>
         </div>
       </div>
     </div>
   );
 }
 
-function InfoCell({ label, value }: { label: string; value: string }) {
-  return (
-    <div>
-      <p className="text-[11px] uppercase tracking-wide text-slate-500">{label}</p>
-      <p className="text-sm font-medium text-slate-800">{value}</p>
-    </div>
-  );
-}
-
 function StatCard({ label, value, color }: { label: string; value: number; color: string }) {
   return (
-    <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-center">
-      <p className={`font-display text-3xl font-bold ${color}`}>{value}</p>
-      <p className="text-xs uppercase tracking-wide text-slate-500">{label}</p>
+    <div className="rounded-xl border border-slate-200 bg-slate-50/80 p-4 text-center">
+      <p className={`font-display text-2xl font-bold ${color}`}>{value}</p>
+      <p className="text-xs text-slate-500 font-medium">{label}</p>
     </div>
   );
 }

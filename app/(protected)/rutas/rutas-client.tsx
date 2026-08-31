@@ -9,6 +9,12 @@ import { PageHeader } from "@/components/ui/page-header";
 import { Panel } from "@/components/ui/panel";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { WorkflowStatusBar } from "@/components/ui/workflow-status-bar";
+import { RouteProgressPanel } from "@/components/rutas/route-progress-panel";
+import { ContractDeliveryWizardModal } from "@/components/rutas/contract-delivery-wizard-modal";
+import { getRouteLifecycle } from "@/lib/route-item-lifecycle";
+import { resolveReturnReasonPrompt } from "@/lib/return-reason-prompt";
+import { resolveOperativoTab, type OperativoTab } from "@/lib/rutas-operativo-tab";
+import { resolveContractIdentifiers } from "@/lib/route-contract-selection";
 import { usePersistentState } from "@/lib/use-persistent-state";
 import { useWorkflowDraft } from "@/lib/use-workflow-draft";
 
@@ -95,7 +101,9 @@ type ScanCandidate = {
 };
 
 type ScanConflict = {
-  kind: "REQUIERE_SELECCION" | "SOLO_CERRADAS";
+  // SDD contrato-tarjetas-pistoleo (design D2): `SIN_CONTRATO_REQUIERE_CONFIRMACION`
+  // reuses the exact same 409-conflict envelope shape as `SOLO_CERRADAS`.
+  kind: "REQUIERE_SELECCION" | "SOLO_CERRADAS" | "SIN_CONTRATO_REQUIERE_CONFIRMACION";
   candidates: ScanCandidate[];
 };
 
@@ -105,7 +113,7 @@ type ScanEndpointResult =
 
 type RoutesDraft = {
   moduleTab: ModuleTab;
-  lotTab: LotTab;
+  operativoTab: OperativoTab;
   fecha: string;
   messengerId: string;
   identifiers: string;
@@ -126,7 +134,6 @@ type RoutesDraft = {
 };
 
 type ModuleTab = "operativo" | "lotes";
-type LotTab = "lotes" | "seguimiento";
 
 function formatDate(value: string | null) {
   if (!value) return "-";
@@ -140,9 +147,13 @@ function isClosedOperationalCard(card: Pick<OperationalCard, "status">) {
 function getScanConflict(data: unknown): ScanConflict | null {
   const payload = asRecord(data);
   if (
-    (payload.kind !== "REQUIERE_SELECCION" && payload.kind !== "SOLO_CERRADAS") ||
-    !Array.isArray(payload.candidates)
+    payload.kind !== "REQUIERE_SELECCION" &&
+    payload.kind !== "SOLO_CERRADAS" &&
+    payload.kind !== "SIN_CONTRATO_REQUIERE_CONFIRMACION"
   ) {
+    return null;
+  }
+  if (!Array.isArray(payload.candidates)) {
     return null;
   }
 
@@ -176,22 +187,29 @@ function ScanResolutionPanel({
   onDismiss: () => void;
 }) {
   const isClosed = conflict.kind === "SOLO_CERRADAS";
+  const isMissingContract = conflict.kind === "SIN_CONTRATO_REQUIERE_CONFIRMACION";
 
   return (
     <div
       className={`mt-3 rounded-xl border p-3 ${
-        isClosed ? "border-amber-300 bg-amber-50" : "border-blue-200 bg-blue-50"
+        isClosed || isMissingContract ? "border-amber-300 bg-amber-50" : "border-blue-200 bg-blue-50"
       }`}
     >
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
           <p className="text-sm font-semibold text-slate-900">
-            {isClosed ? "La coincidencia esta cerrada" : "Hay varias tarjetas vigentes"}
+            {isClosed
+              ? "La coincidencia esta cerrada"
+              : isMissingContract
+                ? "Esta tarjeta requiere contrato y aun no tiene la imagen registrada"
+                : "Hay varias tarjetas vigentes"}
           </p>
           <p className="mt-1 text-xs text-slate-700">
             {isClosed
               ? "Confirma explicitamente una tarjeta cerrada antes de actualizarla."
-              : "Selecciona explicitamente la tarjeta que corresponde al pistoleo."}
+              : isMissingContract
+                ? "Confirma para marcarla entregada sin contrato; quedara pendiente en el modulo Contratos pendientes."
+                : "Selecciona explicitamente la tarjeta que corresponde al pistoleo."}
           </p>
         </div>
         <button
@@ -220,8 +238,16 @@ function ScanResolutionPanel({
                 Motivo de devolucion: {candidate.returnReason}
               </span>
             ) : null}
-            <span className={`mt-2 block text-xs font-semibold ${isClosed ? "text-amber-800" : "text-blue-800"}`}>
-              {isClosed ? "Confirmar tarjeta cerrada" : "Usar esta tarjeta"}
+            <span
+              className={`mt-2 block text-xs font-semibold ${
+                isClosed || isMissingContract ? "text-amber-800" : "text-blue-800"
+              }`}
+            >
+              {isClosed
+                ? "Confirmar tarjeta cerrada"
+                : isMissingContract
+                  ? "Confirmar entrega sin contrato"
+                  : "Usar esta tarjeta"}
             </span>
           </button>
         ))}
@@ -233,32 +259,113 @@ function ScanResolutionPanel({
 function SelectedOperationalCardChips({
   cards,
   onRemove,
+  contractCardIds,
+  onToggleContract,
+  onToggleAllContracts,
+  onClearAll,
 }: {
   cards: OperationalCard[];
   onRemove: (cardId: string) => void;
+  // SDD contrato-tarjetas-pistoleo: per-card "requiere contrato" checkbox
+  contractCardIds?: ReadonlySet<string>;
+  onToggleContract?: (cardId: string) => void;
+  onToggleAllContracts?: (enable: boolean) => void;
+  onClearAll?: () => void;
 }) {
   if (!cards.length) return null;
 
+  const totalCards = cards.length;
+  const contractCount = contractCardIds
+    ? cards.filter((c) => contractCardIds.has(c.id)).length
+    : 0;
+
   return (
-    <div className="mt-2 flex flex-wrap gap-2" aria-label="Tarjetas seleccionadas explicitamente">
-      {cards.map((card) => (
-        <span
-          key={card.id}
-          className="inline-flex max-w-full items-center gap-2 rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-xs text-blue-900"
-        >
-          <span className="truncate">
-            {card.tc} · {card.customer.nombre}
+    <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50/70 p-3" aria-label="Tarjetas seleccionadas">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200/80 pb-2">
+        <div className="flex items-center gap-2 text-xs font-semibold text-slate-800">
+          <span className="inline-flex items-center justify-center rounded-full bg-[#0f2544] px-2 py-0.5 text-[11px] font-bold text-white">
+            {totalCards}
           </span>
-          <button
-            type="button"
-            onClick={() => onRemove(card.id)}
-            className="shrink-0 font-semibold text-blue-700 hover:text-blue-900"
-            aria-label={`Quitar tarjeta ${card.tc}`}
+          <span>{totalCards === 1 ? "Tarjeta seleccionada" : "Tarjetas seleccionadas"}</span>
+          {onToggleContract ? (
+            <span className="text-slate-500 font-normal">
+              ({contractCount} con contrato)
+            </span>
+          ) : null}
+        </div>
+        <div className="flex flex-wrap items-center gap-1.5 text-xs">
+          {onToggleContract && onToggleAllContracts && cards.length > 1 ? (
+            <>
+              <button
+                type="button"
+                onClick={() => onToggleAllContracts(true)}
+                className="rounded px-1.5 py-0.5 text-[11px] font-medium text-blue-700 hover:bg-blue-100 transition"
+              >
+                Marcar todas
+              </button>
+              <span className="text-slate-300">|</span>
+              <button
+                type="button"
+                onClick={() => onToggleAllContracts(false)}
+                className="rounded px-1.5 py-0.5 text-[11px] font-medium text-slate-600 hover:bg-slate-200 transition"
+              >
+                Desmarcar todas
+              </button>
+              <span className="text-slate-300">|</span>
+            </>
+          ) : null}
+          {onClearAll ? (
+            <button
+              type="button"
+              onClick={onClearAll}
+              className="rounded px-1.5 py-0.5 text-[11px] font-medium text-rose-600 hover:bg-rose-50 transition"
+            >
+              Limpiar
+            </button>
+          ) : null}
+        </div>
+      </div>
+      <div className="mt-2.5 max-h-56 overflow-y-auto space-y-1.5 pr-1">
+        {cards.map((card) => (
+          <div
+            key={card.id}
+            className="flex items-center justify-between gap-2 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs shadow-2xs"
           >
-            Quitar
-          </button>
-        </span>
-      ))}
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2">
+                <span className="font-semibold text-blue-900 truncate">{card.tc}</span>
+                <span className="text-slate-700 truncate">{card.customer.nombre}</span>
+              </div>
+              <div className="text-[11px] text-slate-500 truncate">
+                Cédula: {card.customer.cedula || "-"} · Zona: {card.zona || "Metro"}
+              </div>
+            </div>
+            <div className="flex shrink-0 items-center gap-3">
+              {onToggleContract ? (
+                <label className="flex items-center gap-1.5 cursor-pointer text-[11px] font-medium text-slate-700 hover:text-blue-800 select-none">
+                  <input
+                    type="checkbox"
+                    className="h-3.5 w-3.5 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                    checked={contractCardIds?.has(card.id) ?? false}
+                    onChange={() => onToggleContract(card.id)}
+                    aria-label={`Requiere contrato: tarjeta ${card.tc}`}
+                  />
+                  <span>Contrato</span>
+                </label>
+              ) : null}
+              <button
+                type="button"
+                onClick={() => onRemove(card.id)}
+                className="rounded p-1 text-slate-400 hover:bg-rose-50 hover:text-rose-600 transition"
+                aria-label={`Quitar tarjeta ${card.tc}`}
+                title="Quitar de la lista"
+              >
+                ✕
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -267,15 +374,6 @@ function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : {};
-}
-
-function getRouteLifecycle(item: RouteItem) {
-  const root = asRecord(item.card.metadata);
-  const route = asRecord(root.route);
-  const value = typeof route.result === "string" ? route.result : "EN_RUTA";
-  if (value === "ACUSE_RECIBIDO") return "ACUSE RECIBIDO";
-  if (value === "DEVUELTA_TIENDA") return "DEVUELTA A TIENDA";
-  return "EN RUTA";
 }
 
 function toCsv(rows: Array<Record<string, string | number>>) {
@@ -296,7 +394,16 @@ export default function RutasClient() {
     "rutas:module-tab",
     "operativo",
   );
-  const [lotTab, setLotTab] = usePersistentState<LotTab>("rutas:lot-tab", "lotes");
+  // Reuses the pre-existing "rutas:lot-tab" storage key: the route-progress
+  // sub-tab this drives used to live under the "Lotes" module tab. Returning
+  // users may still have a stale value ("lotes"/"seguimiento") persisted
+  // under this key; resolveOperativoTab coerces anything outside the current
+  // domain to the default instead of rendering neither sub-tab panel.
+  const [operativoTabRaw, setOperativoTab] = usePersistentState<OperativoTab>(
+    "rutas:lot-tab",
+    "asignacion",
+  );
+  const operativoTab = resolveOperativoTab(operativoTabRaw);
 
   const [messengers, setMessengers] = useState<Messenger[]>([]);
   const [provinces, setProvinces] = useState<ProvinceRow[]>([]);
@@ -324,6 +431,13 @@ export default function RutasClient() {
   );
   const [messengerId, setMessengerId] = usePersistentState("rutas:messenger", "");
   const [identifiers, setIdentifiers] = useState("");
+  // SDD contrato-tarjetas-pistoleo (verify-report id 614 fix): per-card
+  // "requiere contrato" selection, replacing the removed all-or-nothing
+  // batch checkbox. Holds the ids of picker-resolved cards
+  // (`routeSelectedCards`) explicitly marked by the analyst; only
+  // picker-resolved cards get a checkbox (see `SelectedOperationalCardChips`)
+  // since the free-text textarea has no per-line UI to attach one to.
+  const [contractCardIds, setContractCardIds] = useState<Set<string>>(new Set());
   const [routePickerValue, setRoutePickerValue] = useState("");
   const [routeSelectedCards, setRouteSelectedCards] = useState<OperationalCard[]>([]);
   const [selectedRouteId, setSelectedRouteId] = usePersistentState("rutas:selected-route", "");
@@ -364,7 +478,7 @@ export default function RutasClient() {
   const draftPayload = useMemo<RoutesDraft>(
     () => ({
       moduleTab,
-      lotTab,
+      operativoTab,
       fecha,
       messengerId,
       identifiers,
@@ -390,9 +504,9 @@ export default function RutasClient() {
       lotFechaEnvio,
       lotIdentifiers,
       lotMessengerId,
-      lotTab,
       messengerId,
       moduleTab,
+      operativoTab,
       lotSelectedCards,
       routeSelectedCards,
       scanComment,
@@ -418,7 +532,7 @@ export default function RutasClient() {
     ),
     onRestore: (draft) => {
       setModuleTab(draft.moduleTab);
-      setLotTab(draft.lotTab);
+      setOperativoTab(draft.operativoTab);
       setFecha(draft.fecha);
       setMessengerId(draft.messengerId);
       setIdentifiers(draft.identifiers);
@@ -452,6 +566,60 @@ export default function RutasClient() {
     setMessage("");
   }
 
+  function addSelectedRouteCards(newCards: OperationalCard[]) {
+    const valid = newCards.filter(
+      (card) =>
+        !isClosedOperationalCard(card) &&
+        !routeSelectedCards.some((item) => item.id === card.id),
+    );
+    if (!valid.length) {
+      setMessage("Las tarjetas ya están seleccionadas o se encuentran cerradas.");
+      return;
+    }
+    setRouteSelectedCards((previous) => {
+      const existingIds = new Set(previous.map((c) => c.id));
+      const additions = valid.filter((c) => !existingIds.has(c.id));
+      return [...previous, ...additions];
+    });
+    setMessage(`Se agregaron ${valid.length} tarjeta(s) a la ruta`);
+  }
+
+  function toggleAllRouteContracts(enable: boolean) {
+    if (enable) {
+      setContractCardIds(new Set(routeSelectedCards.map((c) => c.id)));
+    } else {
+      setContractCardIds(new Set());
+    }
+  }
+
+  function clearAllRouteCards() {
+    setRouteSelectedCards([]);
+    setContractCardIds(new Set());
+    setMessage("");
+  }
+
+  function removeSelectedRouteCard(cardId: string) {
+    setRouteSelectedCards((previous) => previous.filter((card) => card.id !== cardId));
+    setContractCardIds((previous) => {
+      if (!previous.has(cardId)) return previous;
+      const next = new Set(previous);
+      next.delete(cardId);
+      return next;
+    });
+  }
+
+  function toggleContractCard(cardId: string) {
+    setContractCardIds((previous) => {
+      const next = new Set(previous);
+      if (next.has(cardId)) {
+        next.delete(cardId);
+      } else {
+        next.add(cardId);
+      }
+      return next;
+    });
+  }
+
   function addSelectedLotCard(card: OperationalCard) {
     if (isClosedOperationalCard(card)) {
       setMessage("Las tarjetas retornadas o devueltas no se pueden asignar a un nuevo lote");
@@ -462,6 +630,29 @@ export default function RutasClient() {
       return;
     }
     setLotSelectedCards((previous) => [...previous, card]);
+    setMessage("");
+  }
+
+  function addSelectedLotCards(newCards: OperationalCard[]) {
+    const valid = newCards.filter(
+      (card) =>
+        !isClosedOperationalCard(card) &&
+        !lotSelectedCards.some((item) => item.id === card.id),
+    );
+    if (!valid.length) {
+      setMessage("Las tarjetas ya están seleccionadas o se encuentran cerradas.");
+      return;
+    }
+    setLotSelectedCards((previous) => {
+      const existingIds = new Set(previous.map((c) => c.id));
+      const additions = valid.filter((c) => !existingIds.has(c.id));
+      return [...previous, ...additions];
+    });
+    setMessage(`Se agregaron ${valid.length} tarjeta(s) al lote`);
+  }
+
+  function clearAllLotCards() {
+    setLotSelectedCards([]);
     setMessage("");
   }
 
@@ -576,16 +767,42 @@ export default function RutasClient() {
 
   async function createRoute(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const typedIdentifiers = identifiers
-      .split(/[\n,;]+/g)
-      .map((item) => item.trim())
-      .filter(Boolean);
-    const parsed = Array.from(
-      new Set([...routeSelectedCards.map((card) => card.id), ...typedIdentifiers]),
-    );
+
+    const cardsToSubmit = [...routeSelectedCards];
+    const contractsToSubmit = new Set(contractCardIds);
+
+    // If there is still un-added text in the picker input, attempt to resolve it
+    const pendingText = routePickerValue.trim();
+    if (pendingText) {
+      const tokens = pendingText.split(/[\n,;]+/g).map((t) => t.trim()).filter(Boolean);
+      if (tokens.length > 0) {
+        try {
+          const resp = await fetch("/api/tarjetas/busqueda-operativa", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ identifiers: tokens }),
+          });
+          const payload = await resp.json().catch(() => null);
+          if (resp.ok && Array.isArray(payload?.results)) {
+            for (const item of payload.results) {
+              if (
+                item.resolution?.kind === "RESUELTA" &&
+                !cardsToSubmit.some((c) => c.id === item.resolution.card.id)
+              ) {
+                cardsToSubmit.push(item.resolution.card);
+              }
+            }
+          }
+        } catch {
+          // continue with current cards
+        }
+      }
+    }
+
+    const parsed = Array.from(new Set(cardsToSubmit.map((card) => card.id)));
 
     if (!parsed.length) {
-      setMessage("Pistolea una tarjeta o ingresa al menos un TC/Cedula/Referencia");
+      setMessage("Pistolea o ingresa al menos una tarjeta para crear la ruta");
       return;
     }
 
@@ -596,6 +813,7 @@ export default function RutasClient() {
         fecha,
         messengerId,
         identifiers: parsed,
+        contractIdentifiers: resolveContractIdentifiers(parsed, contractsToSubmit),
       }),
     });
 
@@ -613,6 +831,7 @@ export default function RutasClient() {
 
     setMessage(`Ruta creada con ${data.route.items.length} tarjetas`);
     setIdentifiers("");
+    setContractCardIds(new Set());
     setRoutePickerValue("");
     setRouteSelectedCards([]);
     setRoutePage(1);
@@ -644,7 +863,11 @@ export default function RutasClient() {
     setMessage(`Ruta exportada en ${format.toUpperCase()}`);
   }
 
-  async function scanCard(selection?: { itemId: string; confirmClosed?: boolean }) {
+  async function scanCard(selection?: {
+    itemId: string;
+    confirmClosed?: boolean;
+    confirmMissingContract?: boolean;
+  }) {
     if (!selectedRoute) {
       setMessage("Selecciona una ruta para pistolear");
       return;
@@ -665,6 +888,7 @@ export default function RutasClient() {
         identifier,
         itemId: selection?.itemId,
         confirmClosed: selection?.confirmClosed,
+        confirmMissingContract: selection?.confirmMissingContract,
         result: scanStatus,
         comentario: scanComment || undefined,
       }),
@@ -806,16 +1030,39 @@ export default function RutasClient() {
       setSavingNewLot(false);
       return;
     }
-    const typedIdentifiers = lotIdentifiers
-      .split(/[\n,;]+/g)
-      .map((item) => item.trim())
-      .filter(Boolean);
-    const parsedIdentifiers = Array.from(
-      new Set([...lotSelectedCards.map((card) => card.id), ...typedIdentifiers]),
-    );
+
+    const cardsToSubmit = [...lotSelectedCards];
+    const pendingText = lotPickerValue.trim();
+    if (pendingText) {
+      const tokens = pendingText.split(/[\n,;]+/g).map((t) => t.trim()).filter(Boolean);
+      if (tokens.length > 0) {
+        try {
+          const resp = await fetch("/api/tarjetas/busqueda-operativa", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ identifiers: tokens }),
+          });
+          const payload = await resp.json().catch(() => null);
+          if (resp.ok && Array.isArray(payload?.results)) {
+            for (const item of payload.results) {
+              if (
+                item.resolution?.kind === "RESUELTA" &&
+                !cardsToSubmit.some((c) => c.id === item.resolution.card.id)
+              ) {
+                cardsToSubmit.push(item.resolution.card);
+              }
+            }
+          }
+        } catch {
+          // continue with current cards
+        }
+      }
+    }
+
+    const parsedIdentifiers = Array.from(new Set(cardsToSubmit.map((card) => card.id)));
 
     if (!parsedIdentifiers.length) {
-      setMessage("Pistolea una tarjeta o indica al menos un TC/Cedula para el lote");
+      setMessage("Pistolea o ingresa al menos una tarjeta para el lote");
       setSavingNewLot(false);
       return;
     }
@@ -896,15 +1143,17 @@ export default function RutasClient() {
     return { total, procesadas, entregadas, retornadas };
   }, [selectedRoute]);
 
-  function requestReturnReason(existing?: string | null) {
-    const value = window.prompt("Indica el motivo de devolucion", existing?.trim() ?? "");
-    if (value === null) return null;
-    const trimmed = value.trim();
-    if (!trimmed) {
-      setMessage("Debes indicar motivo de devolucion para marcar tarjeta retornada");
-      return "";
-    }
-    return trimmed;
+  async function requestReturnReason(existing?: string | null): Promise<string | null> {
+    // Interim sync->async plumbing (SDD `rutas-lotes-redesign`, Slice 4b, task
+    // 4.7): still resolves via `window.prompt()`, wrapped in `Promise.resolve()`.
+    // The styled input+datalist replacement (spec requirement "No native
+    // prompt on reason capture") is Slice 7a's job, not this batch's.
+    const promptValue = await Promise.resolve(
+      window.prompt("Indica el motivo de devolucion", existing?.trim() ?? ""),
+    );
+    const resolved = resolveReturnReasonPrompt(promptValue);
+    if (resolved.message) setMessage(resolved.message);
+    return resolved.reason;
   }
 
   return (
@@ -944,6 +1193,31 @@ export default function RutasClient() {
       </div>
 
       {moduleTab === "operativo" ? (
+        <div>
+          <div className="mb-4 flex gap-2">
+            <button
+              onClick={() => setOperativoTab("asignacion")}
+              className={`rounded-lg border px-4 py-2 text-sm font-semibold ${
+                operativoTab === "asignacion"
+                  ? "border-blue-700 bg-blue-50 text-blue-700"
+                  : "border-slate-300 bg-white text-slate-700"
+              }`}
+            >
+              Asignacion y pistoleo
+            </button>
+            <button
+              onClick={() => setOperativoTab("progreso")}
+              className={`rounded-lg border px-4 py-2 text-sm font-semibold ${
+                operativoTab === "progreso"
+                  ? "border-blue-700 bg-blue-50 text-blue-700"
+                  : "border-slate-300 bg-white text-slate-700"
+              }`}
+            >
+              Progreso de rutas
+            </button>
+          </div>
+
+          {operativoTab === "asignacion" ? (
         <div className="grid gap-5 xl:grid-cols-[360px_1fr]">
           <Panel title="Crear ruta diaria">
             <form className="space-y-3" onSubmit={createRoute}>
@@ -972,38 +1246,33 @@ export default function RutasClient() {
               </div>
               <div>
                 <label className="mb-1 block text-xs font-semibold uppercase text-slate-500">
-                  Pistolear tarjeta operativa
+                  Pistolear o ingresar tarjetas
                 </label>
                 <OperationalCardPicker
                   value={routePickerValue}
                   onValueChange={setRoutePickerValue}
                   onCardSelected={addSelectedRouteCard}
+                  onCardsSelected={addSelectedRouteCards}
                   onMessage={setMessage}
-                  placeholder="Pistolear TC/Cedula y presionar Enter"
+                  placeholder="Pistolear TC/Cédula, escribir o pegar en lote..."
                   buttonLabel="Agregar"
                   inputLabel="Agregar tarjeta resuelta a la ruta"
                 />
                 <SelectedOperationalCardChips
                   cards={routeSelectedCards}
-                  onRemove={(cardId) =>
-                    setRouteSelectedCards((previous) => previous.filter((card) => card.id !== cardId))
-                  }
+                  onRemove={removeSelectedRouteCard}
+                  contractCardIds={contractCardIds}
+                  onToggleContract={toggleContractCard}
+                  onToggleAllContracts={toggleAllRouteContracts}
+                  onClearAll={clearAllRouteCards}
                 />
               </div>
-              <div>
-                <label className="mb-1 block text-xs font-semibold uppercase text-slate-500">
-                  Cedulas/TC/Referencias adicionales
-                </label>
-                <textarea
-                  value={identifiers}
-                  onChange={(event) => setIdentifiers(event.target.value)}
-                  rows={7}
-                  className="w-full rounded-xl border border-slate-300 px-3 py-2"
-                  placeholder="Una por linea o separadas por coma"
-                />
-              </div>
-              <button className="w-full rounded-xl bg-[#0f2544] px-4 py-2 text-sm font-semibold text-white">
-                Crear ruta
+              <button
+                type="submit"
+                disabled={!routeSelectedCards.length && !routePickerValue.trim()}
+                className="w-full rounded-xl bg-[#0f2544] px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-[#153460] disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Crear ruta {routeSelectedCards.length ? `(${routeSelectedCards.length})` : ""}
               </button>
             </form>
 
@@ -1117,16 +1386,42 @@ export default function RutasClient() {
                   </div>
 
                   {routeScanConflict ? (
-                    <ScanResolutionPanel
-                      conflict={routeScanConflict}
-                      onDismiss={() => setRouteScanConflict(null)}
-                      onSelect={(candidate) =>
-                        void scanCard({
-                          itemId: candidate.itemId,
-                          confirmClosed: routeScanConflict.kind === "SOLO_CERRADAS",
-                        })
-                      }
-                    />
+                    routeScanConflict.kind === "SIN_CONTRATO_REQUIERE_CONFIRMACION" &&
+                    routeScanConflict.candidates[0] ? (
+                      <ContractDeliveryWizardModal
+                        candidate={routeScanConflict.candidates[0]}
+                        onClose={() => setRouteScanConflict(null)}
+                        onConfirmWithoutContract={() => {
+                          const candidate = routeScanConflict.candidates[0];
+                          setRouteScanConflict(null);
+                          void scanCard({
+                            itemId: candidate.itemId,
+                            confirmMissingContract: true,
+                          });
+                        }}
+                        onConfirmWithContract={() => {
+                          const candidate = routeScanConflict.candidates[0];
+                          setRouteScanConflict(null);
+                          void scanCard({
+                            itemId: candidate.itemId,
+                            confirmMissingContract: false,
+                          });
+                        }}
+                      />
+                    ) : (
+                      <ScanResolutionPanel
+                        conflict={routeScanConflict}
+                        onDismiss={() => setRouteScanConflict(null)}
+                        onSelect={(candidate) =>
+                          void scanCard({
+                            itemId: candidate.itemId,
+                            confirmClosed: routeScanConflict.kind === "SOLO_CERRADAS",
+                            confirmMissingContract:
+                              routeScanConflict.kind === "SIN_CONTRATO_REQUIERE_CONFIRMACION",
+                          })
+                        }
+                      />
+                    )
                   ) : null}
 
                   {scanResult ? (
@@ -1173,8 +1468,8 @@ export default function RutasClient() {
                               Acuse recibido
                             </button>
                             <button
-                              onClick={() => {
-                                const reason = requestReturnReason(item.card.returnReason);
+                              onClick={async () => {
+                                const reason = await requestReturnReason(item.card.returnReason);
                                 if (!reason) return;
                                 void markRouteItem(item.id, "DEVUELTA_TIENDA", reason);
                               }}
@@ -1211,6 +1506,30 @@ export default function RutasClient() {
             )}
           </Panel>
         </div>
+          ) : null}
+
+          {operativoTab === "progreso" ? (
+            <Panel title="Progreso de rutas" subtitle="Estado de acuses y devoluciones por ruta activa">
+              <RouteProgressPanel
+                routes={routes}
+                formatDate={formatDate}
+                onSelectRoute={setSelectedRouteForLot}
+                emptyMessage="No hay rutas en progreso para la fecha."
+              />
+              <div className="mt-3">
+                <ListPager
+                  page={routesPagination.page}
+                  totalPages={routesPagination.totalPages}
+                  total={routesPagination.total}
+                  onPrev={() => setRoutePage((prev) => Math.max(1, prev - 1))}
+                  onNext={() =>
+                    setRoutePage((prev) => Math.min(routesPagination.totalPages, prev + 1))
+                  }
+                />
+              </div>
+            </Panel>
+          ) : null}
+        </div>
       ) : null}
 
       {moduleTab === "lotes" ? (
@@ -1243,90 +1562,9 @@ export default function RutasClient() {
               </div>
             </div>
 
-            <div className="mb-4 flex gap-2">
-              <button
-                onClick={() => setLotTab("lotes")}
-                className={`rounded-lg border px-4 py-2 text-sm font-semibold ${
-                  lotTab === "lotes"
-                    ? "border-blue-700 bg-blue-50 text-blue-700"
-                    : "border-slate-300 bg-white text-slate-700"
-                }`}
-              >
-                Lotes activos
-              </button>
-              <button
-                onClick={() => setLotTab("seguimiento")}
-                className={`rounded-lg border px-4 py-2 text-sm font-semibold ${
-                  lotTab === "seguimiento"
-                    ? "border-blue-700 bg-blue-50 text-blue-700"
-                    : "border-slate-300 bg-white text-slate-700"
-                }`}
-              >
-                Seguimiento de lotes
-              </button>
-            </div>
-
-            {lotTab === "lotes" ? (
-              <div>
-                <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-                  {routes.map((route) => {
-                  const total = route.items.length;
-                  const recibidas = route.items.filter((item) => getRouteLifecycle(item) === "ACUSE RECIBIDO").length;
-                  const retornadas = route.items.filter((item) => getRouteLifecycle(item) === "DEVUELTA A TIENDA").length;
-                  const percent = total ? Math.round(((recibidas + retornadas) / total) * 100) : 0;
-
-                  return (
-                    <article key={route.id} className="rounded-xl border border-slate-200 bg-white p-4">
-                      <div className="mb-2 flex items-center justify-between">
-                        <p className="font-display text-xs font-bold tracking-wide text-blue-700">
-                          LOTE {route.id.slice(-5).toUpperCase()}
-                        </p>
-                        <span className="rounded-md bg-slate-100 px-2 py-1 text-xs text-slate-600">
-                          {percent}% procesado
-                        </span>
-                      </div>
-                      <p className="font-display text-base font-bold text-slate-900">{route.messenger.nombre}</p>
-                      <p className="text-xs text-slate-500">{formatDate(route.fecha)}</p>
-
-                      <div className="mt-3 grid grid-cols-3 gap-2">
-                        <MiniLotStat label="Total" value={total} color="text-slate-900" />
-                        <MiniLotStat label="Acuses" value={recibidas} color="text-emerald-700" />
-                        <MiniLotStat label="Devueltas" value={retornadas} color="text-rose-700" />
-                      </div>
-
-                      <div className="mt-3 h-1.5 rounded bg-slate-100">
-                        <div className="h-full rounded bg-blue-700" style={{ width: `${percent}%` }} />
-                      </div>
-
-                      <button
-                        onClick={() => setSelectedRouteForLot(route.id)}
-                        className="mt-3 w-full rounded-lg bg-[#0f2544] px-3 py-2 text-sm font-semibold text-white"
-                      >
-                        Ver tarjetas
-                      </button>
-                    </article>
-                  );
-                  })}
-                  {!routes.length ? <p className="text-sm text-slate-500">No hay lotes activos para la fecha.</p> : null}
-                </div>
-                <div className="mt-3">
-                  <ListPager
-                    page={routesPagination.page}
-                    totalPages={routesPagination.totalPages}
-                    total={routesPagination.total}
-                    onPrev={() => setRoutePage((prev) => Math.max(1, prev - 1))}
-                    onNext={() =>
-                      setRoutePage((prev) => Math.min(routesPagination.totalPages, prev + 1))
-                    }
-                  />
-                </div>
-              </div>
-            ) : null}
-
-            {lotTab === "seguimiento" ? (
-              <div>
-                <div className="overflow-x-auto rounded-xl border border-slate-200">
-                  <table className="w-full text-left text-sm">
+            <div>
+              <div className="overflow-x-auto rounded-xl border border-slate-200">
+                <table className="w-full text-left text-sm">
                   <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
                     <tr>
                       <th className="px-3 py-2">No. lote</th>
@@ -1369,19 +1607,18 @@ export default function RutasClient() {
                       </tr>
                     ) : null}
                   </tbody>
-                  </table>
-                </div>
-                <div className="mt-3">
-                  <ListPager
-                    page={lotsPagination.page}
-                    totalPages={lotsPagination.totalPages}
-                    total={lotsPagination.total}
-                    onPrev={() => setLotPage((prev) => Math.max(1, prev - 1))}
-                    onNext={() => setLotPage((prev) => Math.min(lotsPagination.totalPages, prev + 1))}
-                  />
-                </div>
+                </table>
               </div>
-            ) : null}
+              <div className="mt-3">
+                <ListPager
+                  page={lotsPagination.page}
+                  totalPages={lotsPagination.totalPages}
+                  total={lotsPagination.total}
+                  onPrev={() => setLotPage((prev) => Math.max(1, prev - 1))}
+                  onNext={() => setLotPage((prev) => Math.min(lotsPagination.totalPages, prev + 1))}
+                />
+              </div>
+            </div>
           </Panel>
         </div>
       ) : null}
@@ -1455,14 +1692,15 @@ export default function RutasClient() {
               />
               <div>
                 <label className="mb-1 block text-xs font-semibold uppercase text-slate-500">
-                  Pistolear tarjeta operativa
+                  Pistolear o ingresar tarjetas del lote
                 </label>
                 <OperationalCardPicker
                   value={lotPickerValue}
                   onValueChange={setLotPickerValue}
                   onCardSelected={addSelectedLotCard}
+                  onCardsSelected={addSelectedLotCards}
                   onMessage={setMessage}
-                  placeholder="Pistolear TC/Cedula y presionar Enter"
+                  placeholder="Pistolear TC/Cédula, escribir o pegar en lote..."
                   buttonLabel="Agregar"
                   inputLabel="Agregar tarjeta resuelta al lote"
                 />
@@ -1471,15 +1709,9 @@ export default function RutasClient() {
                   onRemove={(cardId) =>
                     setLotSelectedCards((previous) => previous.filter((card) => card.id !== cardId))
                   }
+                  onClearAll={clearAllLotCards}
                 />
               </div>
-              <textarea
-                value={lotIdentifiers}
-                onChange={(event) => setLotIdentifiers(event.target.value)}
-                rows={4}
-                placeholder="Tarjetas del lote (TC/Cedula), una por linea"
-                className="w-full rounded-xl border border-slate-300 px-3 py-2"
-              />
             </div>
 
             <div className="mt-4 flex justify-end gap-2">
@@ -1488,10 +1720,10 @@ export default function RutasClient() {
               </button>
               <button
                 onClick={() => void createLot()}
-                disabled={savingNewLot || !lotMessengerId || !lotDestinationProvince}
+                disabled={savingNewLot || !lotMessengerId || !lotDestinationProvince || (!lotSelectedCards.length && !lotPickerValue.trim())}
                 className="rounded-lg bg-[#0f2544] px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
               >
-                {savingNewLot ? "Creando..." : "Crear lote"}
+                {savingNewLot ? "Creando..." : `Crear lote ${lotSelectedCards.length ? `(${lotSelectedCards.length})` : ""}`}
               </button>
             </div>
           </div>
@@ -1507,15 +1739,6 @@ function Stat({ label, value }: { label: string; value: number }) {
       <p className="text-xs uppercase tracking-wide text-slate-500">{label}</p>
       <p className="mt-1 text-2xl font-bold text-slate-900">{value}</p>
     </article>
-  );
-}
-
-function MiniLotStat({ label, value, color }: { label: string; value: number; color: string }) {
-  return (
-    <div className="rounded-lg bg-slate-50 px-2 py-2 text-center">
-      <p className={`font-display text-lg font-bold ${color}`}>{value}</p>
-      <p className="text-[11px] text-slate-500">{label}</p>
-    </div>
   );
 }
 
@@ -1575,7 +1798,7 @@ function RouteLotModal({
     comentario?: string,
     options?: { silent?: boolean; skipRefresh?: boolean },
   ) => Promise<void>;
-  onRequireReturnReason: (existing?: string | null) => string | null;
+  onRequireReturnReason: (existing?: string | null) => Promise<string | null>;
 }) {
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [bulkStatus, setBulkStatus] = useState<"EN_RUTA" | "ACUSE_RECIBIDO" | "DEVUELTA_TIENDA">("ACUSE_RECIBIDO");
@@ -1635,7 +1858,7 @@ function RouteLotModal({
       <div className="flex max-h-[calc(100vh-3rem)] w-full max-w-5xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl" onClick={(event) => event.stopPropagation()}>
         <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
           <div>
-            <p className="font-display text-xs font-bold tracking-wide text-blue-700">LOTE {route.id.slice(-5).toUpperCase()}</p>
+            <p className="font-display text-xs font-bold tracking-wide text-blue-700">RUTA {route.id.slice(-5).toUpperCase()}</p>
             <h3 className="font-display text-xl font-bold text-slate-900">{route.messenger.nombre}</h3>
             <p className="text-xs text-slate-500">{formatDate(route.fecha)}</p>
           </div>
@@ -1745,12 +1968,12 @@ function RouteLotModal({
                       <input
                         type="checkbox"
                         checked={getRouteLifecycle(item) === "DEVUELTA A TIENDA"}
-                        onChange={(event) => {
+                        onChange={async (event) => {
                           if (!event.target.checked) {
                             void onMark(item.id, "EN_RUTA");
                             return;
                           }
-                          const reason = onRequireReturnReason(item.card.returnReason);
+                          const reason = await onRequireReturnReason(item.card.returnReason);
                           if (!reason) return;
                           void onMark(item.id, "DEVUELTA_TIENDA", reason);
                         }}
@@ -1789,7 +2012,7 @@ function TrackingLotModal({
     identifier: string,
     selection?: { itemId: string; confirmClosed?: boolean },
   ) => Promise<ScanEndpointResult>;
-  onRequireReturnReason: (existing?: string | null) => string | null;
+  onRequireReturnReason: (existing?: string | null) => Promise<string | null>;
 }) {
   const [scanInput, setScanInput] = useState("");
   const [scanResult, setScanResult] = useState("");
@@ -2023,12 +2246,12 @@ function TrackingLotModal({
                         <input
                           type="checkbox"
                           checked={isRetornada}
-                          onChange={(event) => {
+                          onChange={async (event) => {
                             if (!event.target.checked) {
                               void onMark(item.id, "EN_RUTA");
                               return;
                             }
-                            const reason = onRequireReturnReason(item.card?.returnReason);
+                            const reason = await onRequireReturnReason(item.card?.returnReason);
                             if (!reason) return;
                             void onMark(item.id, "DEVUELTA_TIENDA", reason);
                           }}

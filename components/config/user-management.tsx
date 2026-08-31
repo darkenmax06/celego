@@ -9,6 +9,7 @@ import {
   useMemo,
   useState,
 } from "react";
+import toast from "react-hot-toast";
 import { Panel } from "@/components/ui/panel";
 import { usePersistentState } from "@/lib/use-persistent-state";
 
@@ -61,8 +62,6 @@ export function UserManagement() {
   const [totalPages, setTotalPages] = useState(1);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
-  const [message, setMessage] = useState("");
-  const [error, setError] = useState("");
   const [passwordOpen, setPasswordOpen] = useState(false);
   const deferredQuery = useDeferredValue(query);
 
@@ -75,14 +74,13 @@ export function UserManagement() {
     const response = await fetch(`/api/config/usuarios?${params}`, { cache: "no-store" });
     const json = await response.json().catch(() => null);
     if (!response.ok) {
-      setError(json?.error ?? "No se pudieron cargar los usuarios");
+      toast.error(json?.error ?? "No se pudieron cargar los usuarios");
       setLoading(false);
       return;
     }
     setUsers(json.users ?? []);
     setCurrentUserId(json.currentUserId ?? "");
     setTotalPages(json.pagination?.totalPages ?? 1);
-    setError("");
     setLoading(false);
   }, [active, deferredQuery, page, role]);
 
@@ -100,13 +98,11 @@ export function UserManagement() {
   );
 
   function showSuccess(value: string) {
-    setMessage(value);
-    setError("");
+    toast.success(value);
   }
 
   function showError(value: string) {
-    setError(value);
-    setMessage("");
+    toast.error(value);
   }
 
   async function saveUser(input: {
@@ -201,17 +197,6 @@ export function UserManagement() {
           </button>
         </div>
       </Panel>
-
-      {message ? (
-        <p className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
-          {message}
-        </p>
-      ) : null}
-      {error ? (
-        <p className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
-          {error}
-        </p>
-      ) : null}
 
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_420px]">
         <Panel title="Usuarios" subtitle="Selecciona una fila para administrar su acceso.">

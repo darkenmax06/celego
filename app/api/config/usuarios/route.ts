@@ -4,6 +4,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { requireApiSession } from "@/lib/api-session";
 import { writeAuditEvent } from "@/lib/audit";
+import { buildListEnvelope, compile } from "@/lib/list-query";
+import { configUsuariosListQuery } from "@/lib/list-query/descriptors/config-usuarios";
 import { prisma } from "@/lib/prisma";
 
 const createSchema = z.object({
@@ -47,38 +49,18 @@ export async function GET(request: NextRequest) {
   const auth = await requireApiSession(["ADMIN"]);
   if ("error" in auth) return auth.error;
 
-  const q = request.nextUrl.searchParams.get("q")?.trim();
-  const role = request.nextUrl.searchParams.get("role");
-  const active = request.nextUrl.searchParams.get("active");
-  const pageRaw = Number(request.nextUrl.searchParams.get("page") ?? "1");
-  const pageSizeRaw = Number(request.nextUrl.searchParams.get("pageSize") ?? "20");
-  const page = Number.isFinite(pageRaw) ? Math.max(1, Math.trunc(pageRaw)) : 1;
-  const pageSize = Number.isFinite(pageSizeRaw)
-    ? Math.min(100, Math.max(1, Math.trunc(pageSizeRaw)))
-    : 20;
-
-  const where: Prisma.UserWhereInput = {
-    ...(q
-      ? {
-          OR: [
-            { name: { contains: q, mode: "insensitive" } },
-            { email: { contains: q, mode: "insensitive" } },
-          ],
-        }
-      : {}),
-    ...(role && role !== "ALL" && Object.values(UserRole).includes(role as UserRole)
-      ? { role: role as UserRole }
-      : {}),
-    ...(active === "true" ? { active: true } : active === "false" ? { active: false } : {}),
-  };
+  // `q` searches name/email, `role` DROPS an unknown value silently and `active`
+  // keeps the "true"/"false" encoding this route has always accepted.
+  const query = compile(configUsuariosListQuery, request.nextUrl.searchParams);
+  const where: Prisma.UserWhereInput = query.where;
 
   const [users, total] = await Promise.all([
     prisma.user.findMany({
       where,
       select: userSelect,
-      orderBy: [{ active: "desc" }, { name: "asc" }, { createdAt: "asc" }],
-      skip: (page - 1) * pageSize,
-      take: pageSize,
+      orderBy: query.orderBy,
+      skip: query.skip,
+      take: query.take,
     }),
     prisma.user.count({ where }),
   ]);
@@ -86,12 +68,7 @@ export async function GET(request: NextRequest) {
   return NextResponse.json({
     users,
     currentUserId: auth.session.user.id,
-    pagination: {
-      page,
-      pageSize,
-      total,
-      totalPages: Math.max(1, Math.ceil(total / pageSize)),
-    },
+    pagination: buildListEnvelope({ page: query.page, pageSize: query.pageSize, total }),
   });
 }
 

@@ -4,15 +4,9 @@ import JSZip from "jszip";
 import sharp from "sharp";
 import { requireApiSession } from "@/lib/api-session";
 import { prisma } from "@/lib/prisma";
+import { displayText } from "@/lib/display";
 import { remainingBusinessDays } from "@/lib/sla";
-
-const CLOSED_STATUSES: CardStatus[] = [
-  CardStatus.ENTREGADA,
-  CardStatus.ENTREGA_DIGITAL,
-  CardStatus.RETORNADA,
-  CardStatus.ACUSE_RECIBIDO,
-  CardStatus.DEVUELTA_TIENDA,
-];
+import { SLA_CLOSED_STATUSES } from "@/lib/list-query/descriptors/sla-vencidas";
 
 function escapeXml(value: string) {
   return value
@@ -115,7 +109,7 @@ export async function GET(request: NextRequest) {
 
   const cards = await prisma.card.findMany({
     where: {
-      status: { notIn: CLOSED_STATUSES },
+      status: { notIn: [...SLA_CLOSED_STATUSES] },
       slaDueDate: { lt: today },
       ...(messengerId && messengerId !== "ALL" ? { currentMessengerId: messengerId } : {}),
     },
@@ -155,10 +149,10 @@ export async function GET(request: NextRequest) {
       tc: card.tc,
       provincia: card.provincia,
       status: card.status.replaceAll("_", " "),
-      mensajero: card.currentMessenger?.nombre ?? "",
+      mensajero: displayText(card.currentMessenger?.nombre),
       slaDate: formatDate(card.slaDueDate),
       diasVencidos,
-      direccion: card.customer.direccionRaw ?? "",
+      direccion: displayText(card.customer.direccionRaw),
       telefonos: splitPhones(card.customer.telefonosRaw),
     });
     const jpg = await svgToJpeg(svg);
