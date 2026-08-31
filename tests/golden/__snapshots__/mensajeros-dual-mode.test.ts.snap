@@ -1,0 +1,17 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`/api/mensajeros dual mode > omits the pagination key entirely when BOTH page and pageSize are absent 1`] = `
+{
+  "messengers": [
+    {
+      "id": "row-1",
+    },
+    {
+      "id": "row-2",
+    },
+    {
+      "id": "row-3",
+    },
+  ],
+}
+`;

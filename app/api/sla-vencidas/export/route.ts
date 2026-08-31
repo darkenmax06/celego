@@ -4,6 +4,7 @@ import JSZip from "jszip";
 import sharp from "sharp";
 import { requireApiSession } from "@/lib/api-session";
 import { prisma } from "@/lib/prisma";
+import { displayText } from "@/lib/display";
 import { remainingBusinessDays } from "@/lib/sla";
 import { slaWhere } from "../shared";
 
@@ -156,10 +157,10 @@ export async function GET(request: NextRequest) {
       productType: card.productType === CardProductType.DEBITO ? "SOLICITUD" : "TARJETA",
       provincia: card.provincia,
       status: card.status.replaceAll("_", " "),
-      mensajero: card.currentMessenger?.nombre ?? "",
+      mensajero: displayText(card.currentMessenger?.nombre),
       slaDate: formatDate(card.slaDueDate),
       diasVencidos,
-      direccion: card.customer.direccionRaw ?? "",
+      direccion: displayText(card.customer.direccionRaw),
       telefonos: splitPhones(card.customer.telefonosRaw),
     });
     const jpg = await svgToJpeg(svg);

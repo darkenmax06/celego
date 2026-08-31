@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import {
   CardProductType,
   CardStatus,
+  DispatchOrigin,
   Prisma,
   RedactionStatus,
   RedactionType,
@@ -17,10 +18,12 @@ import {
 import { dedupeBillingCardsByCustomerAndDispatchDate } from "@/lib/billing";
 import { getCardIdentifier } from "@/lib/card-identifier";
 import { formatDateEs } from "@/lib/date";
+import { displayText } from "@/lib/display";
 import { resolveBillableZone } from "@/lib/delivery-location";
 import { fromCents } from "@/lib/money";
 import { prisma } from "@/lib/prisma";
 import { exportRowsToCsv, exportRowsToPdf, exportRowsToXlsx } from "@/lib/reports/export";
+import { getCeleritasLogoPngBuffer } from "@/lib/reports/logo";
 import { normalizeText } from "@/lib/utils";
 
 function fileHeaders(filename: string, contentType: string) {
@@ -95,7 +98,7 @@ async function getAssignmentHistoryByCard(cardIds: string[]) {
   const history = new Map<string, AssignmentHistory>();
   if (!uniqueCardIds.length) return history;
 
-  const [routeItems, reassignments] = await Promise.all([
+  const [routeItems = [], reassignments = []] = await Promise.all([
     prisma.routeItem.findMany({
       where: { cardId: { in: uniqueCardIds } },
       select: {
@@ -268,9 +271,15 @@ async function buildRedactionExportRows(request: NextRequest): Promise<Redaction
     request.nextUrl.searchParams.get("producto") ??
       request.nextUrl.searchParams.get("productType"),
   );
+  const origin = request.nextUrl.searchParams.get("origin");
+  const redactionType = request.nextUrl.searchParams.get("redactionType");
 
   const where: Record<string, unknown> = {};
   where.status = RedactionStatus.APROBADA;
+  if (origin && origin !== "ALL") where.dispatchOrigin = origin;
+  if (redactionType === RedactionType.ENTREGA || redactionType === RedactionType.RETORNO) {
+    where.tipo = redactionType;
+  }
   if (redactionIds.length) {
     where.id = { in: redactionIds };
   } else {
@@ -315,7 +324,8 @@ async function buildRedactionExportRows(request: NextRequest): Promise<Redaction
     ? filteredByDate.filter((red) => normalizeText(red.zona) === normalizeText(zona))
     : filteredByDate;
 
-  const source = filteredRedactions.length ? filteredRedactions : redactions;
+  // Never fall back to unfiltered records: an empty exact filter must export zero rows.
+  const source = filteredRedactions;
   const historyByCard = await getAssignmentHistoryByCard(
     source.flatMap((redaction) => redaction.items.map((item) => item.cardId)),
   );
@@ -463,12 +473,15 @@ async function exportRedactionToPdf(rows: RedactionExportRows) {
   const regular = await pdf.embedFont(StandardFonts.Helvetica);
   const bold = await pdf.embedFont(StandardFonts.HelveticaBold);
 
+  const logoBuffer = await getCeleritasLogoPngBuffer();
+  const logoImage = logoBuffer ? await pdf.embedPng(logoBuffer).catch(() => null) : null;
+
   const drawSection = (input: {
     title: string;
     headers: string[];
     dataRows: string[][];
   }) => {
-    const rowsPerPage = 41;
+    const rowsPerPage = 38;
     const pageCount = Math.max(1, Math.ceil(input.dataRows.length / rowsPerPage));
     const cols = [18, 35, 88, 184, 244, 273, 296, 339, 410, 469, 532, 565, 640, 710];
     const maxLengths = [3, 8, 14, 10, 3, 2, 8, 10, 8, 8, 5, 11, 11, 9];
@@ -479,33 +492,65 @@ async function exportRedactionToPdf(rows: RedactionExportRows) {
         pageIndex * rowsPerPage,
         (pageIndex + 1) * rowsPerPage,
       );
+
+      if (logoImage) {
+        const logoWidth = 140;
+        const logoHeight = 28;
+        page.drawImage(logoImage, {
+          x: 792 - 28 - logoWidth,
+          y: 568,
+          width: logoWidth,
+          height: logoHeight,
+        });
+      }
+
       page.drawText(input.title, {
         x: 28,
-        y: 580,
-        size: 16,
+        y: 578,
+        size: 15,
         font: bold,
-        color: rgb(0.06, 0.12, 0.24),
+        color: rgb(0.04, 0.11, 0.21),
       });
-      page.drawText(`Fecha: ${rows.fecha}`, { x: 28, y: 562, size: 9, font: regular });
-      page.drawText(`Zona: ${rows.zona}`, { x: 180, y: 562, size: 9, font: regular });
-      page.drawText(`Pagina ${pageIndex + 1} de ${pageCount}`, {
-        x: 690,
+      page.drawText(`Fecha: ${rows.fecha}`, {
+        x: 28,
         y: 562,
+        size: 8.5,
+        font: regular,
+        color: rgb(0.35, 0.4, 0.45),
+      });
+      page.drawText(`Zona: ${rows.zona}`, {
+        x: 140,
+        y: 562,
+        size: 8.5,
+        font: regular,
+        color: rgb(0.35, 0.4, 0.45),
+      });
+      page.drawText(`Pagina ${pageIndex + 1} de ${pageCount}`, {
+        x: 792 - 28 - 70,
+        y: 554,
         size: 8,
         font: regular,
+        color: rgb(0.45, 0.5, 0.55),
       });
 
-      let y = 540;
+      page.drawLine({
+        start: { x: 28, y: 548 },
+        end: { x: 792 - 28, y: 548 },
+        thickness: 0.75,
+        color: rgb(0.85, 0.88, 0.92),
+      });
+
+      let y = 534;
       input.headers.forEach((header, idx) => {
         page.drawText(header, {
           x: cols[idx],
           y,
-          size: 5.5,
+          size: 7.5,
           font: bold,
-          color: rgb(0.35, 0.35, 0.35),
+          color: rgb(0.2, 0.25, 0.3),
         });
       });
-      y -= 11;
+      y -= 12;
 
       if (!pageRows.length) {
         page.drawText("Sin registros para esta redaccion.", {
@@ -628,7 +673,10 @@ export async function GET(request: NextRequest) {
   if (type === "tarjetas") {
     title = "Reporte de tarjetas";
     const status = request.nextUrl.searchParams.get("status");
+    const origin = request.nextUrl.searchParams.get("origin");
     const zone = request.nextUrl.searchParams.get("zona");
+    const cardType = request.nextUrl.searchParams.get("cardType") ?? request.nextUrl.searchParams.get("tipoTarjeta");
+    const urgent = request.nextUrl.searchParams.get("urgente") ?? request.nextUrl.searchParams.get("urgent");
     const from = request.nextUrl.searchParams.get("from");
     const to = request.nextUrl.searchParams.get("to");
     const dispatchRange =
@@ -648,6 +696,15 @@ export async function GET(request: NextRequest) {
     const cardWhere: Prisma.CardWhereInput = {
       ...(productType ? { productType } : {}),
       ...(status && status !== "ALL" ? { status: status as CardStatus } : {}),
+      ...(origin && origin !== "ALL"
+        ? origin === "SIN_PROCEDENCIA"
+          ? { dispatchOrigin: null }
+          : { dispatchOrigin: origin as DispatchOrigin }
+        : {}),
+      ...(cardType && cardType !== "ALL"
+        ? { isAdditional: cardType === "ADICIONAL" }
+        : {}),
+      ...(urgent === "true" || urgent === "1" ? { urgent: true } : {}),
       ...(zone && zone !== "ALL"
         ? {
             OR: [
@@ -677,13 +734,15 @@ export async function GET(request: NextRequest) {
       ...productFields(card),
       fechaEntrega: formatDateEs(lifecycleByCard.get(card.id)?.deliveryDate),
       fechaRetorno: formatDateEs(lifecycleByCard.get(card.id)?.returnDate),
+      numeroTarjeta: card.tc,
+      origenDespacho: card.dispatchOrigin ?? "SIN_PROCEDENCIA",
       cliente: card.customer.nombre,
       cedula: card.customer.cedula,
       zonaOriginal: card.zona,
       provinciaOriginal: card.provincia,
       zonaFacturable: resolveBillableZone(card),
-      provinciaReasignacion: card.reassignedProvince ?? "",
-      mensajeroReasignado: card.reassignedMessenger?.nombre ?? "",
+      provinciaReasignacion: displayText(card.reassignedProvince),
+      mensajeroReasignado: displayText(card.reassignedMessenger?.nombre),
       tipoTarjeta: card.isAdditional ? "ADICIONAL" : "PRINCIPAL",
       adicional: card.isAdditional ? "SI" : "NO",
       adicionalNumero: card.additionalIndex,
@@ -693,7 +752,7 @@ export async function GET(request: NextRequest) {
       mensajero: assignedMessengerName(card, historyByCard),
       fechaDespacho: formatDateEs(card.dispatchDate),
       slaVence: formatDateEs(card.slaDueDate),
-      comentarioRetorno: card.returnReason ?? "",
+      comentarioRetorno: displayText(card.returnReason),
     }));
   } else if (type === "contactos") {
     title = "Reporte de contactos";
@@ -874,6 +933,16 @@ export async function GET(request: NextRequest) {
       });
     }
   } else if (type === "redaccion") {
+    const origin = request.nextUrl.searchParams.get("origin");
+    const redactionType = request.nextUrl.searchParams.get("redactionType");
+    const redactionIdsRaw = request.nextUrl.searchParams.get("redactionIds");
+    const redactionIds = redactionIdsRaw
+      ? redactionIdsRaw
+          .split(",")
+          .map((value) => value.trim())
+          .filter(Boolean)
+      : [];
+
     title = "Entregas y retornos";
     const redactionRows = await buildRedactionExportRows(request);
 
@@ -884,11 +953,22 @@ export async function GET(request: NextRequest) {
       );
     }
 
+    const dateTag = new Date().toISOString().slice(0, 10);
+    let baseFileName = "relaciones";
+    if (redactionType && origin && origin !== "ALL" && redactionType !== "ALL") {
+      baseFileName = `redaccion-${redactionType.toLowerCase()}-${origin.toLowerCase()}-${dateTag}`;
+    } else if (redactionIds.length === 1) {
+      baseFileName = `relacion-${redactionIds[0].slice(-6)}`;
+    } else {
+      const zonaParam = request.nextUrl.searchParams.get("zona");
+      baseFileName = `entregas-retornos-${zonaParam && zonaParam !== "ALL" ? zonaParam.toLowerCase() + "-" : ""}${dateTag}`;
+    }
+
     if (format === "xlsx") {
       const xlsx = await exportRedactionToXlsx(redactionRows);
       return new NextResponse(Buffer.from(xlsx), {
         headers: fileHeaders(
-          `redaccion-${new Date().toISOString().slice(0, 10)}.xlsx`,
+          `${baseFileName}.xlsx`,
           "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         ),
       });
@@ -898,7 +978,7 @@ export async function GET(request: NextRequest) {
       const pdfBytes = await exportRedactionToPdf(redactionRows);
       return new NextResponse(Buffer.from(pdfBytes), {
         headers: fileHeaders(
-          `redaccion-${new Date().toISOString().slice(0, 10)}.pdf`,
+          `${baseFileName}.pdf`,
           "application/pdf",
         ),
       });

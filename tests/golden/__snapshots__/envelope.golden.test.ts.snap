@@ -1,0 +1,1439 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`golden envelopes for the nine list routes > actividad envelope shape is frozen 1`] = `
+{
+  "route": "actividad",
+  "rows": [
+    {
+      "envelope": {
+        "events": [],
+        "pagination": {
+          "page": 2,
+          "pageSize": 7,
+          "total": 0,
+          "totalPages": 1,
+        },
+      },
+      "total": 0,
+    },
+    {
+      "envelope": {
+        "events": [],
+        "pagination": {
+          "page": 2,
+          "pageSize": 7,
+          "total": 1,
+          "totalPages": 1,
+        },
+      },
+      "total": 1,
+    },
+    {
+      "envelope": {
+        "events": [],
+        "pagination": {
+          "page": 2,
+          "pageSize": 7,
+          "total": 7,
+          "totalPages": 1,
+        },
+      },
+      "total": 7,
+    },
+    {
+      "envelope": {
+        "events": [
+          {
+            "id": "row-1",
+          },
+          {
+            "id": "row-2",
+          },
+          {
+            "id": "row-3",
+          },
+          {
+            "id": "row-4",
+          },
+          {
+            "id": "row-5",
+          },
+          {
+            "id": "row-6",
+          },
+          {
+            "id": "row-7",
+          },
+        ],
+        "pagination": {
+          "page": 2,
+          "pageSize": 7,
+          "total": 250,
+          "totalPages": 36,
+        },
+      },
+      "total": 250,
+    },
+  ],
+}
+`;
+
+exports[`golden envelopes for the nine list routes > actividad pagination resolution is frozen 1`] = `
+{
+  "file": "app/api/config/usuarios/[id]/actividad/route.ts",
+  "route": "actividad",
+  "rows": [
+    {
+      "page": 1,
+      "pageSize": 25,
+      "query": "(no params)",
+      "unpaginated": true,
+    },
+    {
+      "page": 1,
+      "pageSize": 25,
+      "query": "?page=1",
+      "unpaginated": false,
+    },
+    {
+      "page": 1,
+      "pageSize": 1,
+      "query": "?pageSize=1",
+      "unpaginated": false,
+    },
+    {
+      "page": 2,
+      "pageSize": 10,
+      "query": "?page=2&pageSize=10",
+      "unpaginated": false,
+    },
+    {
+      "page": 1,
+      "pageSize": 1,
+      "query": "?page=0&pageSize=0",
+      "unpaginated": false,
+    },
+    {
+      "page": 1,
+      "pageSize": 1,
+      "query": "?page=-5&pageSize=-5",
+      "unpaginated": false,
+    },
+    {
+      "page": 1,
+      "pageSize": 25,
+      "query": "?page=abc&pageSize=abc",
+      "unpaginated": false,
+    },
+    {
+      "page": 2,
+      "pageSize": 10,
+      "query": "?page=2.9&pageSize=10.9",
+      "unpaginated": false,
+    },
+    {
+      "page": 99999,
+      "pageSize": 100,
+      "query": "?page=99999&pageSize=99999",
+      "unpaginated": false,
+    },
+  ],
+}
+`;
+
+exports[`golden envelopes for the nine list routes > bizcochitos envelope shape is frozen 1`] = `
+{
+  "route": "bizcochitos",
+  "rows": [
+    {
+      "envelope": {
+        "batches": [],
+        "latest": null,
+        "pagination": {
+          "page": 2,
+          "pageSize": 7,
+          "total": 0,
+          "totalPages": 1,
+        },
+        "pendingCount": 0,
+      },
+      "total": 0,
+    },
+    {
+      "envelope": {
+        "batches": [],
+        "latest": null,
+        "pagination": {
+          "page": 2,
+          "pageSize": 7,
+          "total": 1,
+          "totalPages": 1,
+        },
+        "pendingCount": 0,
+      },
+      "total": 1,
+    },
+    {
+      "envelope": {
+        "batches": [],
+        "latest": null,
+        "pagination": {
+          "page": 2,
+          "pageSize": 7,
+          "total": 7,
+          "totalPages": 1,
+        },
+        "pendingCount": 0,
+      },
+      "total": 7,
+    },
+    {
+      "envelope": {
+        "batches": [
+          {
+            "id": "row-1",
+          },
+          {
+            "id": "row-2",
+          },
+          {
+            "id": "row-3",
+          },
+          {
+            "id": "row-4",
+          },
+          {
+            "id": "row-5",
+          },
+          {
+            "id": "row-6",
+          },
+          {
+            "id": "row-7",
+          },
+        ],
+        "latest": null,
+        "pagination": {
+          "page": 2,
+          "pageSize": 7,
+          "total": 250,
+          "totalPages": 36,
+        },
+        "pendingCount": 0,
+      },
+      "total": 250,
+    },
+  ],
+}
+`;
+
+exports[`golden envelopes for the nine list routes > bizcochitos pagination resolution is frozen 1`] = `
+{
+  "file": "app/api/status-digitales/bizcochitos/route.ts",
+  "route": "bizcochitos",
+  "rows": [
+    {
+      "page": 1,
+      "pageSize": 15,
+      "query": "(no params)",
+      "unpaginated": true,
+    },
+    {
+      "page": 1,
+      "pageSize": 15,
+      "query": "?page=1",
+      "unpaginated": false,
+    },
+    {
+      "page": 1,
+      "pageSize": 1,
+      "query": "?pageSize=1",
+      "unpaginated": false,
+    },
+    {
+      "page": 2,
+      "pageSize": 10,
+      "query": "?page=2&pageSize=10",
+      "unpaginated": false,
+    },
+    {
+      "page": 1,
+      "pageSize": 1,
+      "query": "?page=0&pageSize=0",
+      "unpaginated": false,
+    },
+    {
+      "page": 1,
+      "pageSize": 1,
+      "query": "?page=-5&pageSize=-5",
+      "unpaginated": false,
+    },
+    {
+      "page": 1,
+      "pageSize": 15,
+      "query": "?page=abc&pageSize=abc",
+      "unpaginated": false,
+    },
+    {
+      "page": 2,
+      "pageSize": 10,
+      "query": "?page=2.9&pageSize=10.9",
+      "unpaginated": false,
+    },
+    {
+      "page": 99999,
+      "pageSize": 50,
+      "query": "?page=99999&pageSize=99999",
+      "unpaginated": false,
+    },
+  ],
+}
+`;
+
+exports[`golden envelopes for the nine list routes > config-usuarios envelope shape is frozen 1`] = `
+{
+  "route": "config-usuarios",
+  "rows": [
+    {
+      "envelope": {
+        "currentUserId": "golden-user",
+        "pagination": {
+          "page": 2,
+          "pageSize": 7,
+          "total": 0,
+          "totalPages": 1,
+        },
+        "users": [],
+      },
+      "total": 0,
+    },
+    {
+      "envelope": {
+        "currentUserId": "golden-user",
+        "pagination": {
+          "page": 2,
+          "pageSize": 7,
+          "total": 1,
+          "totalPages": 1,
+        },
+        "users": [],
+      },
+      "total": 1,
+    },
+    {
+      "envelope": {
+        "currentUserId": "golden-user",
+        "pagination": {
+          "page": 2,
+          "pageSize": 7,
+          "total": 7,
+          "totalPages": 1,
+        },
+        "users": [],
+      },
+      "total": 7,
+    },
+    {
+      "envelope": {
+        "currentUserId": "golden-user",
+        "pagination": {
+          "page": 2,
+          "pageSize": 7,
+          "total": 250,
+          "totalPages": 36,
+        },
+        "users": [
+          {
+            "id": "row-1",
+          },
+          {
+            "id": "row-2",
+          },
+          {
+            "id": "row-3",
+          },
+          {
+            "id": "row-4",
+          },
+          {
+            "id": "row-5",
+          },
+          {
+            "id": "row-6",
+          },
+          {
+            "id": "row-7",
+          },
+        ],
+      },
+      "total": 250,
+    },
+  ],
+}
+`;
+
+exports[`golden envelopes for the nine list routes > config-usuarios pagination resolution is frozen 1`] = `
+{
+  "file": "app/api/config/usuarios/route.ts",
+  "route": "config-usuarios",
+  "rows": [
+    {
+      "page": 1,
+      "pageSize": 20,
+      "query": "(no params)",
+      "unpaginated": true,
+    },
+    {
+      "page": 1,
+      "pageSize": 20,
+      "query": "?page=1",
+      "unpaginated": false,
+    },
+    {
+      "page": 1,
+      "pageSize": 1,
+      "query": "?pageSize=1",
+      "unpaginated": false,
+    },
+    {
+      "page": 2,
+      "pageSize": 10,
+      "query": "?page=2&pageSize=10",
+      "unpaginated": false,
+    },
+    {
+      "page": 1,
+      "pageSize": 1,
+      "query": "?page=0&pageSize=0",
+      "unpaginated": false,
+    },
+    {
+      "page": 1,
+      "pageSize": 1,
+      "query": "?page=-5&pageSize=-5",
+      "unpaginated": false,
+    },
+    {
+      "page": 1,
+      "pageSize": 20,
+      "query": "?page=abc&pageSize=abc",
+      "unpaginated": false,
+    },
+    {
+      "page": 2,
+      "pageSize": 10,
+      "query": "?page=2.9&pageSize=10.9",
+      "unpaginated": false,
+    },
+    {
+      "page": 99999,
+      "pageSize": 100,
+      "query": "?page=99999&pageSize=99999",
+      "unpaginated": false,
+    },
+  ],
+}
+`;
+
+exports[`golden envelopes for the nine list routes > lotes envelope shape is frozen 1`] = `
+{
+  "route": "lotes",
+  "rows": [
+    {
+      "envelope": {
+        "lots": [],
+        "pagination": {
+          "page": 2,
+          "pageSize": 7,
+          "total": 0,
+          "totalPages": 1,
+        },
+      },
+      "total": 0,
+    },
+    {
+      "envelope": {
+        "lots": [],
+        "pagination": {
+          "page": 2,
+          "pageSize": 7,
+          "total": 1,
+          "totalPages": 1,
+        },
+      },
+      "total": 1,
+    },
+    {
+      "envelope": {
+        "lots": [],
+        "pagination": {
+          "page": 2,
+          "pageSize": 7,
+          "total": 7,
+          "totalPages": 1,
+        },
+      },
+      "total": 7,
+    },
+    {
+      "envelope": {
+        "lots": [
+          {
+            "id": "row-1",
+          },
+          {
+            "id": "row-2",
+          },
+          {
+            "id": "row-3",
+          },
+          {
+            "id": "row-4",
+          },
+          {
+            "id": "row-5",
+          },
+          {
+            "id": "row-6",
+          },
+          {
+            "id": "row-7",
+          },
+        ],
+        "pagination": {
+          "page": 2,
+          "pageSize": 7,
+          "total": 250,
+          "totalPages": 36,
+        },
+      },
+      "total": 250,
+    },
+  ],
+}
+`;
+
+exports[`golden envelopes for the nine list routes > lotes pagination resolution is frozen 1`] = `
+{
+  "file": "app/api/lotes/route.ts",
+  "route": "lotes",
+  "rows": [
+    {
+      "page": 1,
+      "pageSize": 20,
+      "query": "(no params)",
+      "unpaginated": true,
+    },
+    {
+      "page": 1,
+      "pageSize": 20,
+      "query": "?page=1",
+      "unpaginated": false,
+    },
+    {
+      "page": 1,
+      "pageSize": 1,
+      "query": "?pageSize=1",
+      "unpaginated": false,
+    },
+    {
+      "page": 2,
+      "pageSize": 10,
+      "query": "?page=2&pageSize=10",
+      "unpaginated": false,
+    },
+    {
+      "page": 1,
+      "pageSize": 1,
+      "query": "?page=0&pageSize=0",
+      "unpaginated": false,
+    },
+    {
+      "page": 1,
+      "pageSize": 1,
+      "query": "?page=-5&pageSize=-5",
+      "unpaginated": false,
+    },
+    {
+      "page": 1,
+      "pageSize": 20,
+      "query": "?page=abc&pageSize=abc",
+      "unpaginated": false,
+    },
+    {
+      "page": 2,
+      "pageSize": 10,
+      "query": "?page=2.9&pageSize=10.9",
+      "unpaginated": false,
+    },
+    {
+      "page": 99999,
+      "pageSize": 100,
+      "query": "?page=99999&pageSize=99999",
+      "unpaginated": false,
+    },
+  ],
+}
+`;
+
+exports[`golden envelopes for the nine list routes > mensajeros envelope shape is frozen 1`] = `
+{
+  "route": "mensajeros",
+  "rows": [
+    {
+      "envelope": {
+        "messengers": [],
+        "pagination": {
+          "page": 2,
+          "pageSize": 7,
+          "total": 0,
+          "totalPages": 1,
+        },
+      },
+      "total": 0,
+    },
+    {
+      "envelope": {
+        "messengers": [],
+        "pagination": {
+          "page": 2,
+          "pageSize": 7,
+          "total": 1,
+          "totalPages": 1,
+        },
+      },
+      "total": 1,
+    },
+    {
+      "envelope": {
+        "messengers": [],
+        "pagination": {
+          "page": 2,
+          "pageSize": 7,
+          "total": 7,
+          "totalPages": 1,
+        },
+      },
+      "total": 7,
+    },
+    {
+      "envelope": {
+        "messengers": [
+          {
+            "id": "row-1",
+          },
+          {
+            "id": "row-2",
+          },
+          {
+            "id": "row-3",
+          },
+          {
+            "id": "row-4",
+          },
+          {
+            "id": "row-5",
+          },
+          {
+            "id": "row-6",
+          },
+          {
+            "id": "row-7",
+          },
+        ],
+        "pagination": {
+          "page": 2,
+          "pageSize": 7,
+          "total": 250,
+          "totalPages": 36,
+        },
+      },
+      "total": 250,
+    },
+  ],
+}
+`;
+
+exports[`golden envelopes for the nine list routes > mensajeros pagination resolution is frozen 1`] = `
+{
+  "file": "app/api/mensajeros/route.ts",
+  "route": "mensajeros",
+  "rows": [
+    {
+      "page": 1,
+      "pageSize": 25,
+      "query": "(no params)",
+      "unpaginated": true,
+    },
+    {
+      "page": 1,
+      "pageSize": 25,
+      "query": "?page=1",
+      "unpaginated": false,
+    },
+    {
+      "page": 1,
+      "pageSize": 1,
+      "query": "?pageSize=1",
+      "unpaginated": false,
+    },
+    {
+      "page": 2,
+      "pageSize": 10,
+      "query": "?page=2&pageSize=10",
+      "unpaginated": false,
+    },
+    {
+      "page": 1,
+      "pageSize": 1,
+      "query": "?page=0&pageSize=0",
+      "unpaginated": false,
+    },
+    {
+      "page": 1,
+      "pageSize": 1,
+      "query": "?page=-5&pageSize=-5",
+      "unpaginated": false,
+    },
+    {
+      "page": 1,
+      "pageSize": 25,
+      "query": "?page=abc&pageSize=abc",
+      "unpaginated": false,
+    },
+    {
+      "page": 2,
+      "pageSize": 10,
+      "query": "?page=2.9&pageSize=10.9",
+      "unpaginated": false,
+    },
+    {
+      "page": 99999,
+      "pageSize": 100,
+      "query": "?page=99999&pageSize=99999",
+      "unpaginated": false,
+    },
+  ],
+}
+`;
+
+exports[`golden envelopes for the nine list routes > operativo-contacto envelope shape is frozen 1`] = `
+{
+  "route": "operativo-contacto",
+  "rows": [
+    {
+      "envelope": {
+        "cards": [],
+        "pagination": {
+          "page": 2,
+          "pageSize": 7,
+          "total": 0,
+          "totalPages": 1,
+        },
+        "tab": "pendientes",
+      },
+      "total": 0,
+    },
+    {
+      "envelope": {
+        "cards": [],
+        "pagination": {
+          "page": 2,
+          "pageSize": 7,
+          "total": 1,
+          "totalPages": 1,
+        },
+        "tab": "pendientes",
+      },
+      "total": 1,
+    },
+    {
+      "envelope": {
+        "cards": [],
+        "pagination": {
+          "page": 2,
+          "pageSize": 7,
+          "total": 7,
+          "totalPages": 1,
+        },
+        "tab": "pendientes",
+      },
+      "total": 7,
+    },
+    {
+      "envelope": {
+        "cards": [
+          {
+            "id": "row-1",
+          },
+          {
+            "id": "row-2",
+          },
+          {
+            "id": "row-3",
+          },
+          {
+            "id": "row-4",
+          },
+          {
+            "id": "row-5",
+          },
+          {
+            "id": "row-6",
+          },
+          {
+            "id": "row-7",
+          },
+        ],
+        "pagination": {
+          "page": 2,
+          "pageSize": 7,
+          "total": 250,
+          "totalPages": 36,
+        },
+        "tab": "pendientes",
+      },
+      "total": 250,
+    },
+  ],
+}
+`;
+
+exports[`golden envelopes for the nine list routes > operativo-contacto pagination resolution is frozen 1`] = `
+{
+  "file": "app/api/operativo/contacto/route.ts",
+  "route": "operativo-contacto",
+  "rows": [
+    {
+      "page": 1,
+      "pageSize": 25,
+      "query": "(no params)",
+      "unpaginated": true,
+    },
+    {
+      "page": 1,
+      "pageSize": 25,
+      "query": "?page=1",
+      "unpaginated": false,
+    },
+    {
+      "page": 1,
+      "pageSize": 1,
+      "query": "?pageSize=1",
+      "unpaginated": false,
+    },
+    {
+      "page": 2,
+      "pageSize": 10,
+      "query": "?page=2&pageSize=10",
+      "unpaginated": false,
+    },
+    {
+      "page": 1,
+      "pageSize": 1,
+      "query": "?page=0&pageSize=0",
+      "unpaginated": false,
+    },
+    {
+      "page": 1,
+      "pageSize": 1,
+      "query": "?page=-5&pageSize=-5",
+      "unpaginated": false,
+    },
+    {
+      "page": 1,
+      "pageSize": 25,
+      "query": "?page=abc&pageSize=abc",
+      "unpaginated": false,
+    },
+    {
+      "page": 2,
+      "pageSize": 10,
+      "query": "?page=2.9&pageSize=10.9",
+      "unpaginated": false,
+    },
+    {
+      "page": 99999,
+      "pageSize": 100,
+      "query": "?page=99999&pageSize=99999",
+      "unpaginated": false,
+    },
+  ],
+}
+`;
+
+exports[`golden envelopes for the nine list routes > redacciones envelope shape is frozen 1`] = `
+{
+  "route": "redacciones",
+  "rows": [
+    {
+      "envelope": {
+        "pagination": {
+          "page": 2,
+          "pageSize": 7,
+          "total": 0,
+          "totalPages": 1,
+        },
+        "redacciones": [],
+      },
+      "total": 0,
+    },
+    {
+      "envelope": {
+        "pagination": {
+          "page": 2,
+          "pageSize": 7,
+          "total": 1,
+          "totalPages": 1,
+        },
+        "redacciones": [],
+      },
+      "total": 1,
+    },
+    {
+      "envelope": {
+        "pagination": {
+          "page": 2,
+          "pageSize": 7,
+          "total": 7,
+          "totalPages": 1,
+        },
+        "redacciones": [],
+      },
+      "total": 7,
+    },
+    {
+      "envelope": {
+        "pagination": {
+          "page": 2,
+          "pageSize": 7,
+          "total": 250,
+          "totalPages": 36,
+        },
+        "redacciones": [
+          {
+            "id": "row-1",
+          },
+          {
+            "id": "row-2",
+          },
+          {
+            "id": "row-3",
+          },
+          {
+            "id": "row-4",
+          },
+          {
+            "id": "row-5",
+          },
+          {
+            "id": "row-6",
+          },
+          {
+            "id": "row-7",
+          },
+        ],
+      },
+      "total": 250,
+    },
+  ],
+}
+`;
+
+exports[`golden envelopes for the nine list routes > redacciones pagination resolution is frozen 1`] = `
+{
+  "file": "app/api/redacciones/route.ts",
+  "route": "redacciones",
+  "rows": [
+    {
+      "page": 1,
+      "pageSize": 20,
+      "query": "(no params)",
+      "unpaginated": true,
+    },
+    {
+      "page": 1,
+      "pageSize": 20,
+      "query": "?page=1",
+      "unpaginated": false,
+    },
+    {
+      "page": 1,
+      "pageSize": 1,
+      "query": "?pageSize=1",
+      "unpaginated": false,
+    },
+    {
+      "page": 2,
+      "pageSize": 10,
+      "query": "?page=2&pageSize=10",
+      "unpaginated": false,
+    },
+    {
+      "page": 1,
+      "pageSize": 1,
+      "query": "?page=0&pageSize=0",
+      "unpaginated": false,
+    },
+    {
+      "page": 1,
+      "pageSize": 1,
+      "query": "?page=-5&pageSize=-5",
+      "unpaginated": false,
+    },
+    {
+      "page": 1,
+      "pageSize": 20,
+      "query": "?page=abc&pageSize=abc",
+      "unpaginated": false,
+    },
+    {
+      "page": 2,
+      "pageSize": 10,
+      "query": "?page=2.9&pageSize=10.9",
+      "unpaginated": false,
+    },
+    {
+      "page": 99999,
+      "pageSize": 100,
+      "query": "?page=99999&pageSize=99999",
+      "unpaginated": false,
+    },
+  ],
+}
+`;
+
+exports[`golden envelopes for the nine list routes > rutas envelope shape is frozen 1`] = `
+{
+  "route": "rutas",
+  "rows": [
+    {
+      "envelope": {
+        "pagination": {
+          "page": 2,
+          "pageSize": 7,
+          "total": 0,
+          "totalPages": 1,
+        },
+        "routes": [],
+      },
+      "total": 0,
+    },
+    {
+      "envelope": {
+        "pagination": {
+          "page": 2,
+          "pageSize": 7,
+          "total": 1,
+          "totalPages": 1,
+        },
+        "routes": [],
+      },
+      "total": 1,
+    },
+    {
+      "envelope": {
+        "pagination": {
+          "page": 2,
+          "pageSize": 7,
+          "total": 7,
+          "totalPages": 1,
+        },
+        "routes": [],
+      },
+      "total": 7,
+    },
+    {
+      "envelope": {
+        "pagination": {
+          "page": 2,
+          "pageSize": 7,
+          "total": 250,
+          "totalPages": 36,
+        },
+        "routes": [
+          {
+            "id": "row-1",
+          },
+          {
+            "id": "row-2",
+          },
+          {
+            "id": "row-3",
+          },
+          {
+            "id": "row-4",
+          },
+          {
+            "id": "row-5",
+          },
+          {
+            "id": "row-6",
+          },
+          {
+            "id": "row-7",
+          },
+        ],
+      },
+      "total": 250,
+    },
+  ],
+}
+`;
+
+exports[`golden envelopes for the nine list routes > rutas pagination resolution is frozen 1`] = `
+{
+  "file": "app/api/rutas/route.ts",
+  "route": "rutas",
+  "rows": [
+    {
+      "page": 1,
+      "pageSize": 20,
+      "query": "(no params)",
+      "unpaginated": true,
+    },
+    {
+      "page": 1,
+      "pageSize": 20,
+      "query": "?page=1",
+      "unpaginated": false,
+    },
+    {
+      "page": 1,
+      "pageSize": 1,
+      "query": "?pageSize=1",
+      "unpaginated": false,
+    },
+    {
+      "page": 2,
+      "pageSize": 10,
+      "query": "?page=2&pageSize=10",
+      "unpaginated": false,
+    },
+    {
+      "page": 1,
+      "pageSize": 1,
+      "query": "?page=0&pageSize=0",
+      "unpaginated": false,
+    },
+    {
+      "page": 1,
+      "pageSize": 1,
+      "query": "?page=-5&pageSize=-5",
+      "unpaginated": false,
+    },
+    {
+      "page": 1,
+      "pageSize": 20,
+      "query": "?page=abc&pageSize=abc",
+      "unpaginated": false,
+    },
+    {
+      "page": 2,
+      "pageSize": 10,
+      "query": "?page=2.9&pageSize=10.9",
+      "unpaginated": false,
+    },
+    {
+      "page": 99999,
+      "pageSize": 100,
+      "query": "?page=99999&pageSize=99999",
+      "unpaginated": false,
+    },
+  ],
+}
+`;
+
+exports[`golden envelopes for the nine list routes > sla-vencidas envelope shape is frozen 1`] = `
+{
+  "route": "sla-vencidas",
+  "rows": [
+    {
+      "envelope": {
+        "filters": null,
+        "messengers": null,
+        "pagination": {
+          "page": 2,
+          "pageSize": 7,
+          "total": 0,
+          "totalPages": 1,
+        },
+        "rows": [],
+        "total": null,
+      },
+      "total": 0,
+    },
+    {
+      "envelope": {
+        "filters": null,
+        "messengers": null,
+        "pagination": {
+          "page": 2,
+          "pageSize": 7,
+          "total": 1,
+          "totalPages": 1,
+        },
+        "rows": [],
+        "total": null,
+      },
+      "total": 1,
+    },
+    {
+      "envelope": {
+        "filters": null,
+        "messengers": null,
+        "pagination": {
+          "page": 2,
+          "pageSize": 7,
+          "total": 7,
+          "totalPages": 1,
+        },
+        "rows": [],
+        "total": null,
+      },
+      "total": 7,
+    },
+    {
+      "envelope": {
+        "filters": null,
+        "messengers": null,
+        "pagination": {
+          "page": 2,
+          "pageSize": 7,
+          "total": 250,
+          "totalPages": 36,
+        },
+        "rows": [
+          {
+            "id": "row-1",
+          },
+          {
+            "id": "row-2",
+          },
+          {
+            "id": "row-3",
+          },
+          {
+            "id": "row-4",
+          },
+          {
+            "id": "row-5",
+          },
+          {
+            "id": "row-6",
+          },
+          {
+            "id": "row-7",
+          },
+        ],
+        "total": null,
+      },
+      "total": 250,
+    },
+  ],
+}
+`;
+
+exports[`golden envelopes for the nine list routes > sla-vencidas pagination resolution is frozen 1`] = `
+{
+  "file": "app/api/sla-vencidas/route.ts",
+  "route": "sla-vencidas",
+  "rows": [
+    {
+      "page": 1,
+      "pageSize": 50,
+      "query": "(no params)",
+      "unpaginated": true,
+    },
+    {
+      "page": 1,
+      "pageSize": 50,
+      "query": "?page=1",
+      "unpaginated": false,
+    },
+    {
+      "page": 1,
+      "pageSize": 1,
+      "query": "?pageSize=1",
+      "unpaginated": false,
+    },
+    {
+      "page": 2,
+      "pageSize": 10,
+      "query": "?page=2&pageSize=10",
+      "unpaginated": false,
+    },
+    {
+      "page": 1,
+      "pageSize": 1,
+      "query": "?page=0&pageSize=0",
+      "unpaginated": false,
+    },
+    {
+      "page": 1,
+      "pageSize": 1,
+      "query": "?page=-5&pageSize=-5",
+      "unpaginated": false,
+    },
+    {
+      "page": 1,
+      "pageSize": 50,
+      "query": "?page=abc&pageSize=abc",
+      "unpaginated": false,
+    },
+    {
+      "page": 2,
+      "pageSize": 10,
+      "query": "?page=2.9&pageSize=10.9",
+      "unpaginated": false,
+    },
+    {
+      "page": 99999,
+      "pageSize": 500,
+      "query": "?page=99999&pageSize=99999",
+      "unpaginated": false,
+    },
+  ],
+}
+`;
+
+exports[`golden envelopes for the nine list routes > tarjetas envelope shape is frozen 1`] = `
+{
+  "route": "tarjetas",
+  "rows": [
+    {
+      "envelope": {
+        "cards": [],
+        "pagination": {
+          "page": 2,
+          "pageSize": 7,
+          "total": 0,
+          "totalPages": 1,
+        },
+      },
+      "total": 0,
+    },
+    {
+      "envelope": {
+        "cards": [],
+        "pagination": {
+          "page": 2,
+          "pageSize": 7,
+          "total": 1,
+          "totalPages": 1,
+        },
+      },
+      "total": 1,
+    },
+    {
+      "envelope": {
+        "cards": [],
+        "pagination": {
+          "page": 2,
+          "pageSize": 7,
+          "total": 7,
+          "totalPages": 1,
+        },
+      },
+      "total": 7,
+    },
+    {
+      "envelope": {
+        "cards": [
+          {
+            "id": "row-1",
+          },
+          {
+            "id": "row-2",
+          },
+          {
+            "id": "row-3",
+          },
+          {
+            "id": "row-4",
+          },
+          {
+            "id": "row-5",
+          },
+          {
+            "id": "row-6",
+          },
+          {
+            "id": "row-7",
+          },
+        ],
+        "pagination": {
+          "page": 2,
+          "pageSize": 7,
+          "total": 250,
+          "totalPages": 36,
+        },
+      },
+      "total": 250,
+    },
+  ],
+}
+`;
+
+exports[`golden envelopes for the nine list routes > tarjetas pagination resolution is frozen 1`] = `
+{
+  "file": "app/api/tarjetas/route.ts",
+  "route": "tarjetas",
+  "rows": [
+    {
+      "page": 1,
+      "pageSize": 25,
+      "query": "(no params)",
+      "unpaginated": true,
+    },
+    {
+      "page": 1,
+      "pageSize": 25,
+      "query": "?page=1",
+      "unpaginated": false,
+    },
+    {
+      "page": 1,
+      "pageSize": 1,
+      "query": "?pageSize=1",
+      "unpaginated": false,
+    },
+    {
+      "page": 2,
+      "pageSize": 10,
+      "query": "?page=2&pageSize=10",
+      "unpaginated": false,
+    },
+    {
+      "page": 1,
+      "pageSize": 1,
+      "query": "?page=0&pageSize=0",
+      "unpaginated": false,
+    },
+    {
+      "page": 1,
+      "pageSize": 1,
+      "query": "?page=-5&pageSize=-5",
+      "unpaginated": false,
+    },
+    {
+      "page": 1,
+      "pageSize": 25,
+      "query": "?page=abc&pageSize=abc",
+      "unpaginated": false,
+    },
+    {
+      "page": 2,
+      "pageSize": 10,
+      "query": "?page=2.9&pageSize=10.9",
+      "unpaginated": false,
+    },
+    {
+      "page": 99999,
+      "pageSize": 200,
+      "query": "?page=99999&pageSize=99999",
+      "unpaginated": false,
+    },
+  ],
+}
+`;

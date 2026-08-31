@@ -34,8 +34,24 @@ export async function GET(request: NextRequest) {
   const auth = await requireApiSession();
   if ("error" in auth) return auth.error;
 
+  const moduleParam = request.nextUrl.searchParams.get("module");
+  const listAll =
+    request.nextUrl.searchParams.get("all") === "true" ||
+    request.nextUrl.searchParams.get("all") === "1";
+
+  if (listAll && moduleParam) {
+    const drafts = await prisma.workflowDraft.findMany({
+      where: {
+        userId: auth.session.user.id,
+        module: moduleParam,
+      },
+      orderBy: { updatedAt: "desc" },
+    });
+    return NextResponse.json({ drafts: drafts.map(draftResponse) });
+  }
+
   const parsed = keySchema.safeParse({
-    module: request.nextUrl.searchParams.get("module"),
+    module: moduleParam,
     contextKey: request.nextUrl.searchParams.get("contextKey") ?? "default",
   });
   if (!parsed.success) {

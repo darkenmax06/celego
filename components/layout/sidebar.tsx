@@ -21,6 +21,7 @@ import {
   Upload,
   Smartphone,
   ShieldCheck,
+  FileWarning,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { type ModuleName } from "@/lib/constants";
@@ -42,6 +43,7 @@ const NAV_ITEMS: Array<{
   { module: "flota", label: "Flota", href: "/flota", icon: Smartphone },
   { module: "piloto_movil", label: "Piloto movil", href: "/piloto-movil", icon: ShieldCheck },
   { module: "operativo", label: "Operativo", href: "/operativo", icon: Phone },
+  { module: "contratos_pendientes", label: "Contratos pendientes", href: "/contratos-pendientes", icon: FileWarning },
   { module: "redaccion", label: "Redaccion", href: "/redaccion", icon: FileText },
   { module: "mensajeros", label: "Mensajeros", href: "/mensajeros", icon: Bike },
   { module: "facturacion", label: "Facturacion", href: "/facturacion", icon: HandCoins },

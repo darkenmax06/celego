@@ -1,0 +1,7 @@
+interface:
+  display_name: "Celego Data Views"
+  short_description: "Choose Celego web data views safely"
+  default_prompt: "Use $celego-data-views to diagnose the right data view for this Celego web workflow."
+
+policy:
+  allow_implicit_invocation: true

@@ -115,6 +115,10 @@ export async function GET(request: NextRequest) {
 
       return {
         ...item,
+        card: {
+          ...item.card,
+          origin: item.card.dispatchOrigin,
+        },
         proofs,
       };
     }),

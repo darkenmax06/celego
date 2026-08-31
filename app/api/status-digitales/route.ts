@@ -4,6 +4,7 @@ import { z } from "zod";
 import { requireApiSession } from "@/lib/api-session";
 import { prisma } from "@/lib/prisma";
 import { applyCardTransition } from "@/lib/card-transition";
+import { peelFileTags } from "@/lib/contract-image";
 import {
   compareOperationalCardRecency,
   resolveOperationalCardLookup,
@@ -14,7 +15,19 @@ const itemSchema = z.object({
   fileName: z.string().min(1),
   identifier: z.string().min(1),
   isRemote: z.boolean(),
+  overrideCardId: z.string().min(1).optional(),
 });
+
+// Tarjetas en estos estados no cuentan como candidatas para disparar una
+// ambiguedad por nombre: ya estan cerradas para este flujo (retornada) o ya
+// fueron resueltas (entregada/entrega digital), asi que no deben forzar al
+// operador a elegir entre ellas y la tarjeta realmente pendiente.
+const NAME_AMBIGUITY_EXCLUDED_STATUSES = new Set<CardStatus>([
+  CardStatus.RETORNADA,
+  CardStatus.DEVUELTA_TIENDA,
+  CardStatus.ENTREGADA,
+  CardStatus.ENTREGA_DIGITAL,
+]);
 
 const schema = z.object({
   items: z.array(itemSchema).min(1).max(5000),
@@ -22,29 +35,6 @@ const schema = z.object({
 
 function stripExtension(value: string) {
   return value.replace(/\.[^/.]+$/, "").trim();
-}
-
-function stripRemoteTag(value: string) {
-  return value.replace(/\(\s*zr\s*\)/gi, "").trim();
-}
-
-const ADDITIONAL_TAG_REGEX = /\(\s*adicional(?:\s+(\d+))?\s*\)\s*$/i;
-
-function parseAdditionalIndex(value: string) {
-  const match = value.match(ADDITIONAL_TAG_REGEX);
-  if (!match) return 0;
-  if (!match[1]) return 1;
-  const parsed = Number(match[1]);
-  if (!Number.isFinite(parsed)) return 1;
-  return Math.max(1, Math.trunc(parsed));
-}
-
-function stripAdditionalTag(value: string) {
-  return value.replace(ADDITIONAL_TAG_REGEX, "").trim();
-}
-
-function stripCopySuffix(value: string) {
-  return value.replace(/\s*\(\d+\)\s*$/, "").trim();
 }
 
 function normalizeLookupValue(value: string) {
@@ -61,12 +51,12 @@ function normalizeCedula(raw: string) {
   return digits || raw.trim().toUpperCase();
 }
 
+// SDD contrato-tarjetas-pistoleo (design D5): delegates to the shared
+// `peelFileTags` trailing-tag peeler so `(C)` (contract image marker) is
+// stripped the same way `(zr)` / `(adicional N)` / `(N)` already are, and the
+// resulting identifier still resolves to the same card as the delivery image.
 function parseIdentifierCandidate(raw: string) {
-  const noExt = stripExtension(raw);
-  const noRemote = stripRemoteTag(noExt);
-  const noAdditional = stripAdditionalTag(noRemote);
-  const noCopy = stripCopySuffix(noAdditional);
-  return noCopy.replace(/\s+/g, " ").trim();
+  return peelFileTags(raw).base.replace(/\s+/g, " ").trim();
 }
 
 function dateKeyUtc(date: Date | null | undefined) {
@@ -90,7 +80,7 @@ function toDateKey(year: number, month: number, day: number) {
 }
 
 function parseDispatchDateKey(raw: string) {
-  const normalized = stripCopySuffix(stripAdditionalTag(stripRemoteTag(stripExtension(raw))));
+  const normalized = peelFileTags(raw).base;
 
   const ymd = normalized.match(/\b(20\d{2})[\/._-](0?[1-9]|1[0-2])[\/._-](0?[1-9]|[12]\d|3[01])\b/);
   if (ymd) {
@@ -200,18 +190,23 @@ export async function POST(request: Request) {
 
   const cleanItems = parsed.data.items
     .map((item) => {
-      const fileAdditional = parseAdditionalIndex(stripRemoteTag(stripExtension(item.fileName)));
-      const identifierAdditional = parseAdditionalIndex(stripRemoteTag(item.identifier));
+      const fileTags = peelFileTags(item.fileName);
+      const identifierTags = peelFileTags(item.identifier);
       return {
         fileName: item.fileName.trim(),
         identifier: parseIdentifierCandidate(item.identifier),
         isRemote: item.isRemote,
-        additionalIndex: Math.max(fileAdditional, identifierAdditional),
+        overrideCardId: item.overrideCardId,
+        additionalIndex: Math.max(fileTags.additionalIndex, identifierTags.additionalIndex),
+        // SDD contrato-tarjetas-pistoleo: `(C)` on either the fileName or the
+        // identifier marks this image as the contract image rather than the
+        // delivery image for the same card.
+        isContract: fileTags.isContract || identifierTags.isContract,
         dispatchDateKey: detectDispatchDateKey(item.fileName, item.identifier),
         lookupCandidates: buildLookupCandidates(item.identifier, item.fileName),
       };
     })
-    .filter((item) => item.fileName && item.lookupCandidates.length);
+    .filter((item) => item.fileName && (item.overrideCardId || item.lookupCandidates.length));
 
   if (!cleanItems.length) {
     return NextResponse.json({ error: "No hay nombres de imagen validos para procesar" }, { status: 400 });
@@ -236,10 +231,14 @@ export async function POST(request: Request) {
       digitalDeliveryCycle: true,
       createdAt: true,
       dispatchDate: true,
+      hasContract: true,
+      contractImageAt: true,
+      contractImageFile: true,
       customer: {
         select: {
           nombre: true,
           cedula: true,
+          provincia: true,
         },
       },
     },
@@ -277,10 +276,14 @@ export async function POST(request: Request) {
         digitalDeliveryCycle: true,
         createdAt: true,
         dispatchDate: true,
+        hasContract: true,
+        contractImageAt: true,
+        contractImageFile: true,
         customer: {
           select: {
             nombre: true,
             cedula: true,
+            provincia: true,
           },
         },
       },
@@ -288,8 +291,39 @@ export async function POST(request: Request) {
     cardsByNameMatches.push(...found);
   }
 
+  const overrideCardIds = Array.from(
+    new Set(cleanItems.map((item) => item.overrideCardId).filter((value): value is string => Boolean(value))),
+  );
+  const cardsByOverride = overrideCardIds.length
+    ? await prisma.card.findMany({
+        where: { id: { in: overrideCardIds } },
+        select: {
+          id: true,
+          tc: true,
+          externalReference: true,
+          status: true,
+          isRemote: true,
+          returnReason: true,
+          digitalDeliveryCycle: true,
+          createdAt: true,
+          dispatchDate: true,
+          hasContract: true,
+          contractImageAt: true,
+          contractImageFile: true,
+          customer: {
+            select: {
+              nombre: true,
+              cedula: true,
+              provincia: true,
+            },
+          },
+        },
+      })
+    : [];
+
   type MatchMode =
     | "DIRECT"
+    | "MANUAL"
     | "NONE"
     | "NOMBRE_PRINCIPAL"
     | "NOMBRE_PRINCIPAL_FECHA"
@@ -303,7 +337,7 @@ export async function POST(request: Request) {
   };
 
   const cardById = new Map<string, CardRecord>();
-  for (const card of [...cardsByTcOrRef, ...cardsByNameMatches]) {
+  for (const card of [...cardsByTcOrRef, ...cardsByNameMatches, ...cardsByOverride]) {
     if (!cardById.has(card.id)) {
       cardById.set(card.id, card);
     }
@@ -414,9 +448,10 @@ export async function POST(request: Request) {
       if (!nameKey || seen.has(nameKey)) continue;
       seen.add(nameKey);
       const bucket = cardByCustomerName.get(nameKey);
-      if (bucket?.length) {
-        return bucket;
-      }
+      if (!bucket?.length) continue;
+
+      const openBucket = bucket.filter((card) => !NAME_AMBIGUITY_EXCLUDED_STATUSES.has(card.status));
+      if (openBucket.length) return openBucket;
     }
     return null;
   }
@@ -470,6 +505,13 @@ export async function POST(request: Request) {
   }
 
   function findCardsForItem(item: (typeof cleanItems)[number]): ResolvedSelection {
+    if (item.overrideCardId) {
+      const card = cardById.get(item.overrideCardId);
+      return card
+        ? toResolvedSelection({ kind: "RESUELTA", card }, "MANUAL")
+        : noCardSelection();
+    }
+
     const directMatch = findDirectCardForItem(item);
     if (directMatch) return directMatch;
 
@@ -574,21 +616,28 @@ export async function POST(request: Request) {
     isRemote: boolean;
     fileNames: string[];
     identifiers: string[];
+    // SDD contrato-tarjetas-pistoleo (design D6): a card's batch entry can
+    // carry both a delivery image and a `(C)` contract image; both strip to
+    // the same identifier and are grouped here without new pairing logic.
+    kinds: { delivery: string[]; contract: string[] };
   }>();
 
   for (const item of resolvedRows) {
     if (!item.card) continue;
+    const bucket = item.isContract ? "contract" : "delivery";
     const existing = groupedByCard.get(item.card.id);
     if (existing) {
       existing.isRemote = existing.isRemote || item.isRemote;
       existing.fileNames.push(item.fileName);
       existing.identifiers.push(item.identifier || item.lookupCandidates[0] || item.fileName);
+      existing.kinds[bucket].push(item.fileName);
     } else {
       groupedByCard.set(item.card.id, {
         card: item.card,
         isRemote: item.isRemote,
         fileNames: [item.fileName],
         identifiers: [item.identifier || item.lookupCandidates[0] || item.fileName],
+        kinds: { delivery: bucket === "delivery" ? [item.fileName] : [], contract: bucket === "contract" ? [item.fileName] : [] },
       });
     }
   }
@@ -597,9 +646,41 @@ export async function POST(request: Request) {
 
   const updatePlan = matchedCards.map((entry) => {
     const card = entry.card;
-    const nextStatus = card.status === CardStatus.ENTREGADA ? CardStatus.ENTREGADA : CardStatus.ENTREGA_DIGITAL;
+    const hasDeliveryImage = entry.kinds.delivery.length > 0;
+    const hasContractImage = entry.kinds.contract.length > 0;
+    const contractAlreadySatisfied = Boolean(card.contractImageAt);
+
+    // SDD contrato-tarjetas-pistoleo (spec: contract-image-intake,
+    // contract-exception-states). `hasContract=false` cards ALWAYS take the
+    // original single-branch path below, byte-identical to pre-feature
+    // behavior — contract images for those cards are treated exactly like
+    // any other delivery image.
+    let nextStatus: CardStatus = card.status;
+    if (card.status === CardStatus.ENTREGADA) {
+      nextStatus = CardStatus.ENTREGADA;
+    } else if (!card.hasContract) {
+      nextStatus = CardStatus.ENTREGA_DIGITAL;
+    } else if (hasDeliveryImage) {
+      nextStatus =
+        hasContractImage || contractAlreadySatisfied
+          ? CardStatus.ENTREGA_DIGITAL
+          : CardStatus.ENTREGA_DIGITAL_SIN_CONTRATO;
+    } else if (hasContractImage) {
+      // Contract-only upload: only resolves an already-pending exception.
+      nextStatus =
+        card.status === CardStatus.ENTREGA_DIGITAL_SIN_CONTRATO
+          ? CardStatus.ENTREGA_DIGITAL
+          : card.status;
+    }
+
     const nextRemote = entry.isRemote ? true : card.isRemote;
-    const shouldUpdate = nextStatus !== card.status || nextRemote !== card.isRemote;
+    const setsContractImage = card.hasContract && hasContractImage && !contractAlreadySatisfied;
+    const nextContractImageAt = setsContractImage ? new Date() : (card.contractImageAt ?? null);
+    const nextContractImageFile = setsContractImage
+      ? (entry.kinds.contract[entry.kinds.contract.length - 1] ?? null)
+      : (card.contractImageFile ?? null);
+    const shouldUpdate = nextStatus !== card.status || nextRemote !== card.isRemote || setsContractImage;
+
     return {
       identifier: entry.identifiers[0] ?? card.tc,
       card,
@@ -608,6 +689,9 @@ export async function POST(request: Request) {
       shouldUpdate,
       fileNames: entry.fileNames,
       hasRemoteTag: entry.isRemote,
+      setsContractImage,
+      nextContractImageAt,
+      nextContractImageFile,
     };
   }).filter(Boolean) as Array<{
     identifier: string;
@@ -617,6 +701,9 @@ export async function POST(request: Request) {
     shouldUpdate: boolean;
     fileNames: string[];
     hasRemoteTag: boolean;
+    setsContractImage: boolean;
+    nextContractImageAt: Date | null;
+    nextContractImageFile: string | null;
   }>;
 
   type UpdateOutcome =
@@ -661,6 +748,7 @@ export async function POST(request: Request) {
             status: plan.card.status,
             isRemote: plan.card.isRemote,
             digitalDeliveryCycle: plan.card.digitalDeliveryCycle,
+            contractImageAt: plan.card.contractImageAt,
           },
           data: {
             updatedAt: new Date(),
@@ -714,6 +802,9 @@ export async function POST(request: Request) {
             ? "marcada como zona remota"
             : "zona remota sin cambio",
         ];
+        if (plan.setsContractImage) {
+          noteParts.push("imagen de contrato registrada");
+        }
 
         const updated = await applyCardTransition({
           tx,
@@ -723,6 +814,9 @@ export async function POST(request: Request) {
           note: noteParts.join(" | "),
           data: {
             isRemote: plan.nextRemote,
+            ...(plan.setsContractImage
+              ? { contractImageAt: plan.nextContractImageAt, contractImageFile: plan.nextContractImageFile }
+              : {}),
           },
         });
 
@@ -830,6 +924,11 @@ export async function POST(request: Request) {
       action = action === "SIN_CAMBIOS" ? "NOMBRE_PRINCIPAL_FECHA" : `${action} + NOMBRE_PRINCIPAL_FECHA`;
     } else if (item.matchMode === "NOMBRE_PRINCIPAL") {
       action = action === "SIN_CAMBIOS" ? "NOMBRE_PRINCIPAL" : `${action} + NOMBRE_PRINCIPAL`;
+    } else if (item.matchMode === "MANUAL") {
+      action = action === "SIN_CAMBIOS" ? "SELECCION_MANUAL" : `${action} + SELECCION_MANUAL`;
+    }
+    if (statusAfter === CardStatus.ENTREGA_DIGITAL_SIN_CONTRATO) {
+      action = action === "SIN_CAMBIOS" ? "SIN_CONTRATO_PENDIENTE" : `${action} + SIN_CONTRATO_PENDIENTE`;
     }
 
     return {
@@ -842,6 +941,8 @@ export async function POST(request: Request) {
       remoteBefore,
       remoteAfter,
       action,
+      customer: card.customer,
+      provincia: card.customer.provincia,
     };
   });
 
@@ -868,6 +969,15 @@ export async function POST(request: Request) {
     (outcome) => outcome.remoteAfter && !outcome.remoteBefore,
   ).length;
   const unchanged = completedOutcomes.filter((outcome) => outcome.kind === "SIN_CAMBIOS").length;
+  // SDD contrato-tarjetas-pistoleo (spec: contract-image-intake). Cards
+  // diverted to ENTREGA_DIGITAL_SIN_CONTRATO because their batch had a
+  // delivery image but no matching `(C)` contract image.
+  const contractWarnings = completedOutcomes.filter(
+    (outcome) => outcome.statusAfter === CardStatus.ENTREGA_DIGITAL_SIN_CONTRATO,
+  ).length;
+  const contractWarningCards = rows
+    .filter((row) => row.action.includes("SIN_CONTRATO_PENDIENTE"))
+    .map((row) => row.identifier);
 
   await prisma.auditLog.create({
     data: {
@@ -886,6 +996,7 @@ export async function POST(request: Request) {
         updatedToDigital,
         keptDelivered,
         markedRemote,
+        contractWarnings,
       } as Prisma.InputJsonValue,
     },
   });
@@ -903,7 +1014,9 @@ export async function POST(request: Request) {
       keptDelivered,
       markedRemote,
       unchanged,
+      contractWarnings,
     },
+    contractWarningCards,
     rows,
   });
 }

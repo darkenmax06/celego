@@ -9,6 +9,7 @@ export const operationalCardSelect = Prisma.validator<Prisma.CardSelect>()({
   id: true,
   tc: true,
   externalReference: true,
+  dispatchOrigin: true,
   status: true,
   dispatchDate: true,
   createdAt: true,

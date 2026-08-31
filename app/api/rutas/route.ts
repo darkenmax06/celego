@@ -1,13 +1,21 @@
 import { NextRequest, NextResponse } from "next/server";
-import { CardProductType, CardStatus, Prisma, RouteStatus } from "@prisma/client";
+import { CardStatus, RouteStatus } from "@prisma/client";
 import { z } from "zod";
 import { requireApiSession } from "@/lib/api-session";
+import { buildListEnvelope, compile } from "@/lib/list-query";
+import { rutasListQuery } from "@/lib/list-query/descriptors/rutas";
 import {
   findOperationalCardCandidates,
   resolveOperationalIdentifier,
 } from "@/lib/operational-card-service";
 import { prisma } from "@/lib/prisma";
-import { clearUrgencyOnCardClosure } from "@/lib/urgent-alerts";
+import { RETURN_REASON_REQUIRED, normalizeItemResult } from "@/lib/item-outcome";
+import {
+  applyItemOutcome,
+  CARD_CLOSED_REQUIRES_CONFIRMATION,
+  ITEM_NOT_FOUND,
+} from "@/lib/item-outcome-service";
+import { emitTransitionObservations, type TransitionObservation } from "@/lib/card-transition-observer";
 
 const createSchema = z.object({
   fecha: z.string(),
@@ -16,6 +24,10 @@ const createSchema = z.object({
   // Los cardIds se reciben solamente tras la previsualizacion. Esto evita que
   // una cedula/solicitud ambigua cree una ruta con el despacho equivocado.
   cardIds: z.array(z.string().cuid()).max(500).optional(),
+  // SDD contrato-tarjetas-pistoleo (task 3.1): subset of `identifiers` the
+  // analyst marked as requiring a signed contract. Sets `Card.hasContract`
+  // on assignment; independent of the existing `contractType` string field.
+  contractIdentifiers: z.array(z.string().min(1)).optional().default([]),
   notas: z.string().optional(),
 }).refine((value) => value.identifiers.length > 0 || (value.cardIds?.length ?? 0) > 0, {
   message: "Debes indicar identificadores o tarjetas seleccionadas",
@@ -40,6 +52,9 @@ const patchSchema = z.discriminatedUnion("action", [
     itemId: z.string().cuid(),
     result: routeResultSchema,
     comentario: z.string().optional(),
+    // SDD contrato-tarjetas-pistoleo (task 3.2): explicit re-submit flag
+    // after the analyst confirms the SIN_CONTRATO_REQUIERE_CONFIRMACION 409.
+    confirmMissingContract: z.boolean().optional(),
   }),
   z.object({
     action: z.literal("SCAN_ITEM"),
@@ -49,24 +64,14 @@ const patchSchema = z.discriminatedUnion("action", [
     confirmClosed: z.boolean().optional(),
     result: routeResultSchema.optional(),
     comentario: z.string().optional(),
+    confirmMissingContract: z.boolean().optional(),
   }),
 ]);
 
-function asRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {};
-}
-
-function parsePagination(request: NextRequest) {
-  const pageRaw = Number(request.nextUrl.searchParams.get("page") ?? "1");
-  const pageSizeRaw = Number(request.nextUrl.searchParams.get("pageSize") ?? "20");
-  const page = Number.isFinite(pageRaw) ? Math.max(1, Math.trunc(pageRaw)) : 1;
-  const pageSize = Number.isFinite(pageSizeRaw) ? Math.min(100, Math.max(1, Math.trunc(pageSizeRaw))) : 20;
-  return { page, pageSize };
-}
-
-type RouteLifecycleResult = "EN_RUTA" | "ACUSE_RECIBIDO" | "DEVUELTA_TIENDA";
+// SDD contrato-tarjetas-pistoleo: applies ONLY to the delivered outcome
+// (SCAN_ITEM/UPDATE_ITEM_RESULT normalizing to ACUSE_RECIBIDO), never to
+// retornada/devuelta-a-tienda, regardless of `hasContract`.
+const SIN_CONTRATO_REQUIERE_CONFIRMACION = "SIN_CONTRATO_REQUIERE_CONFIRMACION";
 
 const TERMINAL_CARD_STATUSES: CardStatus[] = [
   CardStatus.ENTREGADA,
@@ -78,169 +83,37 @@ const TERMINAL_CARD_STATUSES: CardStatus[] = [
 
 const CLOSED_CARD_STATUSES = [CardStatus.RETORNADA, CardStatus.DEVUELTA_TIENDA] as const;
 const CARD_ASSIGNMENT_CLOSED = "CARD_ASSIGNMENT_CLOSED";
-const CARD_CLOSED_REQUIRES_CONFIRMATION = "CARD_CLOSED_REQUIRES_CONFIRMATION";
 
 function isClosedCardStatus(status: CardStatus | string) {
   return CLOSED_CARD_STATUSES.includes(status as (typeof CLOSED_CARD_STATUSES)[number]);
 }
 
-function normalizeRouteResult(value: z.infer<typeof routeResultSchema>): RouteLifecycleResult {
-  if (value === "ENTREGADA" || value === "ACUSE_RECIBIDO") return "ACUSE_RECIBIDO";
-  if (value === "RETORNADA" || value === "DEVUELTA_TIENDA") return "DEVUELTA_TIENDA";
-  return "EN_RUTA";
-}
-
-async function recalculateRouteStatus(tx: Prisma.TransactionClient, routeId: string) {
-  const items = await tx.routeItem.findMany({
-    where: { routeId },
-    select: { checkedAt: true },
-  });
-  if (!items.length) {
-    return RouteStatus.PENDIENTE;
-  }
-
-  const allChecked = items.every((item) => Boolean(item.checkedAt));
-  const anyChecked = items.some((item) => Boolean(item.checkedAt));
-
-  const nextStatus = allChecked
-    ? RouteStatus.COMPLETADA
-    : anyChecked
-      ? RouteStatus.EN_PROCESO
-      : RouteStatus.PENDIENTE;
-
-  await tx.route.update({
-    where: { id: routeId },
-    data: { status: nextStatus },
-  });
-  return nextStatus;
-}
-
-async function applyItemResult(
-  tx: Prisma.TransactionClient,
-  input: { itemId: string; result: z.infer<typeof routeResultSchema>; comentario?: string },
-  byUserId?: string,
-  options?: { requireOpenCard?: boolean },
+/**
+ * Best-effort post-commit flush of `CardTransitionPolicy` SHADOW observations
+ * (design D3). `emitTransitionObservations()` already swallows its own
+ * errors via `tryWriteAuditEvent` — this wrapper is deliberate
+ * defense-in-depth so a future change to that contract can never turn a
+ * harmless audit-logging failure into a broken PATCH response.
+ */
+async function flushTransitionObservations(
+  observations: (TransitionObservation | null | undefined)[],
 ) {
-  const item = await tx.routeItem.findUnique({
-    where: { id: input.itemId },
-    include: {
-      card: true,
-      route: {
-        include: { messenger: true },
-      },
-    },
-  });
-  if (!item) {
-    throw new Error("ITEM_NOT_FOUND");
+  try {
+    await emitTransitionObservations(observations);
+  } catch (error) {
+    console.error("No se pudieron emitir observaciones de CardTransitionPolicy", error);
   }
-
-  if (options?.requireOpenCard && isClosedCardStatus(item.card.status)) {
-    throw new Error(CARD_CLOSED_REQUIRES_CONFIRMATION);
-  }
-
-  const lifecycleResult = normalizeRouteResult(input.result);
-  const shouldSetChecked = lifecycleResult !== "EN_RUTA";
-  const trimmedComment = input.comentario?.trim();
-  const fallbackReason = item.card.returnReason?.trim();
-  const returnReason = trimmedComment || fallbackReason || null;
-
-  if (lifecycleResult === "DEVUELTA_TIENDA" && !returnReason) {
-    throw new Error("RETURN_REASON_REQUIRED");
-  }
-
-  await tx.routeItem.update({
-    where: { id: item.id },
-    data: {
-      checkedAt: shouldSetChecked ? new Date() : null,
-    },
-  });
-
-  const metadataRoot = asRecord(item.card.metadata);
-  const existingRoute = asRecord(metadataRoot.route);
-  const routePayload: Record<string, unknown> = {
-    ...existingRoute,
-    result: lifecycleResult,
-    comentario: lifecycleResult === "DEVUELTA_TIENDA" ? (returnReason ?? "") : (trimmedComment ?? ""),
-    routeId: item.routeId,
-    messengerId: item.route.messengerId,
-    updatedAt: new Date().toISOString(),
-  };
-
-  const nextStatus =
-    lifecycleResult === "ACUSE_RECIBIDO"
-      ? CardStatus.ACUSE_RECIBIDO
-      : lifecycleResult === "DEVUELTA_TIENDA"
-        ? CardStatus.DEVUELTA_TIENDA
-        : CardStatus.EN_RUTA;
-
-  await tx.card.update({
-    where: { id: item.cardId },
-    data: {
-      status: nextStatus,
-      returnReason: lifecycleResult === "DEVUELTA_TIENDA" ? returnReason : null,
-      currentMessengerId: item.route.messengerId,
-      metadata: {
-        ...metadataRoot,
-        route: routePayload,
-      } as Prisma.InputJsonValue,
-    },
-  });
-
-  await clearUrgencyOnCardClosure({
-    tx,
-    cardId: item.cardId,
-    nextStatus,
-    byUserId,
-  });
-
-  if (lifecycleResult !== "EN_RUTA" || input.comentario || item.card.status !== nextStatus) {
-    const messengerInfo = item.route.messenger?.nombre
-      ? ` por mensajero ${item.route.messenger.nombre}`
-      : "";
-    const notePrefix =
-      lifecycleResult === "ACUSE_RECIBIDO"
-        ? `Acuse recibido${messengerInfo}`
-        : lifecycleResult === "DEVUELTA_TIENDA"
-          ? `Tarjeta devuelta a tienda${messengerInfo}`
-          : "Actualizacion en ruta";
-
-    await tx.cardStatusLog.create({
-      data: {
-        cardId: item.cardId,
-        fromStatus: item.card.status,
-        toStatus: nextStatus,
-        note: input.comentario
-          ? `${notePrefix}: ${input.comentario}`
-          : `${notePrefix} (ruta ${item.routeId})`,
-        byUserId,
-      },
-    });
-  }
-
-  const routeStatus = await recalculateRouteStatus(tx, item.routeId);
-  return { itemId: item.id, cardId: item.cardId, routeId: item.routeId, routeStatus };
 }
 
 export async function GET(request: NextRequest) {
   const auth = await requireApiSession(["ADMIN", "OPERADOR", "MENSAJERO"]);
   if ("error" in auth) return auth.error;
 
-  const date = request.nextUrl.searchParams.get("date");
-  const messengerId = request.nextUrl.searchParams.get("messengerId");
-  const productType = request.nextUrl.searchParams.get("productType");
-  const { page, pageSize } = parsePagination(request);
-
-  const where: Record<string, unknown> = {};
-  if (date) {
-    const start = new Date(date);
-    const end = new Date(start);
-    end.setDate(end.getDate() + 1);
-    where.fecha = { gte: start, lt: end };
-  }
-  if (messengerId) where.messengerId = messengerId;
-  if (productType && productType !== "ALL" && productType in CardProductType) {
-    where.items = { some: { card: { productType: productType as CardProductType } } };
-  }
+  // `date` stays a SINGLE param expanded to [start, start + 1 day) and
+  // `messengerId` an exact match; the descriptor declares nothing else, because
+  // the route never accepted anything else.
+  const query = compile(rutasListQuery, request.nextUrl.searchParams);
+  const where = query.where;
 
   const [routes, total] = await Promise.all([
     prisma.route.findMany({
@@ -256,17 +129,16 @@ export async function GET(request: NextRequest) {
           orderBy: { sequence: "asc" },
         },
       },
-      orderBy: [{ fecha: "desc" }, { createdAt: "desc" }],
-      skip: (page - 1) * pageSize,
-      take: pageSize,
+      orderBy: query.orderBy,
+      skip: query.skip,
+      take: query.take,
     }),
     prisma.route.count({ where }),
   ]);
 
-  const totalPages = Math.max(1, Math.ceil(total / pageSize));
   return NextResponse.json({
     routes,
-    pagination: { page, pageSize, total, totalPages },
+    pagination: buildListEnvelope({ page: query.page, pageSize: query.pageSize, total }),
   });
 }
 
@@ -296,7 +168,12 @@ export async function POST(request: Request) {
     );
   }
 
+  const contractIdentifierSet = new Set(
+    (parsed.data.contractIdentifiers ?? []).map((identifier) => identifier.trim()).filter(Boolean),
+  );
+
   const selectedCards: typeof cards = [];
+  const contractCardIds = new Set<string>();
   const conflicts: Array<{
     identifier: string;
     kind: "REQUIERE_SELECCION" | "SOLO_CERRADAS";
@@ -309,6 +186,9 @@ export async function POST(request: Request) {
       const card = byId.get(cardId);
       if (card && !selectedCards.some((candidate) => candidate.id === card.id)) {
         selectedCards.push(card);
+        if (contractIdentifierSet.has(card.id)) {
+          contractCardIds.add(card.id);
+        }
       }
     }
   } else {
@@ -326,6 +206,9 @@ export async function POST(request: Request) {
       if (resolution.kind === "RESUELTA" && !usedCardIds.has(resolution.card.id)) {
         usedCardIds.add(resolution.card.id);
         selectedCards.push(resolution.card);
+        if (contractIdentifierSet.has(identifier)) {
+          contractCardIds.add(resolution.card.id);
+        }
       }
     }
   }
@@ -388,6 +271,13 @@ export async function POST(request: Request) {
 
       if (assigned.count !== selectedCards.length) {
         throw new Error(CARD_ASSIGNMENT_CLOSED);
+      }
+
+      if (contractCardIds.size) {
+        await tx.card.updateMany({
+          where: { id: { in: Array.from(contractCardIds) } },
+          data: { hasContract: true },
+        });
       }
 
       const created = await tx.route.create({
@@ -457,24 +347,67 @@ export async function PATCH(request: Request) {
       return NextResponse.json({ route });
     }
     case "UPDATE_ITEM_RESULT": {
-      try {
-        const result = await prisma.$transaction((tx) =>
-          applyItemResult(
-            tx,
-            {
-              itemId: payload.itemId,
-              result: payload.result,
-              comentario: payload.comentario,
-            },
-            auth.session.user.id,
-          ),
+      const item = await prisma.routeItem.findUnique({
+        where: { id: payload.itemId },
+        include: { card: { include: { customer: true } } },
+      });
+      if (!item) {
+        return NextResponse.json({ error: "Item de ruta no encontrado" }, { status: 404 });
+      }
+
+      const normalizedOutcome = normalizeItemResult("ROUTE", payload.result);
+      const missingContract = item.card.hasContract && !item.card.contractImageAt;
+      if (
+        missingContract &&
+        normalizedOutcome === "ACUSE_RECIBIDO" &&
+        !payload.confirmMissingContract
+      ) {
+        return NextResponse.json(
+          {
+            error: "La tarjeta requiere contrato firmado; confirma para continuar sin el",
+            kind: SIN_CONTRATO_REQUIERE_CONFIRMACION,
+            candidates: [
+              {
+                itemId: item.id,
+                cardId: item.card.id,
+                tc: item.card.tc,
+                cedula: item.card.customer.cedula,
+                nombre: item.card.customer.nombre,
+                status: item.card.status,
+                dispatchDate: item.card.dispatchDate,
+                returnReason: item.card.returnReason,
+              },
+            ],
+          },
+          { status: 409 },
         );
-        return NextResponse.json({ updated: true, ...result });
+      }
+
+      try {
+        const outcome = await prisma.$transaction((tx) =>
+          applyItemOutcome({
+            tx,
+            domain: "ROUTE",
+            itemId: payload.itemId,
+            result: payload.result,
+            comentario: payload.comentario,
+            byUserId: auth.session.user.id,
+            deliveredWithoutContract: missingContract,
+          }),
+        );
+        await flushTransitionObservations([outcome.observation]);
+        return NextResponse.json({
+          updated: true,
+          itemId: outcome.itemId,
+          cardId: outcome.cardId,
+          routeId: outcome.routeId,
+          routeStatus: outcome.routeStatus,
+        });
       } catch (error) {
-        if (error instanceof Error && error.message === "ITEM_NOT_FOUND") {
+        if (error instanceof Error && error.message === ITEM_NOT_FOUND) {
           return NextResponse.json({ error: "Item de ruta no encontrado" }, { status: 404 });
         }
-        if (error instanceof Error && error.message === "RETURN_REASON_REQUIRED") {
+        if (error instanceof Error && error.message === RETURN_REASON_REQUIRED) {
           return NextResponse.json(
             { error: "Motivo de devolucion requerido para marcar tarjeta retornada" },
             { status: 400 },
@@ -576,19 +509,37 @@ export async function PATCH(request: Request) {
         return conflict("SOLO_CERRADAS", [foundItem]);
       }
 
-      try {
-        const result = await prisma.$transaction((tx) =>
-          applyItemResult(
-            tx,
-            {
-              itemId: foundItem.id,
-              result: payload.result ?? "EN_RUTA",
-              comentario: payload.comentario,
-            },
-            auth.session.user.id,
-            { requireOpenCard: !payload.confirmClosed },
-          ),
+      const scanNormalizedOutcome = normalizeItemResult("ROUTE", payload.result ?? "EN_RUTA");
+      const scanMissingContract = foundItem.card.hasContract && !foundItem.card.contractImageAt;
+      if (
+        scanMissingContract &&
+        scanNormalizedOutcome === "ACUSE_RECIBIDO" &&
+        !payload.confirmMissingContract
+      ) {
+        return NextResponse.json(
+          {
+            error: "La tarjeta requiere contrato firmado; confirma para continuar sin el",
+            kind: SIN_CONTRATO_REQUIERE_CONFIRMACION,
+            candidates: [toCandidate(foundItem)],
+          },
+          { status: 409 },
         );
+      }
+
+      try {
+        const outcome = await prisma.$transaction((tx) =>
+          applyItemOutcome({
+            tx,
+            domain: "ROUTE",
+            itemId: foundItem.id,
+            result: payload.result ?? "EN_RUTA",
+            comentario: payload.comentario,
+            byUserId: auth.session.user.id,
+            requireOpenCard: !payload.confirmClosed,
+            deliveredWithoutContract: scanMissingContract,
+          }),
+        );
+        await flushTransitionObservations([outcome.observation]);
 
         return NextResponse.json({
           scanned: {
@@ -597,10 +548,13 @@ export async function PATCH(request: Request) {
             cedula: foundItem.card.customer.cedula,
             nombre: foundItem.card.customer.nombre,
           },
-          ...result,
+          itemId: outcome.itemId,
+          cardId: outcome.cardId,
+          routeId: outcome.routeId,
+          routeStatus: outcome.routeStatus,
         });
       } catch (error) {
-        if (error instanceof Error && error.message === "RETURN_REASON_REQUIRED") {
+        if (error instanceof Error && error.message === RETURN_REASON_REQUIRED) {
           return NextResponse.json(
             { error: "Motivo de devolucion requerido para marcar tarjeta retornada" },
             { status: 400 },

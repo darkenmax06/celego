@@ -13,6 +13,7 @@ const ACCESS: Record<ModuleName, UserRole[]> = {
   flota: ["ADMIN"],
   piloto_movil: ["ADMIN"],
   operativo: ["ADMIN", "OPERADOR"],
+  contratos_pendientes: ["ADMIN", "OPERADOR"],
   redaccion: ["ADMIN", "OPERADOR"],
   mensajeros: ["ADMIN", "OPERADOR"],
   facturacion: ["ADMIN", "FACTURACION"],
