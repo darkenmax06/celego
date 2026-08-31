@@ -32,6 +32,8 @@ type Summary = {
   uniqueIdentifiers: number;
   cardsMatched: number;
   cardsNotFound: number;
+  closedSkipped: number;
+  ambiguous: number;
   updatedToDigital: number;
   keptDelivered: number;
   markedRemote: number;
@@ -218,6 +220,8 @@ export default function StatusDigitalesClient() {
             <Stat label="Archivos" value={summary.filesReceived} />
             <Stat label="Coinciden" value={summary.cardsMatched} />
             <Stat label="No encontradas" value={summary.cardsNotFound} />
+            <Stat label="Omitidas cerradas" value={summary.closedSkipped ?? 0} />
+            <Stat label="Ambiguas para revision" value={summary.ambiguous ?? 0} />
             <Stat label="A digital" value={summary.updatedToDigital} />
             <Stat label="Entregadas intactas" value={summary.keptDelivered} />
             <Stat label="Marcadas ZR" value={summary.markedRemote} />
@@ -231,7 +235,13 @@ export default function StatusDigitalesClient() {
 
       <Panel className="mt-5" title={`Resultado por archivo${rows.length ? ` (${rows.length})` : ""}`}>
         <div className="mb-3 text-xs text-slate-500">
-          No encontradas: {notFound}
+          No encontradas: {summary?.cardsNotFound ?? notFound}
+          {summary ? (
+            <>
+              {" | "}Omitidas por tarjeta cerrada: {summary.closedSkipped ?? 0}
+              {" | "}Ambiguas para revision: {summary.ambiguous ?? 0}
+            </>
+          ) : null}
         </div>
         <div className="overflow-x-auto">
           <table className="w-full text-left text-sm">
@@ -255,7 +265,7 @@ export default function StatusDigitalesClient() {
                   <td className="py-2">
                     {row.found && row.statusAfter ? <StatusBadge value={row.statusAfter} /> : "-"}
                   </td>
-                  <td className="py-2">{row.action}</td>
+                  <td className="py-2">{formatAction(row.action)}</td>
                 </tr>
               ))}
               {!rows.length ? (
@@ -323,4 +333,11 @@ function Stat({ label, value }: { label: string; value: number }) {
       <p className="mt-1 text-2xl font-bold text-slate-900">{value}</p>
     </article>
   );
+}
+
+function formatAction(action: string) {
+  if (action === "OMITIDA_TARJETA_CERRADA") return "Omitida: tarjeta cerrada";
+  if (action === "AMBIGUA_REQUIERE_REVISION") return "Ambigua: requiere revision";
+  if (action === "NO_ENCONTRADA") return "No encontrada";
+  return action.replaceAll("_", " ");
 }

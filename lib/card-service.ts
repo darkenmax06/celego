@@ -8,6 +8,10 @@ import { resolveZone } from "@/lib/zone-map";
 import { normalizeText } from "@/lib/utils";
 import { recalculateAdditionalCardsForGroups } from "@/lib/card-additional";
 import {
+  buildDailyImportCardLookup,
+  resolveOperationalCardLookup,
+} from "@/lib/operational-card-lookup";
+import {
   applyCardTransition,
   initialDigitalCycle,
 } from "@/lib/card-transition";
@@ -92,14 +96,19 @@ export async function upsertCardsFromImport(rows: ParsedCardRow[], byUserId?: st
     const baseDate = item.fechaDespacho ?? new Date();
     const slaDueDate = addBusinessDaysStrict(baseDate, sla.totalDays);
 
-    const existing = await prisma.card.findFirst({
-      where: {
+    const existingCandidates = await prisma.card.findMany({
+      where: buildDailyImportCardLookup({
         tc: item.tc,
         productType: "CREDITO",
         customerId: customer.id,
-        dispatchDate: item.fechaDespacho ?? undefined,
-      },
+        dispatchDate: item.fechaDespacho,
+      }),
     });
+    const resolution = resolveOperationalCardLookup(
+      { kind: "TC", value: item.tc },
+      existingCandidates,
+    );
+    const existing = resolution.kind === "RESUELTA" ? resolution.card : null;
 
     if (existing) {
       await prisma.$transaction(async (tx) => {
