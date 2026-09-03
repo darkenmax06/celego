@@ -24,6 +24,22 @@ describe("ensureDebitCardIntegrity", () => {
     expect(executeRawUnsafe).toHaveBeenCalledTimes(2);
   });
 
+  it("drops the debit identifier check constraint instead of creating it", async () => {
+    executeRawUnsafe.mockResolvedValue(0);
+
+    await ensureDebitCardIntegrity();
+
+    const statements = executeRawUnsafe.mock.calls.map(([sql]) => String(sql));
+    expect(statements.some((sql) => /ADD CONSTRAINT card_product_identifier_valid/.test(sql))).toBe(
+      false,
+    );
+    expect(
+      statements.some((sql) =>
+        /DROP CONSTRAINT IF EXISTS card_product_identifier_valid/.test(sql),
+      ),
+    ).toBe(true);
+  });
+
   it("rethrows unexpected index errors", async () => {
     const error = new Error("database unavailable");
     executeRawUnsafe.mockRejectedValueOnce(error);
