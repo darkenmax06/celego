@@ -23,12 +23,62 @@ enum CardStatus {
   ENTREGA_DIGITAL
   ENTREGADA
   RETORNADA
+  TD_ENTREGADO
+  TD_DEVUELTO_NO_LOCALIZADO
+  TD_NO_LE_INTERESA
+  TD_RETIRADA_EN_OFICINA
+  TD_SOLICITADA_POR_ERROR
+  TD_ZONA_FUERA_COBERTURA
+  NO_LOCALIZADO
+  /// SDD contrato-tarjetas-pistoleo: digital delivery blocked on a missing (C) contract image.
+  ENTREGA_DIGITAL_SIN_CONTRATO
+  /// SDD contrato-tarjetas-pistoleo: physical delivery confirmed without the signed contract.
+  ENTREGA_SIN_CONTRATO
+  /// SDD solicitudes-reclamaciones-urgentes: card parked pending physical return receipt.
+  EN_PROCESO_DE_RETORNO
+}
+
+enum UrgentCaseType {
+  GENERAL
+  SOLICITUD
+  RECLAMACION
+}
+
+enum CardProductType {
+  CREDITO
+  DEBITO
+}
+
+enum DebitConsolidationRunStatus {
+  VALIDATING
+  READY
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+enum DebitConsolidationIssueSeverity {
+  WARNING
+  ROW_ERROR
+  BLOCKING
 }
 
 enum RouteStatus {
   PENDIENTE
   EN_PROCESO
   COMPLETADA
+}
+
+enum DispatchOrigin {
+  TORRE_POPULAR
+  CENTRO_ACOPIO
+  BPD_DEBITO
+}
+
+enum ImportBatchStatus {
+  PROCESSING
+  COMPLETED
+  REJECTED
 }
 
 enum RedactionType {
@@ -54,6 +104,86 @@ enum SLAExtensionType {
   REFERENCIA
 }
 
+enum MobileDeviceStatus {
+  PENDING
+  ACTIVE
+  REVOKED
+  LOST
+}
+
+enum MobileRoutePackageStatus {
+  CREATED
+  DOWNLOADED
+  EXPIRED
+  REVOKED
+}
+
+enum SecureEvidenceKind {
+  ACUSE
+  CEDULA
+}
+
+enum SecureEvidenceStatus {
+  PENDING_RELAY
+  UPLOADED_RELAY
+  DOWNLOADED_CORE
+  DECRYPTED
+  REJECTED
+  EXPIRED
+}
+
+enum MobileSyncJobKind {
+  ROUTE_PACKAGE_DOWNLOAD
+  EVIDENCE_UPLOAD
+  EVIDENCE_PROCESSING
+  INCIDENT_REPORT
+  RETENTION_PURGE
+  DEVICE_HEARTBEAT
+}
+
+enum MobileSyncJobStatus {
+  PENDING
+  RUNNING
+  SUCCEEDED
+  FAILED
+  RETRY_SCHEDULED
+  DEAD_LETTER
+}
+
+enum MobileIncidentSeverity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum MobileIncidentStatus {
+  OPEN
+  ACKNOWLEDGED
+  RESOLVED
+  CANCELED
+}
+
+/// Enforcement states for the card status transition graph.
+enum CardTransitionPolicyMode {
+  OFF
+  SHADOW
+  ENFORCE
+}
+
+/// Typed mirror of the confirmed Lot status values.
+enum LotStatus {
+  EN_TRANSITO
+  PENDIENTE
+}
+
+/// Typed outcome mirror for route and lot item transitions.
+enum ItemOutcome {
+  EN_RUTA
+  ACUSE_RECIBIDO
+  DEVUELTA_TIENDA
+}
+
 model User {
   id                        String                     @id @default(cuid())
   name                      String
@@ -76,6 +206,17 @@ model User {
   deliveryReassignments     CardDeliveryReassignment[] @relation("ReassignmentByUser")
   workflowDrafts            WorkflowDraft[]
   generatedBizcochitos      BizcochitoBatch[]          @relation("BizcochitoGeneratedBy")
+  createdDebitConsolidations DebitConsolidationRun[]    @relation("DebitConsolidationCreatedBy")
+  reportedMobileIncidents   MobileIncident[]           @relation("MobileIncidentCreatedBy")
+  updatedCardTransitionPolicies CardTransitionPolicy[]  @relation("CardTransitionPolicyUpdatedBy")
+  viewPreferences            UserViewPreference[]
+  savedFilters               UserSavedFilter[]
+  updatedDebitConsolidadoExportConfigs DebitConsolidadoExportConfig[] @relation("DebitConsolidadoExportConfigUpdatedBy")
+  updatedScriptConfigs       OperativeScriptConfig[]    @relation("ScriptConfigUpdatedBy")
+  requestedSlaExtensions     SLAExtensionRequest[]      @relation("SlaExtensionRequestedBy")
+  approvedSlaExtensions      SLAExtensionRequest[]      @relation("SlaExtensionApprovedBy")
+  createdCardGroups          CardGroup[]                @relation("CardGroupCreatedBy")
+  addedCardGroupMembers      CardGroupMember[]          @relation("CardGroupMemberAddedBy")
 }
 
 model Customer {
@@ -94,7 +235,14 @@ model Customer {
 model Card {
   id                    String                     @id @default(cuid())
   tc                    String
+  requestNumber         String?
+  productType           CardProductType            @default(CREDITO)
   externalReference     String?
+  dispatchOrigin        DispatchOrigin?
+  sourceRecordKey       String?                    @unique
+  sourceTerminal        String?
+  importBatchId         String?
+  importBatch           CardImportBatch?           @relation(fields: [importBatchId], references: [id], onDelete: SetNull)
   customerId            String
   customer              Customer                   @relation(fields: [customerId], references: [id], onDelete: Restrict)
   zona                  String
@@ -114,6 +262,8 @@ model Card {
   returnReason          String?
   currentMessengerId    String?
   currentMessenger      Messenger?                 @relation("CurrentMessengerCards", fields: [currentMessengerId], references: [id], onDelete: SetNull)
+  lastAssignedMessengerId String?
+  lastAssignedMessenger Messenger?                 @relation("LastAssignedMessengerCards", fields: [lastAssignedMessengerId], references: [id], onDelete: SetNull)
   reassignedProvince    String?
   reassignedZone        String?
   reassignedAt          DateTime?
@@ -122,6 +272,16 @@ model Card {
   digitalDeliveryCycle  Int                        @default(0)
   bizcochito            Boolean                    @default(false)
   bizcochitoAt          DateTime?
+  /// SDD contrato-tarjetas-pistoleo: whether this card requires a signed contract.
+  hasContract           Boolean                    @default(false)
+  /// SDD contrato-tarjetas-pistoleo: when the (C) contract image was recorded.
+  contractImageAt       DateTime?
+  /// SDD contrato-tarjetas-pistoleo: original filename of the recorded contract image.
+  contractImageFile     String?
+  /// SDD solicitudes-reclamaciones-urgentes: historical flag, set true on first SOLICITUD case, never cleared.
+  hadSolicitud          Boolean                    @default(false)
+  /// SDD solicitudes-reclamaciones-urgentes: historical flag, set true on first RECLAMACION case, never cleared.
+  hadReclamacion        Boolean                    @default(false)
   metadata              Json?
   createdAt             DateTime                   @default(now())
   updatedAt             DateTime                   @updatedAt
@@ -133,13 +293,107 @@ model Card {
   urgentCases           UrgentCase[]
   deliveryReassignments CardDeliveryReassignment[]
   bizcochitoItems       BizcochitoItem[]
+  debitStatusEvents     DebitStatusEvent[]
+  secureEvidences       SecureEvidence[]
+  importRows            CardImportRow[]
+  originQuarantines     DispatchOriginQuarantine[]
+  slaExtensionRequests  SLAExtensionRequest[]
+  groupMemberships      CardGroupMember[]
 
   @@index([tc])
+  @@index([requestNumber])
+  @@index([productType, requestNumber])
+  @@index([productType, status, slaDueDate])
+  @@index([productType, dispatchDate])
+  @@index([dispatchOrigin, dispatchDate])
+  @@index([importBatchId])
   @@index([status])
   @@index([provincia, zona])
   @@index([status, bizcochito, digitalDeliveryCycle])
   @@index([customerId, dispatchDate, additionalIndex])
   @@index([isAdditional])
+  @@index([hasContract, status])
+  @@index([urgent, status])
+}
+
+/// SDD solicitudes-reclamaciones-urgentes (D6): shared card selection group, visible to every operator, no owner scoping on edit/delete.
+model CardGroup {
+  id          String            @id @default(cuid())
+  name        String            @unique
+  createdById String?
+  createdBy   User?             @relation("CardGroupCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+  members     CardGroupMember[]
+}
+
+/// SDD solicitudes-reclamaciones-urgentes (D6): membership targets Card (not UrgentCase) so a group survives case resolution.
+model CardGroupMember {
+  groupId   String
+  group     CardGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  cardId    String
+  card      Card      @relation(fields: [cardId], references: [id], onDelete: Cascade)
+  addedById String?
+  addedBy   User?     @relation("CardGroupMemberAddedBy", fields: [addedById], references: [id], onDelete: SetNull)
+  addedAt   DateTime  @default(now())
+
+  @@id([groupId, cardId])
+  @@index([cardId])
+}
+
+model DispatchOriginQuarantine {
+  id         String    @id @default(cuid())
+  cardId     String    @unique
+  card       Card      @relation(fields: [cardId], references: [id], onDelete: Restrict)
+  reason     String
+  createdAt  DateTime  @default(now())
+  resolvedAt DateTime?
+
+  @@index([resolvedAt, createdAt])
+}
+
+model CardImportBatch {
+  id            String            @id @default(cuid())
+  origin        DispatchOrigin
+  originalName  String
+  sha256        String            @unique
+  status        ImportBatchStatus @default(PROCESSING)
+  rowCount      Int               @default(0)
+  createdCount  Int               @default(0)
+  updatedCount  Int               @default(0)
+  skippedCount  Int               @default(0)
+  rejectedCount Int               @default(0)
+  label         String?
+  importedById  String?
+  createdAt     DateTime          @default(now())
+  completedAt   DateTime?
+  cards         Card[]
+  rows          CardImportRow[]
+
+  @@index([origin, createdAt])
+}
+
+model CardImportRow {
+  id        String          @id @default(cuid())
+  batchId   String
+  batch     CardImportBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  cardId    String?
+  card      Card?           @relation(fields: [cardId], references: [id], onDelete: SetNull)
+  sourceRow Int
+  sourceKey String
+  outcome   String
+  reason    String?
+  createdAt DateTime        @default(now())
+
+  @@unique([batchId, sourceRow])
+  @@index([sourceKey])
+}
+
+model CardTcGuard {
+  tc              String   @id
+  activeCardId    String?  @unique
+  deliveredCardId String?  @unique
+  updatedAt       DateTime @updatedAt
 }
 
 model CardStatusLog {
@@ -169,10 +423,82 @@ model Messenger {
   dailyRecords      MessengerDailyRecord[]
   routes            Route[]
   currentCards      Card[]                     @relation("CurrentMessengerCards")
+  lastAssignedCards Card[]                     @relation("LastAssignedMessengerCards")
   reassignedCards   Card[]                     @relation("ReassignedMessengerCards")
   reassignmentsFrom CardDeliveryReassignment[] @relation("ReassignmentFromMessenger")
   reassignmentsTo   CardDeliveryReassignment[] @relation("ReassignmentToMessenger")
   reports           MessengerReport[]
+  mobileDevices     MobileDevice[]
+  mobilePackages    MobileRoutePackage[]
+  secureEvidences   SecureEvidence[]
+  mobileIncidents   MobileIncident[]
+  mobileSyncJobs    MobileSyncJob[]
+}
+
+model DebitConsolidationRun {
+  id                   String                       @id @default(cuid())
+  status               DebitConsolidationRunStatus  @default(VALIDATING)
+  validationToken      String                       @unique
+  dispatchDate         DateTime
+  baseFileName         String
+  baseFileSha256       String
+  baseFile             Bytes
+  newCardsFileName     String?
+  newCardsFileSha256   String?
+  newCardsFile         Bytes?
+  statusFileName       String?
+  statusFileSha256     String?
+  statusFile           Bytes?
+  outputFileName       String?
+  outputFile           Bytes?
+  counts               Json?
+  errorMessage         String?
+  createdById          String?
+  createdBy            User?                        @relation("DebitConsolidationCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  appliedAt            DateTime?
+  createdAt            DateTime                     @default(now())
+  updatedAt            DateTime                     @updatedAt
+  issues               DebitConsolidationIssue[]
+  statusEvents         DebitStatusEvent[]
+
+  @@index([status, createdAt])
+  @@index([baseFileSha256])
+}
+
+model DebitConsolidationIssue {
+  id            String                          @id @default(cuid())
+  runId         String
+  run           DebitConsolidationRun           @relation(fields: [runId], references: [id], onDelete: Cascade)
+  sourceFile    String
+  sheet         String?
+  rowNumber     Int?
+  requestNumber String?
+  severity      DebitConsolidationIssueSeverity
+  code          String
+  message       String
+  createdAt     DateTime                        @default(now())
+
+  @@index([runId, severity])
+  @@index([requestNumber])
+}
+
+model DebitStatusEvent {
+  id             String                 @id @default(cuid())
+  runId          String
+  run            DebitConsolidationRun  @relation(fields: [runId], references: [id], onDelete: Cascade)
+  cardId         String?
+  card           Card?                  @relation(fields: [cardId], references: [id], onDelete: SetNull)
+  requestNumber  String
+  trackingNumber String?
+  externalStatus String
+  movementAt     DateTime?
+  operator       String?
+  notes          String?
+  resolution     Json?
+  createdAt      DateTime               @default(now())
+
+  @@index([cardId, movementAt])
+  @@index([requestNumber, movementAt])
 }
 
 model MessengerServiceRate {
@@ -216,30 +542,213 @@ model MessengerReport {
 }
 
 model Route {
-  id          String      @id @default(cuid())
-  fecha       DateTime
-  messengerId String
-  messenger   Messenger   @relation(fields: [messengerId], references: [id], onDelete: Restrict)
-  status      RouteStatus @default(PENDIENTE)
-  notas       String?
-  createdById String?
-  createdBy   User?       @relation("RouteCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
-  createdAt   DateTime    @default(now())
-  items       RouteItem[]
+  id              String               @id @default(cuid())
+  fecha           DateTime
+  messengerId     String
+  messenger       Messenger            @relation(fields: [messengerId], references: [id], onDelete: Restrict)
+  status          RouteStatus          @default(PENDIENTE)
+  notas           String?
+  createdById     String?
+  createdBy       User?                @relation("RouteCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt       DateTime             @default(now())
+  items           RouteItem[]
+  mobilePackages  MobileRoutePackage[]
+  secureEvidences SecureEvidence[]
+  mobileIncidents MobileIncident[]
+  mobileSyncJobs  MobileSyncJob[]
 
   @@index([fecha, messengerId])
 }
 
 model RouteItem {
-  id        String    @id @default(cuid())
-  routeId   String
-  route     Route     @relation(fields: [routeId], references: [id], onDelete: Cascade)
-  cardId    String
-  card      Card      @relation(fields: [cardId], references: [id], onDelete: Restrict)
-  sequence  Int       @default(0)
-  checkedAt DateTime?
+  id              String           @id @default(cuid())
+  routeId         String
+  route           Route            @relation(fields: [routeId], references: [id], onDelete: Cascade)
+  cardId          String
+  card            Card             @relation(fields: [cardId], references: [id], onDelete: Restrict)
+  sequence        Int              @default(0)
+  checkedAt       DateTime?
+  secureEvidences SecureEvidence[]
+  mobileIncidents MobileIncident[]
+  mobileSyncJobs  MobileSyncJob[]
+  /// Typed outcome mirror; checkedAt remains the legacy write path.
+  outcome       ItemOutcome?
+  outcomeReason String?
+  outcomeAt     DateTime?
 
   @@unique([routeId, cardId])
+}
+
+model MobileDevice {
+  id                     String               @id @default(cuid())
+  deviceId               String               @unique
+  label                  String?
+  platform               String               @default("ANDROID")
+  status                 MobileDeviceStatus   @default(PENDING)
+  messengerId            String?
+  messenger              Messenger?           @relation(fields: [messengerId], references: [id], onDelete: SetNull)
+  publicKey              String?
+  certificateFingerprint String?              @unique
+  lastSeenAt             DateTime?
+  createdAt              DateTime             @default(now())
+  updatedAt              DateTime             @updatedAt
+  mobilePackages         MobileRoutePackage[]
+  secureEvidences        SecureEvidence[]
+  mobileIncidents        MobileIncident[]
+  mobileSyncJobs         MobileSyncJob[]
+
+  @@index([messengerId, status])
+  @@index([status, updatedAt])
+}
+
+model MobileRoutePackage {
+  id             String                   @id @default(cuid())
+  packageId      String                   @unique
+  routeId        String
+  route          Route                    @relation(fields: [routeId], references: [id], onDelete: Cascade)
+  messengerId    String
+  messenger      Messenger                @relation(fields: [messengerId], references: [id], onDelete: Restrict)
+  mobileDeviceId String?
+  mobileDevice   MobileDevice?            @relation(fields: [mobileDeviceId], references: [id], onDelete: SetNull)
+  deliveryDate   DateTime
+  expiresAt      DateTime
+  status         MobileRoutePackageStatus @default(CREATED)
+  manifest       Json
+  downloadedAt   DateTime?
+  createdAt      DateTime                 @default(now())
+  updatedAt      DateTime                 @updatedAt
+
+  @@index([messengerId, deliveryDate])
+  @@index([mobileDeviceId, expiresAt])
+  @@index([status, expiresAt])
+}
+
+model SecureEvidence {
+  id                     String               @id @default(cuid())
+  deliveryId             String               @unique
+  objectId               String               @unique
+  evidenceKind           SecureEvidenceKind
+  routeId                String?
+  route                  Route?               @relation(fields: [routeId], references: [id], onDelete: SetNull)
+  routeItemId            String?
+  routeItem              RouteItem?           @relation(fields: [routeItemId], references: [id], onDelete: SetNull)
+  cardId                 String?
+  card                   Card?                @relation(fields: [cardId], references: [id], onDelete: SetNull)
+  messengerId            String
+  messenger              Messenger            @relation(fields: [messengerId], references: [id], onDelete: Restrict)
+  deviceId               String
+  mobileDeviceId         String?
+  mobileDevice           MobileDevice?        @relation(fields: [mobileDeviceId], references: [id], onDelete: SetNull)
+  status                 SecureEvidenceStatus @default(PENDING_RELAY)
+  sha256                 String
+  byteSize               Int
+  encryptionAlgorithm    String               @default("AES-256-GCM")
+  keyEncryptionAlgorithm String               @default("RSA-OAEP-SHA256")
+  encryptedKey           String
+  nonce                  String
+  authTag                String
+  capturedAt             DateTime
+  uploadedAt             DateTime?
+  relayReceivedAt        DateTime?
+  coreDownloadedAt       DateTime?
+  decryptedAt            DateTime?
+  expiresAt              DateTime?
+  manifest               Json?
+  createdAt              DateTime             @default(now())
+  updatedAt              DateTime             @updatedAt
+  mobileSyncJobs         MobileSyncJob[]
+
+  @@index([messengerId, capturedAt])
+  @@index([deviceId, status])
+  @@index([mobileDeviceId, status])
+  @@index([cardId])
+  @@index([routeItemId])
+  @@index([status, expiresAt])
+}
+
+model MobileIncident {
+  id              String                 @id @default(cuid())
+  incidentId      String                 @unique
+  severity        MobileIncidentSeverity @default(MEDIUM)
+  status          MobileIncidentStatus   @default(OPEN)
+  type            String
+  title           String
+  description     String?
+  deviceId        String
+  mobileDeviceId  String?
+  mobileDevice    MobileDevice?          @relation(fields: [mobileDeviceId], references: [id], onDelete: SetNull)
+  messengerId     String?
+  messenger       Messenger?             @relation(fields: [messengerId], references: [id], onDelete: SetNull)
+  routeId         String?
+  route           Route?                 @relation(fields: [routeId], references: [id], onDelete: SetNull)
+  routeItemId     String?
+  routeItem       RouteItem?             @relation(fields: [routeItemId], references: [id], onDelete: SetNull)
+  cardId          String?
+  evidenceObjectId String?
+  gps             Json?
+  metadata        Json?
+  reportedAt      DateTime
+  acknowledgedAt  DateTime?
+  resolvedAt      DateTime?
+  resolutionNote  String?
+  createdByUserId String?
+  createdByUser   User?                  @relation("MobileIncidentCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  syncJobs        MobileSyncJob[]
+  createdAt       DateTime               @default(now())
+  updatedAt       DateTime               @updatedAt
+
+  @@index([status, severity, reportedAt])
+  @@index([deviceId, reportedAt])
+  @@index([messengerId, status])
+  @@index([routeItemId])
+}
+
+model MobileSyncJob {
+  id               String              @id @default(cuid())
+  kind             MobileSyncJobKind
+  status           MobileSyncJobStatus @default(PENDING)
+  deviceId         String?
+  mobileDeviceId   String?
+  mobileDevice     MobileDevice?       @relation(fields: [mobileDeviceId], references: [id], onDelete: SetNull)
+  messengerId      String?
+  messenger        Messenger?          @relation(fields: [messengerId], references: [id], onDelete: SetNull)
+  routeId          String?
+  route            Route?              @relation(fields: [routeId], references: [id], onDelete: SetNull)
+  routeItemId      String?
+  routeItem        RouteItem?          @relation(fields: [routeItemId], references: [id], onDelete: SetNull)
+  secureEvidenceId String?
+  secureEvidence   SecureEvidence?     @relation(fields: [secureEvidenceId], references: [id], onDelete: SetNull)
+  incidentId       String?
+  incident         MobileIncident?     @relation(fields: [incidentId], references: [id], onDelete: SetNull)
+  objectId         String?
+  attempts         Int                 @default(0)
+  maxAttempts      Int                 @default(5)
+  nextRunAt        DateTime            @default(now())
+  lastError        String?
+  payload          Json?
+  completedAt      DateTime?
+  attemptsLog      MobileSyncAttempt[]
+  createdAt        DateTime            @default(now())
+  updatedAt        DateTime            @updatedAt
+
+  @@index([status, nextRunAt])
+  @@index([kind, status])
+  @@index([deviceId, status])
+  @@index([secureEvidenceId])
+  @@index([incidentId])
+}
+
+model MobileSyncAttempt {
+  id            String              @id @default(cuid())
+  jobId         String
+  job           MobileSyncJob       @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  attemptNumber Int
+  status        MobileSyncJobStatus
+  error         String?
+  details       Json?
+  createdAt     DateTime            @default(now())
+
+  @@index([jobId, createdAt])
 }
 
 model ContactLog {
@@ -257,20 +766,22 @@ model ContactLog {
 }
 
 model Redaction {
-  id           String          @id @default(cuid())
-  tipo         RedactionType
-  status       RedactionStatus @default(BORRADOR)
-  zona         String
-  fecha        DateTime
-  notas        String?
-  approvedAt   DateTime?
-  approvedById String?
-  approvedBy   User?           @relation("RedactionApprovedBy", fields: [approvedById], references: [id], onDelete: SetNull)
-  anulada      Boolean         @default(false)
-  createdAt    DateTime        @default(now())
-  items        RedactionItem[]
+  id             String          @id @default(cuid())
+  tipo           RedactionType
+  dispatchOrigin DispatchOrigin?
+  status         RedactionStatus @default(BORRADOR)
+  zona           String
+  fecha          DateTime
+  notas          String?
+  approvedAt     DateTime?
+  approvedById   String?
+  approvedBy     User?           @relation("RedactionApprovedBy", fields: [approvedById], references: [id], onDelete: SetNull)
+  anulada        Boolean         @default(false)
+  createdAt      DateTime        @default(now())
+  items          RedactionItem[]
 
   @@index([fecha, tipo, zona])
+  @@index([fecha, tipo, dispatchOrigin, zona])
 }
 
 model RedactionItem {
@@ -327,57 +838,86 @@ model WorkflowDraft {
 }
 
 model UrgentCase {
-  id                 String    @id @default(cuid())
+  id                 String         @id @default(cuid())
   cardId             String?
-  card               Card?     @relation(fields: [cardId], references: [id], onDelete: SetNull)
+  card               Card?          @relation(fields: [cardId], references: [id], onDelete: SetNull)
   tc                 String
   cedula             String
   provincia          String?
   telefono           String?
   status             String?
   direccion          String?
-  level              Int       @default(1)
+  level              Int            @default(1)
   createdById        String?
-  createdBy          User?     @relation("UrgentCaseCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdBy          User?          @relation("UrgentCaseCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
   resolvedAt         DateTime?
   resolvedById       String?
-  resolvedBy         User?     @relation("UrgentCaseResolvedBy", fields: [resolvedById], references: [id], onDelete: SetNull)
+  resolvedBy         User?          @relation("UrgentCaseResolvedBy", fields: [resolvedById], references: [id], onDelete: SetNull)
   lastNotifiedAt     DateTime?
   nextNotificationAt DateTime?
-  importedAt         DateTime  @default(now())
-  updatedAt          DateTime  @updatedAt
+  importedAt         DateTime       @default(now())
+  updatedAt          DateTime       @updatedAt
+  /// SDD solicitudes-reclamaciones-urgentes (D1): discriminates legacy GENERAL cases from the new case types.
+  caseType           UrgentCaseType @default(GENERAL)
+  /// SDD solicitudes-reclamaciones-urgentes (D1): SOLICITUD-only promoted column, filterable/sortable in UI.
+  ticket             String?
+  /// SDD solicitudes-reclamaciones-urgentes (D1): SOLICITUD-only promoted column.
+  etapa              String?
+  /// SDD solicitudes-reclamaciones-urgentes (D1): SOLICITUD-only promoted column.
+  analista           String?
+  /// SDD solicitudes-reclamaciones-urgentes (D1): type-specific fields validated by lib/urgent-case-details.ts, re-emitted verbatim into the response export.
+  details            Json?
 
   @@index([cedula])
   @@index([tc])
   @@index([cardId, resolvedAt])
   @@index([nextNotificationAt, resolvedAt])
   @@index([level, resolvedAt])
+  @@index([caseType, resolvedAt])
+  @@index([ticket])
 }
 
 model Lot {
-  id           String    @id @default(cuid())
-  lotNumber    String    @unique
+  id           String     @id @default(cuid())
+  lotNumber    String     @unique
   enviadoA     String
   sentTo       String?
   fechaEnvio   DateTime
   fechaRetorno DateTime?
   estatus      String
+  /// Typed mirror of `estatus` (SDD `rutas-lotes-redesign`, Slice 3, task 3.1).
+  /// Nullable/additive; `estatus` keeps being written unchanged. Dual-written
+  /// by every current `estatus` writer (Lot creation, `UPDATE_LOT_STATUS`, and
+  /// the `/api/importaciones/lotes` bulk upsert); left null (report-and-skip)
+  /// when the free-text value has no mapping in `LotStatus` — see that enum's
+  /// doc comment for why it is deliberately minimal.
+  estatusTipo  LotStatus?
   notas        String?
-  createdAt    DateTime  @default(now())
+  createdAt    DateTime   @default(now())
   items        LotItem[]
 }
 
 model LotItem {
-  id        String  @id @default(cuid())
-  lotId     String
-  lot       Lot     @relation(fields: [lotId], references: [id], onDelete: Cascade)
-  cardId    String?
-  card      Card?   @relation(fields: [cardId], references: [id], onDelete: SetNull)
-  tc        String
-  cedula    String?
-  telefono  String?
-  recibida  String?
-  retornada String?
+  id            String       @id @default(cuid())
+  lotId         String
+  lot           Lot          @relation(fields: [lotId], references: [id], onDelete: Cascade)
+  cardId        String?
+  card          Card?        @relation(fields: [cardId], references: [id], onDelete: SetNull)
+  tc            String
+  cedula        String?
+  telefono      String?
+  recibida      String?
+  retornada     String?
+  /// Typed mirror columns (SDD `rutas-lotes-redesign`, Slice 3, task 3.1).
+  /// `recibidaAt`/`retornadaAt` are dual-written by `applyLotItemResult`
+  /// alongside the legacy `recibida`/`retornada` strings above (nullable,
+  /// additive; the legacy columns keep being written unchanged). `outcome`/
+  /// `outcomeReason` are schema-only in this batch — no writer populates them
+  /// yet (Slice 4b's `applyItemOutcome`).
+  outcome       ItemOutcome?
+  outcomeReason String?
+  recibidaAt    DateTime?
+  retornadaAt   DateTime?
 
   @@index([tc])
 }
@@ -408,9 +948,28 @@ model BillingConfig {
 model SLAConfig {
   id           String   @id @default("default")
   businessDays Int      @default(5)
+  warningBusinessDays Int @default(3)
   updatedAt    DateTime @updatedAt
   updatedById  String?
   updatedBy    User?    @relation("SlaConfigUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+}
+
+/// Singleton configuration for the debit consolidado export.
+model DebitConsolidadoExportConfig {
+  id               String    @id @default("default")
+  dispatchDateFrom DateTime?
+  updatedAt        DateTime  @updatedAt
+  updatedById      String?
+  updatedBy        User?     @relation("DebitConsolidadoExportConfigUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+}
+
+/// Singleton row holding the card transition enforcement switch.
+model CardTransitionPolicy {
+  id          String                   @id @default("default")
+  mode        CardTransitionPolicyMode @default(SHADOW)
+  updatedAt   DateTime                 @updatedAt
+  updatedById String?
+  updatedBy   User?                    @relation("CardTransitionPolicyUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
 }
 
 model SLAExtension {
@@ -492,5 +1051,70 @@ model BizcochitoItem {
 
   @@unique([cardId, digitalDeliveryCycle])
   @@index([batchId])
+  @@index([cardId])
+}
+
+model UserViewPreference {
+  id         String   @id @default(cuid())
+  userId     String
+  sectionKey String
+  viewType   String
+  updatedAt  DateTime @updatedAt
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, sectionKey])
+  @@index([userId, sectionKey])
+}
+
+model UserSavedFilter {
+  id         String   @id @default(cuid())
+  userId     String
+  sectionKey String
+  name       String
+  isDefault  Boolean  @default(false)
+  filters    Json
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, sectionKey])
+}
+
+enum SLAExtensionRequestStatus {
+  PENDIENTE
+  ENVIADA_BANCO
+  APROBADA
+  RECHAZADA
+}
+
+model OperativeScriptConfig {
+  id           String   @id @default("default")
+  scriptText   String   @db.Text
+  whatsappText String?  @db.Text
+  updatedAt    DateTime @updatedAt
+  updatedById  String?
+  updatedBy    User?    @relation("ScriptConfigUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+}
+
+model SLAExtensionRequest {
+  id               String                    @id @default(cuid())
+  cardId           String
+  card             Card                      @relation(fields: [cardId], references: [id], onDelete: Cascade)
+  tc               String
+  cedula           String
+  nombre           String
+  provinciaOrigen  String
+  provinciaDestino String?
+  motivo           String
+  diasSolicitados  Int                       @default(5)
+  status           SLAExtensionRequestStatus @default(PENDIENTE)
+  solicitadoPorId  String?
+  solicitadoPor    User?                     @relation("SlaExtensionRequestedBy", fields: [solicitadoPorId], references: [id], onDelete: SetNull)
+  aprobadoPorId    String?
+  aprobadoPor      User?                     @relation("SlaExtensionApprovedBy", fields: [aprobadoPorId], references: [id], onDelete: SetNull)
+  createdAt        DateTime                  @default(now())
+  updatedAt        DateTime                  @updatedAt
+
+  @@index([status, createdAt])
   @@index([cardId])
 }

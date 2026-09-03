@@ -1,11 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
-import { CardStatus, Prisma } from "@prisma/client";
+import { CardStatus, Prisma, SLAExtensionRequestStatus } from "@prisma/client";
 import { z } from "zod";
 import { requireApiSession } from "@/lib/api-session";
 import { prisma } from "@/lib/prisma";
 import { addBusinessDaysStrict, remainingBusinessDays } from "@/lib/sla";
 import { resolveZone } from "@/lib/zone-map";
 import { normalizeText } from "@/lib/utils";
+import { buildListEnvelope, compile } from "@/lib/list-query";
+import { operativoContactoListQuery } from "@/lib/list-query/descriptors/operativo-contacto";
+import { SLA_CLOSED_STATUSES } from "@/lib/list-query/descriptors/sla-vencidas";
 import {
   clampUrgencyLevel,
   emitDueUrgentNotifications,
@@ -17,11 +20,13 @@ type PhoneState = {
   num: string;
   principal: boolean;
   funciona: boolean;
+  comentario?: string;
 };
 
 type OperativoCardInput = {
   id: string;
   tc: string;
+  requestNumber: string | null;
   externalReference: string | null;
   zona: string;
   provincia: string;
@@ -38,6 +43,9 @@ type OperativoCardInput = {
     direccionRaw: string | null;
     telefonosRaw: string | null;
   };
+  currentMessenger?: {
+    nombre: string;
+  } | null;
   contacts: Array<{
     comentario: string | null;
     contactado: boolean;
@@ -56,6 +64,7 @@ const phoneSchema = z.object({
   num: z.string().min(3).max(32),
   principal: z.boolean().optional(),
   funciona: z.boolean().optional(),
+  comentario: z.string().max(255).optional(),
 });
 
 const postSchema = z.object({
@@ -64,6 +73,13 @@ const postSchema = z.object({
   telefonosUsados: z.string().max(255).optional(),
   comentario: z.string().max(1500).optional(),
   contactado: z.boolean().default(true),
+  canalContacto: z.enum(["WHATSAPP", "LLAMADA_DIRECTA"]).optional().nullable(),
+  nuevaDireccion: z.string().max(500).optional().nullable(),
+  fechaPreferenciaEntrega: z.string().max(50).optional().nullable(),
+  solicitudRetorno: z.boolean().optional(),
+  motivoRetorno: z.string().max(500).optional().nullable(),
+  trasladoProvincia: z.string().max(100).optional().nullable(),
+  trasladoMotivo: z.string().max(500).optional().nullable(),
 });
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -110,7 +126,9 @@ function normalizePhoneValue(raw: string) {
   return compact || trimmed;
 }
 
-function normalizePhones(rawPhones: Array<{ num: string; principal?: boolean; funciona?: boolean }>): PhoneState[] {
+function normalizePhones(
+  rawPhones: Array<{ num: string; principal?: boolean; funciona?: boolean; comentario?: string }>,
+): PhoneState[] {
   const deduped: PhoneState[] = [];
   const seen = new Set<string>();
 
@@ -126,6 +144,7 @@ function normalizePhones(rawPhones: Array<{ num: string; principal?: boolean; fu
       num,
       principal: Boolean(item.principal),
       funciona: Boolean(item.funciona),
+      comentario: item.comentario?.trim() || "",
     });
   }
 
@@ -135,9 +154,9 @@ function normalizePhones(rawPhones: Array<{ num: string; principal?: boolean; fu
   for (let index = 0; index < deduped.length; index += 1) {
     if (deduped[index].principal && !principalFound) {
       principalFound = true;
-    } else {
-      deduped[index].principal = false;
+      continue;
     }
+    deduped[index].principal = false;
   }
 
   if (!principalFound) {
@@ -149,33 +168,41 @@ function normalizePhones(rawPhones: Array<{ num: string; principal?: boolean; fu
 
 function phonesSignature(phones: PhoneState[]) {
   return phones
-    .map((phone) => `${phone.num}|${phone.principal ? 1 : 0}|${phone.funciona ? 1 : 0}`)
+    .map(
+      (phone) =>
+        `${phone.num}|${phone.principal ? 1 : 0}|${phone.funciona ? 1 : 0}|${phone.comentario || ""}`,
+    )
     .join(";");
 }
 
-function parseMetadataPhones(metadata: Record<string, unknown>) {
+function parseMetadataPhones(metadata: Record<string, unknown>): PhoneState[] {
   const raw = metadata.telefonos;
-  if (!Array.isArray(raw)) return [] as PhoneState[];
+  if (!Array.isArray(raw)) return [];
 
-  const parsed = raw
-    .map((item) => {
-      if (typeof item === "string") {
-        return { num: item, principal: false, funciona: false };
-      }
+  const parsed: PhoneState[] = [];
+  for (const item of raw) {
+    if (typeof item === "string") {
+      parsed.push({ num: item, principal: false, funciona: false, comentario: "" });
+    } else if (item && typeof item === "object") {
       const obj = asRecord(item);
-      if (typeof obj.num !== "string") return null;
-      return {
-        num: obj.num,
-        principal: Boolean(obj.principal),
-        funciona: Boolean(obj.funciona),
-      };
-    })
-    .filter((item): item is { num: string; principal: boolean; funciona: boolean } => Boolean(item));
+      if (typeof obj.num === "string") {
+        parsed.push({
+          num: obj.num,
+          principal: Boolean(obj.principal),
+          funciona: Boolean(obj.funciona),
+          comentario: typeof obj.comentario === "string" ? obj.comentario : "",
+        });
+      }
+    }
+  }
 
   return normalizePhones(parsed);
 }
 
-function mapCardToOperativeRow(card: OperativoCardInput, activeUrgentCase?: ActiveUrgentCaseSnapshot | null) {
+function mapCardToOperativeRow(
+  card: OperativoCardInput,
+  activeUrgentCase?: ActiveUrgentCaseSnapshot | null,
+) {
   const root = asRecord(card.metadata);
   const operativo = asRecord(root.operativo);
   const latestContact = card.contacts[0] ?? null;
@@ -186,6 +213,7 @@ function mapCardToOperativeRow(card: OperativoCardInput, activeUrgentCase?: Acti
       num,
       principal: index === 0,
       funciona: false,
+      comentario: "",
     })),
   );
   const contactPhones =
@@ -193,13 +221,12 @@ function mapCardToOperativeRow(card: OperativoCardInput, activeUrgentCase?: Acti
       ? metaPhones
       : latestContact?.telefonosUsados
         ? normalizePhones(
-            latestContact.telefonosUsados
-              .split(/[,\n;]+/g)
-              .map((num, index) => ({
-                num,
-                principal: index === 0,
-                funciona: false,
-              })),
+            latestContact.telefonosUsados.split(/[,\n;]+/g).map((num, index) => ({
+              num,
+              principal: index === 0,
+              funciona: false,
+              comentario: "",
+            })),
           )
         : fallbackPhones;
 
@@ -214,7 +241,6 @@ function mapCardToOperativeRow(card: OperativoCardInput, activeUrgentCase?: Acti
       : (latestContact?.comentario ?? "");
 
   const presinto = typeof root.presinto === "string" ? root.presinto : null;
-
   const level = activeUrgentCase ? clampUrgencyLevel(activeUrgentCase.level) : card.urgent ? 3 : null;
   const intervalMinutes = level ? urgencyIntervalMinutes(level) : null;
 
@@ -223,6 +249,7 @@ function mapCardToOperativeRow(card: OperativoCardInput, activeUrgentCase?: Acti
     cardId: card.id,
     urgentCaseId: activeUrgentCase?.id ?? null,
     tc: card.tc,
+    requestNumber: card.requestNumber ?? (typeof root.solicitud === "string" ? root.solicitud : null),
     nombre: card.customer.nombre,
     cedula: card.customer.cedula,
     provincia: card.provincia,
@@ -241,9 +268,21 @@ function mapCardToOperativeRow(card: OperativoCardInput, activeUrgentCase?: Acti
     tipoEntrega: card.deliveryType,
     direcciones: splitTextChunks(card.customer.direccionRaw),
     refs: splitTextChunks(card.externalReference),
+    mensajero: card.currentMessenger?.nombre ?? "Sin asignar",
     telefonos: contactPhones,
     comentarioContacto,
     contactado,
+    canalContacto: (typeof operativo.canalContacto === "string" ? operativo.canalContacto : null) as
+      | "WHATSAPP"
+      | "LLAMADA_DIRECTA"
+      | null,
+    nuevaDireccion: contactado && typeof operativo.nuevaDireccion === "string" ? operativo.nuevaDireccion : null,
+    fechaPreferenciaEntrega:
+      typeof operativo.fechaPreferenciaEntrega === "string" ? operativo.fechaPreferenciaEntrega : null,
+    solicitudRetorno: Boolean(operativo.solicitudRetorno),
+    motivoRetorno: typeof operativo.motivoRetorno === "string" ? operativo.motivoRetorno : null,
+    traslado: asRecord(operativo.traslado),
+    hasAttempt: card.contacts.length > 0 || Boolean(operativo.updatedAt) || Boolean(operativo.comentarioContacto),
     readOnly: false,
   };
 }
@@ -257,69 +296,96 @@ export async function GET(request: NextRequest) {
     limit: 20,
   });
 
-  const tab = request.nextUrl.searchParams.get("tab") === "urgentes" ? "urgentes" : "activos";
-  const provincia = request.nextUrl.searchParams.get("provincia");
-  const statusFilter = request.nextUrl.searchParams.get("status");
-  const q = request.nextUrl.searchParams.get("q")?.trim();
-  const pageRaw = Number(request.nextUrl.searchParams.get("page") ?? "1");
-  const pageSizeRaw = Number(request.nextUrl.searchParams.get("pageSize") ?? "25");
-  const page = Number.isFinite(pageRaw) ? Math.max(1, Math.trunc(pageRaw)) : 1;
-  const pageSize = Number.isFinite(pageSizeRaw) ? Math.min(100, Math.max(1, Math.trunc(pageSizeRaw))) : 25;
-  const daysRaw = Number(request.nextUrl.searchParams.get("days") ?? 3);
-  const days = Number.isFinite(daysRaw)
-    ? Math.min(10, Math.max(1, Math.trunc(daysRaw)))
-    : 3;
+  const tabParam = request.nextUrl.searchParams.get("tab");
+  const tab =
+    tabParam === "urgentes" ||
+    tabParam === "contactadas" ||
+    tabParam === "no-contactadas" ||
+    tabParam === "traslados" ||
+    tabParam === "retorno"
+      ? tabParam
+      : "activos";
 
-  if (tab === "activos") {
-    const parsedStatus = parseCardStatusFilter(statusFilter);
-    if (parsedStatus === null) {
+  const provincia = request.nextUrl.searchParams.get("provincia");
+  const zona = request.nextUrl.searchParams.get("zona");
+  const statusFilter = request.nextUrl.searchParams.get("status");
+  const canalContacto = request.nextUrl.searchParams.get("canalContacto");
+  const gestion = request.nextUrl.searchParams.get("gestion");
+  const urgentParam = request.nextUrl.searchParams.get("urgent");
+  const q = request.nextUrl.searchParams.get("q")?.trim();
+  const daysRaw = Number(request.nextUrl.searchParams.get("days") ?? 3);
+  const days = Number.isFinite(daysRaw) ? Math.min(10, Math.max(1, Math.trunc(daysRaw))) : 3;
+  const { page, pageSize } = compile(operativoContactoListQuery, request.nextUrl.searchParams);
+
+  const provinciaList = provincia && provincia !== "ALL"
+    ? provincia.split(",").map((p) => p.trim()).filter(Boolean)
+    : [];
+  const zonaList = zona && zona !== "ALL"
+    ? zona.split(",").map((z) => z.trim()).filter(Boolean)
+    : [];
+  const statusList = statusFilter && statusFilter !== "ALL"
+    ? statusFilter.split(",").map((s) => s.trim()).filter(Boolean)
+    : [];
+
+  if (statusFilter && statusFilter !== "ALL") {
+    const validStatuses = Object.values(CardStatus) as string[];
+    const parsedStatuses = statusFilter.split(",").map((s) => s.trim()).filter(Boolean);
+    const matched = parsedStatuses.filter((s) => validStatuses.includes(s));
+    if (parsedStatuses.length > 0 && matched.length === 0) {
       return NextResponse.json({
         tab,
         cards: [],
-        pagination: { page, pageSize, total: 0, totalPages: 1 },
+        pagination: buildListEnvelope({ page, pageSize, total: 0 }),
       });
     }
+  }
 
+  const activeClosedStatuses = [...SLA_CLOSED_STATUSES];
+
+  if (tab === "activos") {
     const maxDueDate = addBusinessDaysStrict(new Date(), days);
-    const activeClosedStatuses = [
-      CardStatus.ENTREGADA,
-      CardStatus.RETORNADA,
-      CardStatus.ENTREGA_DIGITAL,
-      CardStatus.ACUSE_RECIBIDO,
-      CardStatus.DEVUELTA_TIENDA,
+
+    const andClauses: Prisma.CardWhereInput[] = [
+      statusList.length
+        ? { status: { in: statusList as CardStatus[] } }
+        : { status: { notIn: activeClosedStatuses } },
     ];
+    if (provinciaList.length) {
+      andClauses.push(
+        provinciaList.length === 1 ? { provincia: provinciaList[0] } : { provincia: { in: provinciaList } },
+      );
+    }
+    if (zonaList.length) {
+      andClauses.push(
+        zonaList.length === 1 ? { zona: zonaList[0] } : { zona: { in: zonaList } },
+      );
+    }
+    if (q) {
+      andClauses.push({
+        OR: [
+          { tc: { contains: q, mode: "insensitive" } },
+          { externalReference: { contains: q, mode: "insensitive" } },
+          { customer: { cedula: { contains: q, mode: "insensitive" } } },
+          { customer: { nombre: { contains: q, mode: "insensitive" } } },
+        ],
+      });
+    }
+    if (urgentParam === "1") {
+      andClauses.push({ urgent: true });
+    }
+    andClauses.push({ OR: [{ slaDueDate: null }, { slaDueDate: { lte: maxDueDate } }] });
 
-    const where: Prisma.CardWhereInput = {
-      AND: [
-        { status: { notIn: activeClosedStatuses } },
-        ...(parsedStatus !== "ALL" ? [{ status: parsedStatus }] : []),
-        ...(provincia && provincia !== "ALL" ? [{ provincia }] : []),
-        ...(q
-          ? [
-              {
-                OR: [
-                  { tc: { contains: q, mode: "insensitive" } },
-                  { externalReference: { contains: q, mode: "insensitive" } },
-                  { customer: { cedula: { contains: q, mode: "insensitive" } } },
-                  { customer: { nombre: { contains: q, mode: "insensitive" } } },
-                ],
-              } as Prisma.CardWhereInput,
-            ]
-          : []),
-        {
-          OR: [
-            { slaDueDate: null },
-            { slaDueDate: { lte: maxDueDate } },
-          ],
-        },
-      ],
-    };
+    const where: Prisma.CardWhereInput = { AND: andClauses };
 
-    const [cards, total] = await Promise.all([
+    const hasInMemoryFilter =
+      (Boolean(canalContacto) && canalContacto !== "ALL") || (Boolean(gestion) && gestion !== "ALL");
+
+    const [cards, totalCount] = await Promise.all([
       prisma.card.findMany({
         where,
         include: {
           customer: true,
+          currentMessenger: { select: { nombre: true } },
           contacts: {
             orderBy: { createdAt: "desc" },
             take: 1,
@@ -327,10 +393,10 @@ export async function GET(request: NextRequest) {
           },
         },
         orderBy: [{ urgent: "desc" }, { slaDueDate: "asc" }, { updatedAt: "desc" }],
-        skip: (page - 1) * pageSize,
-        take: pageSize,
+        skip: hasInMemoryFilter ? 0 : (page - 1) * pageSize,
+        take: hasInMemoryFilter ? 1000 : pageSize,
       }),
-      prisma.card.count({ where }),
+      hasInMemoryFilter ? Promise.resolve(0) : prisma.card.count({ where }),
     ]);
 
     const cardIds = cards.map((item) => item.id);
@@ -361,15 +427,119 @@ export async function GET(request: NextRequest) {
       });
     }
 
-    const rows = cards.map((card) => mapCardToOperativeRow(card, activeCaseByCard.get(card.id) ?? null));
-    const totalPages = Math.max(1, Math.ceil(total / pageSize));
+    let rows = cards.map((card) => mapCardToOperativeRow(card, activeCaseByCard.get(card.id) ?? null));
+
+    if (canalContacto && canalContacto !== "ALL") {
+      rows = rows.filter((r) => r.canalContacto === canalContacto);
+    }
+
+    if (gestion && gestion !== "ALL") {
+      if (gestion === "contactadas") {
+        rows = rows.filter((r) => r.contactado && !r.solicitudRetorno && (!r.traslado || Object.keys(r.traslado).length === 0));
+      } else if (gestion === "no-contactadas") {
+        rows = rows.filter((r) => !r.contactado && !r.solicitudRetorno && (!r.traslado || Object.keys(r.traslado).length === 0) && r.hasAttempt);
+      } else if (gestion === "traslados") {
+        rows = rows.filter((r) => r.traslado && Object.keys(r.traslado).length > 0);
+      } else if (gestion === "retorno") {
+        rows = rows.filter((r) => r.solicitudRetorno);
+      }
+    }
+
+    const total = hasInMemoryFilter ? rows.length : totalCount;
+    const cardsPage = hasInMemoryFilter ? rows.slice((page - 1) * pageSize, page * pageSize) : rows;
     return NextResponse.json({
       tab,
-      cards: rows,
-      pagination: { page, pageSize, total, totalPages },
+      cards: cardsPage,
+      pagination: buildListEnvelope({ page, pageSize, total }),
     });
   }
 
+  if (tab === "contactadas" || tab === "no-contactadas" || tab === "retorno" || tab === "traslados") {
+    const where: Prisma.CardWhereInput = {
+      AND: [
+        statusList.length
+          ? { status: { in: statusList as CardStatus[] } }
+          : { status: { notIn: activeClosedStatuses } },
+        provinciaList.length ? { provincia: { in: provinciaList } } : {},
+        zonaList.length ? { zona: { in: zonaList } } : {},
+        urgentParam === "1" ? { urgent: true } : {},
+        q
+          ? {
+              OR: [
+                { tc: { contains: q, mode: "insensitive" } },
+                { externalReference: { contains: q, mode: "insensitive" } },
+                { customer: { cedula: { contains: q, mode: "insensitive" } } },
+                { customer: { nombre: { contains: q, mode: "insensitive" } } },
+              ],
+            }
+          : {},
+      ],
+    };
+
+    const cards = await prisma.card.findMany({
+      where,
+      include: {
+        customer: true,
+        currentMessenger: { select: { nombre: true } },
+        contacts: {
+          orderBy: { createdAt: "desc" },
+          take: 5,
+          select: { comentario: true, contactado: true, telefonosUsados: true },
+        },
+      },
+      orderBy: [{ updatedAt: "desc" }],
+      take: 1000,
+    });
+
+    let rows = cards
+      .map((card) => {
+        const root = asRecord(card.metadata);
+        const op = asRecord(root.operativo);
+        const hasAttempt = card.contacts.length > 0 || Boolean(op.updatedAt) || Boolean(op.comentarioContacto);
+        const mapped = mapCardToOperativeRow(card);
+        return {
+          ...mapped,
+          hasAttempt,
+        };
+      })
+      .filter((row) => {
+        if (tab === "traslados") {
+          return Boolean(row.traslado && Object.keys(row.traslado).length > 0);
+        }
+        if (tab === "retorno") {
+          return Boolean(row.solicitudRetorno);
+        }
+        if (tab === "contactadas") {
+          return (
+            Boolean(row.contactado) &&
+            !row.solicitudRetorno &&
+            (!row.traslado || Object.keys(row.traslado).length === 0)
+          );
+        }
+        // tab === "no-contactadas": Specifically cards that were attempted/called and marked as non-contacted
+        return (
+          !row.contactado &&
+          !row.solicitudRetorno &&
+          (!row.traslado || Object.keys(row.traslado).length === 0) &&
+          row.hasAttempt
+        );
+      })
+      .filter((row) => matchesStatusFilter(row.status, statusFilter));
+
+    if (canalContacto && canalContacto !== "ALL") {
+      rows = rows.filter((r) => r.canalContacto === canalContacto);
+    }
+
+    const total = rows.length;
+    const cardsPage = rows.slice((page - 1) * pageSize, page * pageSize);
+    return NextResponse.json({
+      tab,
+      cards: cardsPage,
+      pagination: buildListEnvelope({ page, pageSize, total }),
+    });
+  }
+
+  // tab === "urgentes"
   const linkedUrgentCards = await prisma.urgentCase.findMany({
     where: {
       cardId: { not: null },
@@ -380,9 +550,7 @@ export async function GET(request: NextRequest) {
   });
   const linkedCardIds = [
     ...new Set(
-      linkedUrgentCards
-        .map((item) => item.cardId)
-        .filter((value): value is string => Boolean(value)),
+      linkedUrgentCards.map((item) => item.cardId).filter((value): value is string => Boolean(value)),
     ),
   ];
 
@@ -414,6 +582,7 @@ export async function GET(request: NextRequest) {
       where,
       include: {
         customer: true,
+        currentMessenger: { select: { nombre: true } },
         contacts: {
           orderBy: { createdAt: "desc" },
           take: 1,
@@ -490,6 +659,7 @@ export async function GET(request: NextRequest) {
     cardId: null,
     urgentCaseId: item.id,
     tc: item.tc,
+    requestNumber: null,
     nombre: "SIN NOMBRE",
     cedula: item.cedula,
     provincia: item.provincia || "SIN PROVINCIA",
@@ -508,15 +678,23 @@ export async function GET(request: NextRequest) {
     tipoEntrega: null,
     direcciones: splitTextChunks(item.direccion),
     refs: [],
+    mensajero: "Sin asignar",
     telefonos: normalizePhones(
       splitPhonesFromRaw(item.telefono).map((num, index) => ({
         num,
         principal: index === 0,
         funciona: false,
+        comentario: "",
       })),
     ),
     comentarioContacto: "",
     contactado: false,
+    canalContacto: null,
+    nuevaDireccion: null,
+    fechaPreferenciaEntrega: null,
+    solicitudRetorno: false,
+    motivoRetorno: null,
+    traslado: {},
     readOnly: true,
   }));
 
@@ -527,19 +705,22 @@ export async function GET(request: NextRequest) {
       const levelA = a.urgentLevel ?? 0;
       const levelB = b.urgentLevel ?? 0;
       if (levelA !== levelB) return levelB - levelA;
-      const nextA = a.urgentNextNotificationAt ? new Date(a.urgentNextNotificationAt).getTime() : Number.MAX_SAFE_INTEGER;
-      const nextB = b.urgentNextNotificationAt ? new Date(b.urgentNextNotificationAt).getTime() : Number.MAX_SAFE_INTEGER;
+      const nextA = a.urgentNextNotificationAt
+        ? new Date(a.urgentNextNotificationAt).getTime()
+        : Number.MAX_SAFE_INTEGER;
+      const nextB = b.urgentNextNotificationAt
+        ? new Date(b.urgentNextNotificationAt).getTime()
+        : Number.MAX_SAFE_INTEGER;
       if (nextA !== nextB) return nextA - nextB;
       return a.tc.localeCompare(b.tc);
     });
 
   const total = rows.length;
-  const totalPages = Math.max(1, Math.ceil(total / pageSize));
   const cardsPage = rows.slice((page - 1) * pageSize, page * pageSize);
   return NextResponse.json({
     tab,
     cards: cardsPage,
-    pagination: { page, pageSize, total, totalPages },
+    pagination: buildListEnvelope({ page, pageSize, total }),
   });
 }
 
@@ -549,7 +730,7 @@ export async function POST(request: Request) {
 
   const parsed = postSchema.safeParse(await request.json());
   if (!parsed.success) {
-    return NextResponse.json({ error: "Payload invalido" }, { status: 400 });
+    return NextResponse.json({ error: "Payload inválido" }, { status: 400 });
   }
 
   const card = await prisma.card.findUnique({
@@ -565,20 +746,13 @@ export async function POST(request: Request) {
       num,
       principal: index === 0,
       funciona: false,
+      comentario: "",
     })),
   );
 
   const metadataRoot = asRecord(card.metadata);
   const previousOperativo = asRecord(metadataRoot.operativo);
   const previousPhones = parseMetadataPhones(previousOperativo);
-  const previousComentario =
-    typeof previousOperativo.comentarioContacto === "string"
-      ? previousOperativo.comentarioContacto.trim()
-      : "";
-  const previousContactado =
-    typeof previousOperativo.contactado === "boolean"
-      ? previousOperativo.contactado
-      : false;
 
   const normalizedPhones = normalizePhones(
     parsed.data.telefonos && parsed.data.telefonos.length > 0
@@ -589,25 +763,6 @@ export async function POST(request: Request) {
   );
   const comentario = parsed.data.comentario?.trim() ?? "";
   const contactado = parsed.data.contactado;
-  const previousReferencePhones = previousPhones.length > 0 ? previousPhones : fallbackPhones;
-
-  const noChanges =
-    phonesSignature(normalizedPhones) === phonesSignature(previousReferencePhones) &&
-    comentario === previousComentario &&
-    contactado === previousContactado;
-
-  if (noChanges) {
-    return NextResponse.json({
-      saved: false,
-      noChanges: true,
-      state: {
-        cardId: card.id,
-        contactado,
-        comentario,
-        telefonos: normalizedPhones,
-      },
-    });
-  }
 
   const usedPhones =
     parsed.data.telefonosUsados?.trim() ||
@@ -616,11 +771,55 @@ export async function POST(request: Request) {
     normalizedPhones[0]?.num ||
     null;
 
+  let trasladoData = previousOperativo.traslado;
+  if (parsed.data.trasladoProvincia) {
+    trasladoData = {
+      provinciaDestino: parsed.data.trasladoProvincia,
+      motivo: parsed.data.trasladoMotivo || "Traslado interprovincial",
+      solicitadoAt: new Date().toISOString(),
+      solicitadoPor: auth.session.user.name,
+    };
+
+    // Automatically create SLAExtensionRequest for the transfer
+    await prisma.sLAExtensionRequest.create({
+      data: {
+        cardId: card.id,
+        tc: card.tc,
+        cedula: card.customer.cedula,
+        nombre: card.customer.nombre,
+        provinciaOrigen: card.provincia,
+        provinciaDestino: parsed.data.trasladoProvincia,
+        motivo: parsed.data.trasladoMotivo || `Traslado de ${card.provincia} a ${parsed.data.trasladoProvincia}`,
+        diasSolicitados: 5,
+        status: SLAExtensionRequestStatus.PENDIENTE,
+        solicitadoPorId: auth.session.user.id,
+      },
+    });
+  }
+
   const nextOperativo: Record<string, unknown> = {
     ...previousOperativo,
     telefonos: normalizedPhones,
     comentarioContacto: comentario,
     contactado,
+    canalContacto: parsed.data.canalContacto ?? previousOperativo.canalContacto ?? null,
+    nuevaDireccion:
+      parsed.data.nuevaDireccion !== undefined
+        ? parsed.data.nuevaDireccion
+        : previousOperativo.nuevaDireccion ?? null,
+    fechaPreferenciaEntrega:
+      parsed.data.fechaPreferenciaEntrega !== undefined
+        ? parsed.data.fechaPreferenciaEntrega
+        : previousOperativo.fechaPreferenciaEntrega ?? null,
+    solicitudRetorno:
+      parsed.data.solicitudRetorno !== undefined
+        ? parsed.data.solicitudRetorno
+        : previousOperativo.solicitudRetorno ?? false,
+    motivoRetorno:
+      parsed.data.motivoRetorno !== undefined
+        ? parsed.data.motivoRetorno
+        : previousOperativo.motivoRetorno ?? null,
+    traslado: trasladoData ?? null,
     updatedAt: new Date().toISOString(),
   };
 
@@ -639,18 +838,26 @@ export async function POST(request: Request) {
       cardId: parsed.data.cardId,
       userId: auth.session.user.id,
       telefonosUsados: usedPhones,
-      comentario: comentario || null,
+      comentario: comentario || (contactado ? "Contacto exitoso" : "Intento de contacto"),
       contactado,
     },
   });
 
-  return NextResponse.json({
-    contact,
-    saved: {
-      cardId: card.id,
-      contactado,
-      comentario,
-      telefonos: normalizedPhones,
+  return NextResponse.json(
+    {
+      contact,
+      saved: {
+        cardId: card.id,
+        contactado,
+        comentario,
+        telefonos: normalizedPhones,
+        canalContacto: nextOperativo.canalContacto,
+        nuevaDireccion: nextOperativo.nuevaDireccion,
+        fechaPreferenciaEntrega: nextOperativo.fechaPreferenciaEntrega,
+        solicitudRetorno: nextOperativo.solicitudRetorno,
+        traslado: nextOperativo.traslado,
+      },
     },
-  }, { status: 201 });
+    { status: 201 },
+  );
 }

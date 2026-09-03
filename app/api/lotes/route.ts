@@ -2,9 +2,23 @@ import { NextRequest, NextResponse } from "next/server";
 import { CardStatus, Prisma } from "@prisma/client";
 import { z } from "zod";
 import { requireApiSession } from "@/lib/api-session";
+import { buildListEnvelope, compile } from "@/lib/list-query";
+import { lotesListQuery } from "@/lib/list-query/descriptors/lotes";
 import { prisma } from "@/lib/prisma";
+import {
+  findOperationalCardCandidates,
+  resolveOperationalIdentifier,
+  type OperationalCard,
+} from "@/lib/operational-card-service";
 import { resolveZone } from "@/lib/zone-map";
-import { clearUrgencyOnCardClosure } from "@/lib/urgent-alerts";
+import { mapLotStatus } from "@/lib/lot-status";
+import { RETURN_REASON_REQUIRED } from "@/lib/item-outcome";
+import {
+  applyItemOutcome,
+  CARD_CLOSED_REQUIRES_CONFIRMATION,
+  LOT_ITEM_NOT_FOUND,
+} from "@/lib/item-outcome-service";
+import { emitTransitionObservations, type TransitionObservation } from "@/lib/card-transition-observer";
 
 const createSchema = z.object({
   messengerId: z.string().cuid(),
@@ -36,6 +50,8 @@ const patchSchema = z.discriminatedUnion("action", [
     action: z.literal("SCAN_ITEM"),
     lotId: z.string().cuid(),
     identifier: z.string().min(1),
+    itemId: z.string().cuid().optional(),
+    confirmClosed: z.boolean().optional(),
     result: lotResultSchema.default("ACUSE_RECIBIDO"),
     comentario: z.string().optional(),
   }),
@@ -68,20 +84,28 @@ function asRecord(value: unknown): Record<string, unknown> {
     : {};
 }
 
-function parsePagination(request: NextRequest) {
-  const pageRaw = Number(request.nextUrl.searchParams.get("page") ?? "1");
-  const pageSizeRaw = Number(request.nextUrl.searchParams.get("pageSize") ?? "20");
-  const page = Number.isFinite(pageRaw) ? Math.max(1, Math.trunc(pageRaw)) : 1;
-  const pageSize = Number.isFinite(pageSizeRaw) ? Math.min(100, Math.max(1, Math.trunc(pageSizeRaw))) : 20;
-  return { page, pageSize };
+const CLOSED_CARD_STATUSES = [CardStatus.RETORNADA, CardStatus.DEVUELTA_TIENDA] as const;
+const CARD_ASSIGNMENT_CLOSED = "CARD_ASSIGNMENT_CLOSED";
+
+function isClosedCardStatus(status: CardStatus | string | null | undefined) {
+  return CLOSED_CARD_STATUSES.includes(status as (typeof CLOSED_CARD_STATUSES)[number]);
 }
 
-type LotLifecycleResult = "ACUSE_RECIBIDO" | "DEVUELTA_TIENDA" | "EN_RUTA";
-
-function normalizeLotResult(value: z.infer<typeof lotResultSchema>): LotLifecycleResult {
-  if (value === "ACUSE_RECIBIDO" || value === "RECIBIDA") return "ACUSE_RECIBIDO";
-  if (value === "DEVUELTA_TIENDA" || value === "RETORNADA") return "DEVUELTA_TIENDA";
-  return "EN_RUTA";
+/**
+ * Best-effort post-commit flush of `CardTransitionPolicy` SHADOW observations
+ * (design D3). `emitTransitionObservations()` already swallows its own
+ * errors via `tryWriteAuditEvent` — this wrapper is deliberate
+ * defense-in-depth so a future change to that contract can never turn a
+ * harmless audit-logging failure into a broken PATCH response.
+ */
+async function flushTransitionObservations(
+  observations: (TransitionObservation | null | undefined)[],
+) {
+  try {
+    await emitTransitionObservations(observations);
+  } catch (error) {
+    console.error("No se pudieron emitir observaciones de CardTransitionPolicy", error);
+  }
 }
 
 async function generateLotNumber(fechaEnvio: Date) {
@@ -102,118 +126,15 @@ async function generateLotNumber(fechaEnvio: Date) {
   return `${prefix}-${String(nextSeq).padStart(3, "0")}`;
 }
 
-async function applyLotItemResult(
-  tx: Prisma.TransactionClient,
-  input: {
-    itemId: string;
-    result: z.infer<typeof lotResultSchema>;
-    comentario?: string;
-  },
-  byUserId?: string,
-) {
-  const item = await tx.lotItem.findUnique({
-    where: { id: input.itemId },
-    include: { card: true, lot: true },
-  });
-  if (!item) {
-    throw new Error("LOT_ITEM_NOT_FOUND");
-  }
-
-  const lifecycleResult = normalizeLotResult(input.result);
-  const nextRecibida = lifecycleResult === "ACUSE_RECIBIDO" ? "SI" : null;
-  const nextRetornada = lifecycleResult === "DEVUELTA_TIENDA" ? "SI" : null;
-  const trimmedComment = input.comentario?.trim();
-  const fallbackReason = item.card?.returnReason?.trim();
-  const returnReason = trimmedComment || fallbackReason || null;
-
-  if (lifecycleResult === "DEVUELTA_TIENDA" && !returnReason) {
-    throw new Error("RETURN_REASON_REQUIRED");
-  }
-
-  await tx.lotItem.update({
-    where: { id: item.id },
-    data: {
-      recibida: nextRecibida,
-      retornada: nextRetornada,
-    },
-  });
-
-  if (item.cardId && item.card) {
-    const nextStatus =
-      lifecycleResult === "ACUSE_RECIBIDO"
-        ? CardStatus.ACUSE_RECIBIDO
-        : lifecycleResult === "DEVUELTA_TIENDA"
-          ? CardStatus.DEVUELTA_TIENDA
-          : CardStatus.EN_RUTA;
-
-    if (lifecycleResult !== "EN_RUTA" || item.card.status !== nextStatus || input.comentario) {
-      await tx.cardStatusLog.create({
-        data: {
-          cardId: item.cardId,
-          fromStatus: item.card.status,
-          toStatus: nextStatus,
-          note:
-            lifecycleResult === "ACUSE_RECIBIDO"
-              ? input.comentario || `Acuse recibido por lote ${item.lot.lotNumber}`
-              : lifecycleResult === "DEVUELTA_TIENDA"
-                ? input.comentario || `Tarjeta devuelta a tienda por lote ${item.lot.lotNumber}`
-                : input.comentario || `Actualizada por lote ${item.lot.lotNumber}`,
-          byUserId,
-        },
-      });
-    }
-
-    const metadataRoot = asRecord(item.card.metadata);
-    const routeMeta = asRecord(metadataRoot.route);
-
-    await tx.card.update({
-      where: { id: item.cardId },
-      data: {
-        status: nextStatus,
-        returnReason: lifecycleResult === "DEVUELTA_TIENDA" ? returnReason : null,
-        currentMessengerId: item.card.currentMessengerId,
-        metadata: {
-          ...metadataRoot,
-          route: {
-            ...routeMeta,
-            result: lifecycleResult,
-            comentario: returnReason ?? "",
-            lotId: item.lotId,
-            updatedAt: new Date().toISOString(),
-          },
-        } as Prisma.InputJsonValue,
-      },
-    });
-
-    await clearUrgencyOnCardClosure({
-      tx,
-      cardId: item.cardId,
-      nextStatus,
-      byUserId,
-    });
-  }
-
-  return { itemId: item.id, lotId: item.lotId, tc: item.tc };
-}
-
 export async function GET(request: NextRequest) {
   const auth = await requireApiSession(["ADMIN", "OPERADOR", "FACTURACION", "MENSAJERO"]);
   if ("error" in auth) return auth.error;
 
-  const date = request.nextUrl.searchParams.get("date");
-  const status = request.nextUrl.searchParams.get("status");
-  const { page, pageSize } = parsePagination(request);
-  const where: Prisma.LotWhereInput = {
-    ...(status && status !== "ALL" ? { estatus: status } : {}),
-    ...(date
-      ? (() => {
-          const start = new Date(date);
-          const end = new Date(start);
-          end.setDate(end.getDate() + 1);
-          return { fechaEnvio: { gte: start, lt: end } };
-        })()
-      : {}),
-  };
+  // `status` keeps its free-string + "ALL" sentinel semantics and `date` stays a
+  // SINGLE param expanded to [start, start + 1 day). No search, no sort: the
+  // route never had either.
+  const query = compile(lotesListQuery, request.nextUrl.searchParams);
+  const where: Prisma.LotWhereInput = query.where;
 
   const [lots, total] = await Promise.all([
     prisma.lot.findMany({
@@ -225,9 +146,9 @@ export async function GET(request: NextRequest) {
           },
         },
       },
-      orderBy: [{ fechaEnvio: "desc" }, { createdAt: "desc" }],
-      skip: (page - 1) * pageSize,
-      take: pageSize,
+      orderBy: query.orderBy,
+      skip: query.skip,
+      take: query.take,
     }),
     prisma.lot.count({ where }),
   ]);
@@ -256,10 +177,9 @@ export async function GET(request: NextRequest) {
     };
   });
 
-  const totalPages = Math.max(1, Math.ceil(total / pageSize));
   return NextResponse.json({
     lots: rows,
-    pagination: { page, pageSize, total, totalPages },
+    pagination: buildListEnvelope({ page: query.page, pageSize: query.pageSize, total }),
   });
 }
 
@@ -283,18 +203,7 @@ export async function POST(request: Request) {
 
   const [messenger, cards, provinceConfigs, lotNumber] = await Promise.all([
     prisma.messenger.findUnique({ where: { id: parsed.data.messengerId } }),
-    prisma.card.findMany({
-      where: {
-        OR: uniqueIdentifiers.flatMap((identifier) => [
-          { id: identifier },
-          { tc: identifier },
-          { externalReference: identifier },
-          { customer: { cedula: identifier } },
-        ]),
-      },
-      include: { customer: true },
-      orderBy: { updatedAt: "desc" },
-    }),
+    findOperationalCardCandidates(uniqueIdentifiers),
     prisma.provinceConfig.findMany({ where: { active: true }, select: { nombre: true, zona: true } }),
     generateLotNumber(fechaEnvio),
   ]);
@@ -308,92 +217,150 @@ export async function POST(request: Request) {
   const zoneForDestination =
     provinceToZone.get(normalizeKey(sentTo)) ?? resolveZone(sentTo, "Metro");
 
-  const lot = await prisma.$transaction(async (tx) => {
-    const usedCardIds = new Set<string>();
-    const created = await tx.lot.create({
-      data: {
-        lotNumber,
-        enviadoA: messenger.nombre,
-        sentTo,
-        fechaEnvio,
-        fechaRetorno: parsed.data.fechaRetorno ? new Date(parsed.data.fechaRetorno) : null,
-        estatus: parsed.data.estatus,
-        notas: parsed.data.notas,
-        items: {
-          create: uniqueIdentifiers.map((identifier) => {
-            const card = cards.find((item) => {
-              if (usedCardIds.has(item.id)) return false;
-              return (
-                item.id === identifier ||
-                item.tc === identifier ||
-                item.externalReference === identifier ||
-                item.customer.cedula === identifier
-              );
-            });
-            if (card) {
-              usedCardIds.add(card.id);
-            }
+  const usedCardIds = new Set<string>();
+  const cardByIdentifier = new Map<string, OperationalCard | null>();
+  const conflicts: Array<{
+    identifier: string;
+    kind: "REQUIERE_SELECCION" | "SOLO_CERRADAS";
+    cards: OperationalCard[];
+  }> = [];
 
-            return {
-              cardId: card?.id,
-              tc: card?.tc ?? identifier,
-              cedula: card?.customer.cedula ?? null,
-              telefono: card?.customer.telefonosRaw ?? null,
-            };
-          }),
-        },
-      },
-      include: {
-        items: {
-          include: { card: { include: { customer: true } } },
-        },
-      },
-    });
-
-    const assignedCards = created.items
-      .map((item) => item.card)
-      .filter((card): card is NonNullable<(typeof created.items)[number]["card"]> => Boolean(card));
-
-    for (const card of assignedCards) {
-      await tx.card.update({
-        where: { id: card.id },
-        data: {
-          status: CardStatus.ENVIADA_INTERIOR,
-          provincia: sentTo,
-          zona: zoneForDestination,
-          currentMessengerId: messenger.id,
-        },
-      });
-      await tx.cardStatusLog.create({
-        data: {
-          cardId: card.id,
-          fromStatus: card.status,
-          toStatus: CardStatus.ENVIADA_INTERIOR,
-          note: `Enviada a interior en lote ${lotNumber} (${messenger.nombre})`,
-          byUserId: auth.session.user.id,
-        },
-      });
+  for (const identifier of uniqueIdentifiers) {
+    const resolution = resolveOperationalIdentifier(identifier, cards);
+    if (resolution.kind === "REQUIERE_SELECCION") {
+      conflicts.push({ identifier, kind: resolution.kind, cards: resolution.options });
+      continue;
+    }
+    if (resolution.kind === "SOLO_CERRADAS") {
+      conflicts.push({ identifier, kind: resolution.kind, cards: resolution.closedCards });
+      continue;
     }
 
-    await tx.auditLog.create({
-      data: {
-        entity: "LOT",
-        entityId: created.id,
-        action: "CREATE",
-        userId: auth.session.user.id,
-        details: {
-          lotNumber: created.lotNumber,
-          items: created.items.length,
-          messengerId: messenger.id,
-          sentTo,
-        } as Prisma.InputJsonValue,
+    if (resolution.kind === "RESUELTA" && !usedCardIds.has(resolution.card.id)) {
+      if (isClosedCardStatus(resolution.card.status)) {
+        conflicts.push({ identifier, kind: "SOLO_CERRADAS", cards: [resolution.card] });
+        continue;
+      }
+      usedCardIds.add(resolution.card.id);
+      cardByIdentifier.set(identifier, resolution.card);
+    } else {
+      cardByIdentifier.set(identifier, null);
+    }
+  }
+
+  if (conflicts.length) {
+    return NextResponse.json(
+      {
+        error: "Hay tarjetas que requieren seleccion o confirmacion antes de crear el lote",
+        conflicts,
       },
+      { status: 409 },
+    );
+  }
+
+  const assignedCards = Array.from(
+    new Map(
+      Array.from(cardByIdentifier.values())
+        .filter((card): card is OperationalCard => Boolean(card))
+        .map((card) => [card.id, card]),
+    ).values(),
+  );
+
+  try {
+    const lot = await prisma.$transaction(async (tx) => {
+      if (assignedCards.length) {
+        const assigned = await tx.card.updateMany({
+          where: {
+            id: { in: assignedCards.map((card) => card.id) },
+            status: { notIn: [...CLOSED_CARD_STATUSES] },
+          },
+          data: {
+            status: CardStatus.ENVIADA_INTERIOR,
+            provincia: sentTo,
+            zona: zoneForDestination,
+            currentMessengerId: messenger.id,
+            lastAssignedMessengerId: messenger.id,
+          },
+        });
+
+        if (assigned.count !== assignedCards.length) {
+          throw new Error(CARD_ASSIGNMENT_CLOSED);
+        }
+      }
+
+      const created = await tx.lot.create({
+        data: {
+          lotNumber,
+          enviadoA: messenger.nombre,
+          sentTo,
+          fechaEnvio,
+          fechaRetorno: parsed.data.fechaRetorno ? new Date(parsed.data.fechaRetorno) : null,
+          estatus: parsed.data.estatus,
+          estatusTipo: mapLotStatus(parsed.data.estatus),
+          notas: parsed.data.notas,
+          items: {
+            create: uniqueIdentifiers.map((identifier) => {
+              const card = cardByIdentifier.get(identifier) ?? null;
+
+              return {
+                cardId: card?.id,
+                tc: card?.tc ?? identifier,
+                cedula: card?.customer.cedula ?? null,
+                telefono: card?.customer.telefonosRaw ?? null,
+              };
+            }),
+          },
+        },
+        include: {
+          items: {
+            include: { card: { include: { customer: true } } },
+          },
+        },
+      });
+
+      if (assignedCards.length) {
+        await tx.cardStatusLog.createMany({
+          data: assignedCards.map((card) => ({
+            cardId: card.id,
+            fromStatus: card.status,
+            toStatus: CardStatus.ENVIADA_INTERIOR,
+            note: "Enviada a interior en lote " + lotNumber + " (" + messenger.nombre + ")",
+            byUserId: auth.session.user.id,
+          })),
+        });
+      }
+
+      await tx.auditLog.create({
+        data: {
+          entity: "LOT",
+          entityId: created.id,
+          action: "CREATE",
+          userId: auth.session.user.id,
+          details: {
+            lotNumber: created.lotNumber,
+            items: created.items.length,
+            messengerId: messenger.id,
+            sentTo,
+          } as Prisma.InputJsonValue,
+        },
+      });
+
+      return created;
     });
 
-    return created;
-  });
-
-  return NextResponse.json({ lot }, { status: 201 });
+    return NextResponse.json({ lot }, { status: 201 });
+  } catch (error) {
+    if (error instanceof Error && error.message === CARD_ASSIGNMENT_CLOSED) {
+      return NextResponse.json(
+        {
+          error:
+            "Una o mas tarjetas fueron retornadas o devueltas mientras se creaba el lote. Recarga y selecciona tarjetas vigentes.",
+        },
+        { status: 409 },
+      );
+    }
+    throw error;
+  }
 }
 
 export async function PATCH(request: Request) {
@@ -410,19 +377,28 @@ export async function PATCH(request: Request) {
   switch (payload.action) {
     case "UPDATE_ITEM_RESULT": {
       try {
-        const result = await prisma.$transaction((tx) =>
-          applyLotItemResult(
+        const outcome = await prisma.$transaction((tx) =>
+          applyItemOutcome({
             tx,
-            { itemId: payload.lotItemId, result: payload.result, comentario: payload.comentario },
-            auth.session.user.id,
-          ),
+            domain: "LOT",
+            itemId: payload.lotItemId,
+            result: payload.result,
+            comentario: payload.comentario,
+            byUserId: auth.session.user.id,
+          }),
         );
-        return NextResponse.json({ updated: true, ...result });
+        await flushTransitionObservations([outcome.observation]);
+        return NextResponse.json({
+          updated: true,
+          itemId: outcome.itemId,
+          lotId: outcome.lotId,
+          tc: outcome.tc,
+        });
       } catch (error) {
-        if (error instanceof Error && error.message === "LOT_ITEM_NOT_FOUND") {
+        if (error instanceof Error && error.message === LOT_ITEM_NOT_FOUND) {
           return NextResponse.json({ error: "Item de lote no encontrado" }, { status: 404 });
         }
-        if (error instanceof Error && error.message === "RETURN_REASON_REQUIRED") {
+        if (error instanceof Error && error.message === RETURN_REASON_REQUIRED) {
           return NextResponse.json(
             { error: "Motivo de devolucion requerido para marcar tarjeta devuelta a tienda" },
             { status: 400 },
@@ -434,44 +410,144 @@ export async function PATCH(request: Request) {
     case "SCAN_ITEM": {
       const lot = await prisma.lot.findUnique({
         where: { id: payload.lotId },
-        include: { items: true },
+        include: { items: { include: { card: { include: { customer: true } } } } },
       });
       if (!lot) {
         return NextResponse.json({ error: "Lote no encontrado" }, { status: 404 });
       }
 
       const identifier = payload.identifier.trim();
-      const digits = identifier.replace(/\D/g, "");
-      const item = lot.items.find((row) => {
-        return (
-          row.id === identifier ||
-          row.tc === identifier ||
-          row.cedula === identifier ||
-          (row.cedula?.replace(/\D/g, "") === digits && digits.length > 0)
-        );
+      const toCandidate = (row: (typeof lot.items)[number]) => ({
+        itemId: row.id,
+        cardId: row.cardId,
+        tc: row.tc,
+        cedula: row.cedula,
+        nombre: row.card?.customer.nombre ?? null,
+        status: row.card?.status ?? null,
+        dispatchDate: row.card?.dispatchDate ?? null,
+        returnReason: row.card?.returnReason ?? null,
       });
+      const conflict = (
+        kind: "REQUIERE_SELECCION" | "SOLO_CERRADAS",
+        items: readonly (typeof lot.items)[number][],
+      ) =>
+        NextResponse.json(
+          {
+            error:
+              kind === "SOLO_CERRADAS"
+                ? "La tarjeta encontrada esta cerrada y requiere confirmacion explicita"
+                : "Hay varias tarjetas vigentes que coinciden; selecciona una explicitamente",
+            kind,
+            candidates: items.map(toCandidate),
+          },
+          { status: 409 },
+        );
+
+      let item: (typeof lot.items)[number] | undefined;
+      if (payload.itemId) {
+        const explicitItems = lot.items.filter((row) => row.id === payload.itemId);
+        if (!explicitItems.length) {
+          return NextResponse.json({ error: "Item de lote no encontrado" }, { status: 404 });
+        }
+        item = explicitItems[0];
+      } else {
+        const explicitItemMatches = lot.items.filter(
+          (row) => row.id === identifier || row.cardId === identifier,
+        );
+        if (explicitItemMatches.length > 1) {
+          return conflict("REQUIERE_SELECCION", explicitItemMatches);
+        }
+        if (explicitItemMatches.length === 1) {
+          item = explicitItemMatches[0];
+        } else {
+          const linkedItems = lot.items.filter(
+            (
+              row,
+            ): row is (typeof lot.items)[number] & {
+              card: NonNullable<(typeof lot.items)[number]["card"]>;
+            } => Boolean(row.card),
+          );
+          const resolution = resolveOperationalIdentifier(
+            identifier,
+            linkedItems.map((row) => row.card),
+          );
+          if (resolution.kind === "REQUIERE_SELECCION") {
+            return conflict(
+              resolution.kind,
+              linkedItems.filter((row) =>
+                resolution.options.some((card) => card.id === row.card.id),
+              ),
+            );
+          }
+          if (resolution.kind === "SOLO_CERRADAS") {
+            return conflict(
+              resolution.kind,
+              linkedItems.filter((row) =>
+                resolution.closedCards.some((card) => card.id === row.card.id),
+              ),
+            );
+          }
+          if (resolution.kind === "RESUELTA") {
+            const resolvedItems = linkedItems.filter((row) => row.card.id === resolution.card.id);
+            if (resolvedItems.length > 1) {
+              return conflict("REQUIERE_SELECCION", resolvedItems);
+            }
+            item = resolvedItems[0];
+          } else {
+            const digits = identifier.replace(/\D/g, "");
+            const unlinkedMatches = lot.items.filter(
+              (row) =>
+                !row.cardId &&
+                (row.tc === identifier ||
+                  row.cedula === identifier ||
+                  (row.cedula?.replace(/\D/g, "") === digits && digits.length > 0)),
+            );
+            if (unlinkedMatches.length > 1) {
+              return conflict("REQUIERE_SELECCION", unlinkedMatches);
+            }
+            item = unlinkedMatches[0];
+          }
+        }
+      }
       if (!item) {
         return NextResponse.json({ error: "Tarjeta no encontrada en lote" }, { status: 404 });
       }
 
+      if (isClosedCardStatus(item.card?.status) && !payload.confirmClosed) {
+        return conflict("SOLO_CERRADAS", [item]);
+      }
+
       try {
-        const result = await prisma.$transaction((tx) =>
-          applyLotItemResult(
+        const outcome = await prisma.$transaction((tx) =>
+          applyItemOutcome({
             tx,
-            { itemId: item.id, result: payload.result, comentario: payload.comentario },
-            auth.session.user.id,
-          ),
+            domain: "LOT",
+            itemId: item.id,
+            result: payload.result,
+            comentario: payload.comentario,
+            byUserId: auth.session.user.id,
+            requireOpenCard: !payload.confirmClosed,
+          }),
         );
+        await flushTransitionObservations([outcome.observation]);
 
         return NextResponse.json({
           scanned: { itemId: item.id, tc: item.tc, cedula: item.cedula },
-          ...result,
+          itemId: outcome.itemId,
+          lotId: outcome.lotId,
+          tc: outcome.tc,
         });
       } catch (error) {
-        if (error instanceof Error && error.message === "RETURN_REASON_REQUIRED") {
+        if (error instanceof Error && error.message === RETURN_REASON_REQUIRED) {
           return NextResponse.json(
             { error: "Motivo de devolucion requerido para marcar tarjeta devuelta a tienda" },
             { status: 400 },
+          );
+        }
+        if (error instanceof Error && error.message === CARD_CLOSED_REQUIRES_CONFIRMATION) {
+          return NextResponse.json(
+            { error: "La tarjeta se cerro antes de actualizarla. Confirma la seleccion explicitamente." },
+            { status: 409 },
           );
         }
         throw error;
@@ -482,6 +558,7 @@ export async function PATCH(request: Request) {
         where: { id: payload.lotId },
         data: {
           estatus: payload.estatus,
+          estatusTipo: mapLotStatus(payload.estatus),
           fechaRetorno: payload.fechaRetorno ? new Date(payload.fechaRetorno) : null,
           notas: payload.notas,
         },

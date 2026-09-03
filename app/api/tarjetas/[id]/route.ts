@@ -16,6 +16,7 @@ export async function GET(
     include: {
       customer: true,
       currentMessenger: true,
+      lastAssignedMessenger: true,
       reassignedMessenger: true,
       deliveryReassignments: {
         include: {

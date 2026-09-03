@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { MessengerServiceType, Prisma } from "@prisma/client";
 import { z } from "zod";
 import { requireApiSession } from "@/lib/api-session";
+import { buildListEnvelope, compile } from "@/lib/list-query";
+import { mensajerosListQuery } from "@/lib/list-query/descriptors/mensajeros";
 import { prisma } from "@/lib/prisma";
 
 const rateSchema = z.object({
@@ -27,10 +29,6 @@ export async function GET(request: NextRequest) {
   if ("error" in auth) return auth.error;
 
   const id = request.nextUrl.searchParams.get("id");
-  const pageParam = request.nextUrl.searchParams.get("page");
-  const pageSizeParam = request.nextUrl.searchParams.get("pageSize");
-  const onlyActive = request.nextUrl.searchParams.get("onlyActive") === "1";
-  const province = request.nextUrl.searchParams.get("province")?.trim();
 
   if (id) {
     const messenger = await prisma.messenger.findUnique({
@@ -49,48 +47,37 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ messenger });
   }
 
-  const where: Prisma.MessengerWhereInput = {
-    ...(onlyActive ? { activo: true } : {}),
-    ...(province
-      ? {
-          provinciaTrabajo: {
-            equals: province,
-            mode: "insensitive",
-          },
-        }
-      : {}),
-  };
+  // DUAL MODE, load bearing: `allowUnpaginated` reports true only when BOTH
+  // `page` and `pageSize` are absent, and that branch answers with `{ messengers }`
+  // and NO `pagination` key at all. rutas-client, redaccion and the card pickers
+  // depend on that exact shape, so the absence check must happen before any
+  // clamping — which is precisely what `compile()` does with those raw params.
+  const query = compile(mensajerosListQuery, request.nextUrl.searchParams);
+  const where: Prisma.MessengerWhereInput = query.where;
 
-  if (!pageParam && !pageSizeParam) {
+  if (query.unpaginated) {
     const messengers = await prisma.messenger.findMany({
       where,
       include: { serviceRates: true },
-      orderBy: { nombre: "asc" },
+      orderBy: query.orderBy,
     });
     return NextResponse.json({ messengers });
   }
-
-  const pageRaw = Number(pageParam ?? "1");
-  const pageSizeRaw = Number(pageSizeParam ?? "25");
-  const page = Number.isFinite(pageRaw) ? Math.max(1, Math.trunc(pageRaw)) : 1;
-  const pageSize = Number.isFinite(pageSizeRaw) ? Math.min(100, Math.max(1, Math.trunc(pageSizeRaw))) : 25;
 
   const [messengers, total] = await Promise.all([
     prisma.messenger.findMany({
       where,
       include: { serviceRates: true },
-      orderBy: { nombre: "asc" },
-      skip: (page - 1) * pageSize,
-      take: pageSize,
+      orderBy: query.orderBy,
+      skip: query.skip,
+      take: query.take,
     }),
     prisma.messenger.count({ where }),
   ]);
 
-  const totalPages = Math.max(1, Math.ceil(total / pageSize));
-
   return NextResponse.json({
     messengers,
-    pagination: { page, pageSize, total, totalPages },
+    pagination: buildListEnvelope({ page: query.page, pageSize: query.pageSize, total }),
   });
 }
 

@@ -4,12 +4,30 @@ import { z } from "zod";
 import { requireApiSession } from "@/lib/api-session";
 import { prisma } from "@/lib/prisma";
 import { applyCardTransition } from "@/lib/card-transition";
+import { peelFileTags } from "@/lib/contract-image";
+import {
+  compareOperationalCardRecency,
+  resolveOperationalCardLookup,
+  type OperationalCardResolution,
+} from "@/lib/operational-card-lookup";
 
 const itemSchema = z.object({
   fileName: z.string().min(1),
   identifier: z.string().min(1),
   isRemote: z.boolean(),
+  overrideCardId: z.string().min(1).optional(),
 });
+
+// Tarjetas en estos estados no cuentan como candidatas para disparar una
+// ambiguedad por nombre: ya estan cerradas para este flujo (retornada) o ya
+// fueron resueltas (entregada/entrega digital), asi que no deben forzar al
+// operador a elegir entre ellas y la tarjeta realmente pendiente.
+const NAME_AMBIGUITY_EXCLUDED_STATUSES = new Set<CardStatus>([
+  CardStatus.RETORNADA,
+  CardStatus.DEVUELTA_TIENDA,
+  CardStatus.ENTREGADA,
+  CardStatus.ENTREGA_DIGITAL,
+]);
 
 const schema = z.object({
   items: z.array(itemSchema).min(1).max(5000),
@@ -17,29 +35,6 @@ const schema = z.object({
 
 function stripExtension(value: string) {
   return value.replace(/\.[^/.]+$/, "").trim();
-}
-
-function stripRemoteTag(value: string) {
-  return value.replace(/\(\s*zr\s*\)/gi, "").trim();
-}
-
-const ADDITIONAL_TAG_REGEX = /\(\s*adicional(?:\s+(\d+))?\s*\)\s*$/i;
-
-function parseAdditionalIndex(value: string) {
-  const match = value.match(ADDITIONAL_TAG_REGEX);
-  if (!match) return 0;
-  if (!match[1]) return 1;
-  const parsed = Number(match[1]);
-  if (!Number.isFinite(parsed)) return 1;
-  return Math.max(1, Math.trunc(parsed));
-}
-
-function stripAdditionalTag(value: string) {
-  return value.replace(ADDITIONAL_TAG_REGEX, "").trim();
-}
-
-function stripCopySuffix(value: string) {
-  return value.replace(/\s*\(\d+\)\s*$/, "").trim();
 }
 
 function normalizeLookupValue(value: string) {
@@ -56,12 +51,12 @@ function normalizeCedula(raw: string) {
   return digits || raw.trim().toUpperCase();
 }
 
+// SDD contrato-tarjetas-pistoleo (design D5): delegates to the shared
+// `peelFileTags` trailing-tag peeler so `(C)` (contract image marker) is
+// stripped the same way `(zr)` / `(adicional N)` / `(N)` already are, and the
+// resulting identifier still resolves to the same card as the delivery image.
 function parseIdentifierCandidate(raw: string) {
-  const noExt = stripExtension(raw);
-  const noRemote = stripRemoteTag(noExt);
-  const noAdditional = stripAdditionalTag(noRemote);
-  const noCopy = stripCopySuffix(noAdditional);
-  return noCopy.replace(/\s+/g, " ").trim();
+  return peelFileTags(raw).base.replace(/\s+/g, " ").trim();
 }
 
 function dateKeyUtc(date: Date | null | undefined) {
@@ -85,7 +80,7 @@ function toDateKey(year: number, month: number, day: number) {
 }
 
 function parseDispatchDateKey(raw: string) {
-  const normalized = stripCopySuffix(stripAdditionalTag(stripRemoteTag(stripExtension(raw))));
+  const normalized = peelFileTags(raw).base;
 
   const ymd = normalized.match(/\b(20\d{2})[\/._-](0?[1-9]|1[0-2])[\/._-](0?[1-9]|[12]\d|3[01])\b/);
   if (ymd) {
@@ -152,6 +147,24 @@ function buildLookupCandidates(identifier: string, fileName: string) {
   return Array.from(finalCandidates);
 }
 
+function expandDatabaseLookupValues(values: readonly string[]) {
+  const expanded = new Set<string>();
+
+  for (const value of values) {
+    const trimmed = value.trim();
+    if (!trimmed) continue;
+
+    expanded.add(trimmed);
+
+    const withoutSeparators = trimmed.replace(/[\s\-_]+/g, "");
+    if (withoutSeparators) {
+      expanded.add(withoutSeparators);
+    }
+  }
+
+  return Array.from(expanded);
+}
+
 function first15Digits(value: string) {
   const digits = value.replace(/\D/g, "");
   if (digits.length < 15) return "";
@@ -177,29 +190,35 @@ export async function POST(request: Request) {
 
   const cleanItems = parsed.data.items
     .map((item) => {
-      const fileAdditional = parseAdditionalIndex(stripRemoteTag(stripExtension(item.fileName)));
-      const identifierAdditional = parseAdditionalIndex(stripRemoteTag(item.identifier));
+      const fileTags = peelFileTags(item.fileName);
+      const identifierTags = peelFileTags(item.identifier);
       return {
         fileName: item.fileName.trim(),
         identifier: parseIdentifierCandidate(item.identifier),
         isRemote: item.isRemote,
-        additionalIndex: Math.max(fileAdditional, identifierAdditional),
+        overrideCardId: item.overrideCardId,
+        additionalIndex: Math.max(fileTags.additionalIndex, identifierTags.additionalIndex),
+        // SDD contrato-tarjetas-pistoleo: `(C)` on either the fileName or the
+        // identifier marks this image as the contract image rather than the
+        // delivery image for the same card.
+        isContract: fileTags.isContract || identifierTags.isContract,
         dispatchDateKey: detectDispatchDateKey(item.fileName, item.identifier),
         lookupCandidates: buildLookupCandidates(item.identifier, item.fileName),
       };
     })
-    .filter((item) => item.fileName && item.lookupCandidates.length);
+    .filter((item) => item.fileName && (item.overrideCardId || item.lookupCandidates.length));
 
   if (!cleanItems.length) {
     return NextResponse.json({ error: "No hay nombres de imagen validos para procesar" }, { status: 400 });
   }
 
   const lookupValues = Array.from(new Set(cleanItems.flatMap((item) => item.lookupCandidates)));
+  const databaseLookupValues = expandDatabaseLookupValues(lookupValues);
   const cardsByTcOrRef = await prisma.card.findMany({
     where: {
       OR: [
-        { tc: { in: lookupValues } },
-        { externalReference: { in: lookupValues } },
+        { tc: { in: databaseLookupValues, mode: "insensitive" } },
+        { externalReference: { in: databaseLookupValues, mode: "insensitive" } },
       ],
     },
     select: {
@@ -211,16 +230,18 @@ export async function POST(request: Request) {
       returnReason: true,
       digitalDeliveryCycle: true,
       createdAt: true,
-      updatedAt: true,
       dispatchDate: true,
+      hasContract: true,
+      contractImageAt: true,
+      contractImageFile: true,
       customer: {
         select: {
           nombre: true,
           cedula: true,
+          provincia: true,
         },
       },
     },
-    orderBy: { updatedAt: "desc" },
   });
 
   const nameLookupValues = Array.from(
@@ -254,91 +275,152 @@ export async function POST(request: Request) {
         returnReason: true,
         digitalDeliveryCycle: true,
         createdAt: true,
-        updatedAt: true,
         dispatchDate: true,
+        hasContract: true,
+        contractImageAt: true,
+        contractImageFile: true,
         customer: {
           select: {
             nombre: true,
             cedula: true,
+            provincia: true,
           },
         },
       },
-      orderBy: { updatedAt: "desc" },
     });
     cardsByNameMatches.push(...found);
   }
 
-  const cardById = new Map<string, (typeof cardsByTcOrRef)[number]>();
-  for (const card of [...cardsByTcOrRef, ...cardsByNameMatches]) {
+  const overrideCardIds = Array.from(
+    new Set(cleanItems.map((item) => item.overrideCardId).filter((value): value is string => Boolean(value))),
+  );
+  const cardsByOverride = overrideCardIds.length
+    ? await prisma.card.findMany({
+        where: { id: { in: overrideCardIds } },
+        select: {
+          id: true,
+          tc: true,
+          externalReference: true,
+          status: true,
+          isRemote: true,
+          returnReason: true,
+          digitalDeliveryCycle: true,
+          createdAt: true,
+          dispatchDate: true,
+          hasContract: true,
+          contractImageAt: true,
+          contractImageFile: true,
+          customer: {
+            select: {
+              nombre: true,
+              cedula: true,
+              provincia: true,
+            },
+          },
+        },
+      })
+    : [];
+
+  type MatchMode =
+    | "DIRECT"
+    | "MANUAL"
+    | "NONE"
+    | "NOMBRE_PRINCIPAL"
+    | "NOMBRE_PRINCIPAL_FECHA"
+    | "ADICIONAL_NOMBRE_Y_FECHA"
+    | "ADICIONAL_NOMBRE_ORDINAL";
+  type CardRecord = (typeof cardsByTcOrRef)[number];
+  type ResolvedSelection = {
+    card: CardRecord | null;
+    matchMode: MatchMode;
+    resolution: OperationalCardResolution<CardRecord>;
+  };
+
+  const cardById = new Map<string, CardRecord>();
+  for (const card of [...cardsByTcOrRef, ...cardsByNameMatches, ...cardsByOverride]) {
     if (!cardById.has(card.id)) {
       cardById.set(card.id, card);
     }
   }
-  const cards = Array.from(cardById.values()).sort(
-    (a, b) => b.updatedAt.getTime() - a.updatedAt.getTime(),
-  );
+  const cards = Array.from(cardById.values()).sort(compareOperationalCardRecency);
 
-  const cardByTc = new Map<string, (typeof cards)[number]>();
-  const cardByExternalRef = new Map<string, (typeof cards)[number]>();
-  const cardByNormalized = new Map<string, (typeof cards)[number]>();
-  const cardByFirst15Digits = new Map<string, Array<(typeof cards)[number]>>();
-  const cardByCustomerName = new Map<string, Array<(typeof cards)[number]>>();
+  const cardByTc = new Map<string, CardRecord[]>();
+  const cardByExternalRef = new Map<string, CardRecord[]>();
+  const cardByNormalizedTc = new Map<string, CardRecord[]>();
+  const cardByNormalizedRef = new Map<string, CardRecord[]>();
+  const cardByFirst15Digits = new Map<string, CardRecord[]>();
+  const cardByCustomerName = new Map<string, CardRecord[]>();
+
+  function addToBucket(bucket: Map<string, CardRecord[]>, key: string, card: CardRecord) {
+    if (!key) return;
+    const existing = bucket.get(key) ?? [];
+    existing.push(card);
+    bucket.set(key, existing);
+  }
 
   for (const card of cards) {
-    if (!cardByTc.has(card.tc)) {
-      cardByTc.set(card.tc, card);
-    }
-
-    if (card.externalReference && !cardByExternalRef.has(card.externalReference)) {
-      cardByExternalRef.set(card.externalReference, card);
-    }
-
-    const tcNormalized = normalizeLookupValue(card.tc);
-    if (tcNormalized && !cardByNormalized.has(tcNormalized)) {
-      cardByNormalized.set(tcNormalized, card);
-    }
-
+    addToBucket(cardByTc, card.tc, card);
     if (card.externalReference) {
-      const refNormalized = normalizeLookupValue(card.externalReference);
-      if (refNormalized && !cardByNormalized.has(refNormalized)) {
-        cardByNormalized.set(refNormalized, card);
-      }
+      addToBucket(cardByExternalRef, card.externalReference, card);
+    }
+
+    addToBucket(cardByNormalizedTc, normalizeLookupValue(card.tc), card);
+    if (card.externalReference) {
+      addToBucket(cardByNormalizedRef, normalizeLookupValue(card.externalReference), card);
     }
 
     const key15 = first15Digits(card.tc);
-    if (key15) {
-      const existing = cardByFirst15Digits.get(key15) ?? [];
-      existing.push(card);
-      cardByFirst15Digits.set(key15, existing);
-    }
+    if (key15) addToBucket(cardByFirst15Digits, key15, card);
 
-    const customerNameKey = normalizeLookupValue(card.customer.nombre);
-    if (customerNameKey) {
-      const existing = cardByCustomerName.get(customerNameKey) ?? [];
-      existing.push(card);
-      cardByCustomerName.set(customerNameKey, existing);
-    }
+    addToBucket(cardByCustomerName, normalizeLookupValue(card.customer.nombre), card);
   }
 
-  function findSingleCardForItem(item: (typeof cleanItems)[number]) {
+  function toResolvedSelection(
+    resolution: OperationalCardResolution<CardRecord>,
+    matchMode: MatchMode,
+  ): ResolvedSelection {
+    return {
+      card: resolution.kind === "RESUELTA" ? resolution.card : null,
+      matchMode,
+      resolution,
+    };
+  }
+
+  function noCardSelection(): ResolvedSelection {
+    return toResolvedSelection({ kind: "NO_ENCONTRADA" }, "NONE");
+  }
+
+  function resolveBucket(
+    kind: "TC" | "REFERENCIA" | "CEDULA",
+    value: string,
+    bucket: CardRecord[],
+    matchMode: MatchMode,
+  ) {
+    return toResolvedSelection(
+      resolveOperationalCardLookup({ kind, value }, bucket),
+      matchMode,
+    );
+  }
+
+  function findDirectCardForItem(item: (typeof cleanItems)[number]) {
     for (const candidate of item.lookupCandidates) {
       const byTc = cardByTc.get(candidate);
-      if (byTc) return byTc;
+      if (byTc?.length) return resolveBucket("TC", candidate, byTc, "DIRECT");
 
       const byRef = cardByExternalRef.get(candidate);
-      if (byRef) return byRef;
+      if (byRef?.length) return resolveBucket("REFERENCIA", candidate, byRef, "DIRECT");
 
       const normalized = normalizeLookupValue(candidate);
-      const byNormalized = normalized ? cardByNormalized.get(normalized) : undefined;
-      if (byNormalized) return byNormalized;
-    }
+      if (!normalized) continue;
 
-    for (const candidate of item.lookupCandidates) {
-      const nameKey = normalizeLookupValue(candidate);
-      if (!nameKey) continue;
-      const bucket = cardByCustomerName.get(nameKey);
-      if (bucket?.length === 1) {
-        return bucket[0];
+      const byNormalizedTc = cardByNormalizedTc.get(normalized);
+      if (byNormalizedTc?.length) {
+        return resolveBucket("TC", candidate, byNormalizedTc, "DIRECT");
+      }
+
+      const byNormalizedRef = cardByNormalizedRef.get(normalized);
+      if (byNormalizedRef?.length) {
+        return resolveBucket("REFERENCIA", candidate, byNormalizedRef, "DIRECT");
       }
     }
 
@@ -346,8 +428,13 @@ export async function POST(request: Request) {
       const key15 = first15Digits(candidate);
       if (!key15) continue;
       const bucket = cardByFirst15Digits.get(key15);
-      if (bucket?.length === 1) {
-        return bucket[0];
+      if (!bucket?.length) continue;
+
+      const tcValues = Array.from(
+        new Map(bucket.map((card) => [normalizeLookupValue(card.tc), card.tc])).values(),
+      );
+      if (tcValues.length === 1) {
+        return resolveBucket("TC", tcValues[0], bucket, "DIRECT");
       }
     }
 
@@ -361,118 +448,157 @@ export async function POST(request: Request) {
       if (!nameKey || seen.has(nameKey)) continue;
       seen.add(nameKey);
       const bucket = cardByCustomerName.get(nameKey);
-      if (bucket?.length) {
-        return bucket;
-      }
+      if (!bucket?.length) continue;
+
+      const openBucket = bucket.filter((card) => !NAME_AMBIGUITY_EXCLUDED_STATUSES.has(card.status));
+      if (openBucket.length) return openBucket;
     }
     return null;
   }
 
-  function findCardsForItem(item: (typeof cleanItems)[number]) {
-    const directMatch = findSingleCardForItem(item);
-    if (directMatch) {
-      return {
-        card: directMatch,
-        matchMode: "DIRECT" as const,
-      };
+  function resolvePrimaryNameWithoutDate(bucket: CardRecord[]): ResolvedSelection {
+    const resolutions = Array.from(
+      new Set(bucket.map((card) => card.customer.cedula).filter(Boolean)),
+    ).map((cedula) =>
+      resolveOperationalCardLookup({ kind: "CEDULA", value: cedula }, bucket),
+    );
+
+    const openOptions = Array.from(
+      new Map(
+        resolutions.flatMap((resolution) => {
+          if (resolution.kind === "RESUELTA") return [[resolution.card.id, resolution.card]];
+          if (resolution.kind === "REQUIERE_SELECCION") {
+            return resolution.options.map((card) => [card.id, card] as const);
+          }
+          return [];
+        }),
+      ).values(),
+    ).sort(compareOperationalCardRecency);
+
+    if (openOptions.length === 1) {
+      return toResolvedSelection(
+        { kind: "RESUELTA", card: openOptions[0] },
+        "NOMBRE_PRINCIPAL",
+      );
     }
 
+    if (openOptions.length > 1) {
+      return toResolvedSelection(
+        { kind: "REQUIERE_SELECCION", options: openOptions },
+        "NOMBRE_PRINCIPAL",
+      );
+    }
+
+    const closedCards = Array.from(
+      new Map(
+        resolutions.flatMap((resolution) =>
+          resolution.kind === "SOLO_CERRADAS"
+            ? resolution.closedCards.map((card) => [card.id, card] as const)
+            : [],
+        ),
+      ).values(),
+    ).sort(compareOperationalCardRecency);
+
+    return closedCards.length
+      ? toResolvedSelection({ kind: "SOLO_CERRADAS", closedCards }, "NOMBRE_PRINCIPAL")
+      : noCardSelection();
+  }
+
+  function findCardsForItem(item: (typeof cleanItems)[number]): ResolvedSelection {
+    if (item.overrideCardId) {
+      const card = cardById.get(item.overrideCardId);
+      return card
+        ? toResolvedSelection({ kind: "RESUELTA", card }, "MANUAL")
+        : noCardSelection();
+    }
+
+    const directMatch = findDirectCardForItem(item);
+    if (directMatch) return directMatch;
+
     const bucket = resolveNameBucket(item);
-    if (!bucket?.length) {
-      return {
-        card: null as (typeof cards)[number] | null,
-        matchMode: "NONE" as const,
-      };
+    if (!bucket?.length) return noCardSelection();
+
+    const ordinal = Math.max(0, item.additionalIndex);
+    if (ordinal === 0 && !item.dispatchDateKey) {
+      return resolvePrimaryNameWithoutDate(bucket);
     }
 
     type NameGroup = {
       dispatchDateKey: string;
-      cards: Array<(typeof cards)[number]>;
-      latestUpdatedAt: number;
+      cards: CardRecord[];
+      latestCard: CardRecord;
     };
 
-    const groupsByKey = new Map<string, NameGroup>();
+    const groupsByKey = new Map<string, Omit<NameGroup, "latestCard">>();
     for (const card of bucket) {
       const dispatchKey = dateKeyUtc(card.dispatchDate);
       const key = `${normalizeCedula(card.customer.cedula)}|${dispatchKey || "SIN_FECHA"}`;
       const existing = groupsByKey.get(key);
       if (existing) {
         existing.cards.push(card);
-        existing.latestUpdatedAt = Math.max(existing.latestUpdatedAt, card.updatedAt.getTime());
       } else {
         groupsByKey.set(key, {
           dispatchDateKey: dispatchKey,
           cards: [card],
-          latestUpdatedAt: card.updatedAt.getTime(),
         });
       }
     }
 
-    const groups = Array.from(groupsByKey.values()).map((group) => ({
-      ...group,
-      cards: [...group.cards].sort((a, b) => {
+    const groups = Array.from(groupsByKey.values()).map<NameGroup>((group) => {
+      const groupCards = [...group.cards].sort((a, b) => {
         const byCreated = a.createdAt.getTime() - b.createdAt.getTime();
         if (byCreated !== 0) return byCreated;
         return a.id.localeCompare(b.id);
-      }),
-    }));
+      });
+      return {
+        ...group,
+        cards: groupCards,
+        latestCard: [...groupCards].sort(compareOperationalCardRecency)[0],
+      };
+    });
 
-    let candidates = groups;
+    let candidateGroups = groups;
     if (item.dispatchDateKey) {
       const byDate = groups.filter((group) => group.dispatchDateKey === item.dispatchDateKey);
-      if (byDate.length) {
-        candidates = byDate;
-      }
+      if (!byDate.length) return noCardSelection();
+      candidateGroups = byDate;
     }
 
-    candidates = [...candidates].sort((a, b) => {
+    candidateGroups = [...candidateGroups].sort((a, b) => {
       const aKey = a.dispatchDateKey || "0000-00-00";
       const bKey = b.dispatchDateKey || "0000-00-00";
       if (aKey !== bKey) return bKey.localeCompare(aKey);
-      return b.latestUpdatedAt - a.latestUpdatedAt;
+      return compareOperationalCardRecency(a.latestCard, b.latestCard);
     });
 
-    const ordinal = Math.max(0, item.additionalIndex);
-    let targetGroup = candidates.find((group) => group.cards.length > ordinal) ?? null;
+    let closedSelection: ResolvedSelection | null = null;
+    for (const targetGroup of candidateGroups) {
+      const selected = targetGroup.cards[ordinal];
+      if (!selected) continue;
 
-    if (!targetGroup && ordinal === 0 && candidates.length > 0) {
-      targetGroup = candidates[0];
-    }
-
-    if (!targetGroup) {
-      return {
-        card: null as (typeof cards)[number] | null,
-        matchMode: "NONE" as const,
-      };
-    }
-
-    const selected = targetGroup.cards[ordinal];
-    if (!selected) {
-      return {
-        card: null as (typeof cards)[number] | null,
-        matchMode: "NONE" as const,
-      };
-    }
-
-    return {
-      card: selected,
-      matchMode:
+      const matchMode =
         ordinal === 0
           ? (item.dispatchDateKey ? ("NOMBRE_PRINCIPAL_FECHA" as const) : ("NOMBRE_PRINCIPAL" as const))
-          : (item.dispatchDateKey ? ("ADICIONAL_NOMBRE_Y_FECHA" as const) : ("ADICIONAL_NOMBRE_ORDINAL" as const)),
-    };
-  }
+          : (item.dispatchDateKey ? ("ADICIONAL_NOMBRE_Y_FECHA" as const) : ("ADICIONAL_NOMBRE_ORDINAL" as const));
+      const resolved =
+        ordinal === 0
+          ? resolveBucket("CEDULA", selected.customer.cedula, targetGroup.cards, matchMode)
+          : resolveBucket("TC", selected.tc, targetGroup.cards, matchMode);
 
-  type MatchMode =
-    | "DIRECT"
-    | "NONE"
-    | "NOMBRE_PRINCIPAL"
-    | "NOMBRE_PRINCIPAL_FECHA"
-    | "ADICIONAL_NOMBRE_Y_FECHA"
-    | "ADICIONAL_NOMBRE_ORDINAL";
+      if (resolved.resolution.kind === "SOLO_CERRADAS") {
+        closedSelection ??= resolved;
+        continue;
+      }
+
+      return resolved;
+    }
+
+    return closedSelection ?? noCardSelection();
+  }
   type ResolvedRow = (typeof cleanItems)[number] & {
     card: (typeof cards)[number] | null;
     matchMode: MatchMode;
+    resolution: OperationalCardResolution<CardRecord>;
   };
 
   const resolvedRows = cleanItems.map<ResolvedRow>((item) => {
@@ -481,6 +607,7 @@ export async function POST(request: Request) {
       ...item,
       card: resolved.card,
       matchMode: resolved.matchMode,
+      resolution: resolved.resolution,
     };
   });
 
@@ -489,21 +616,28 @@ export async function POST(request: Request) {
     isRemote: boolean;
     fileNames: string[];
     identifiers: string[];
+    // SDD contrato-tarjetas-pistoleo (design D6): a card's batch entry can
+    // carry both a delivery image and a `(C)` contract image; both strip to
+    // the same identifier and are grouped here without new pairing logic.
+    kinds: { delivery: string[]; contract: string[] };
   }>();
 
   for (const item of resolvedRows) {
     if (!item.card) continue;
+    const bucket = item.isContract ? "contract" : "delivery";
     const existing = groupedByCard.get(item.card.id);
     if (existing) {
       existing.isRemote = existing.isRemote || item.isRemote;
       existing.fileNames.push(item.fileName);
       existing.identifiers.push(item.identifier || item.lookupCandidates[0] || item.fileName);
+      existing.kinds[bucket].push(item.fileName);
     } else {
       groupedByCard.set(item.card.id, {
         card: item.card,
         isRemote: item.isRemote,
         fileNames: [item.fileName],
         identifiers: [item.identifier || item.lookupCandidates[0] || item.fileName],
+        kinds: { delivery: bucket === "delivery" ? [item.fileName] : [], contract: bucket === "contract" ? [item.fileName] : [] },
       });
     }
   }
@@ -512,9 +646,41 @@ export async function POST(request: Request) {
 
   const updatePlan = matchedCards.map((entry) => {
     const card = entry.card;
-    const nextStatus = card.status === CardStatus.ENTREGADA ? CardStatus.ENTREGADA : CardStatus.ENTREGA_DIGITAL;
+    const hasDeliveryImage = entry.kinds.delivery.length > 0;
+    const hasContractImage = entry.kinds.contract.length > 0;
+    const contractAlreadySatisfied = Boolean(card.contractImageAt);
+
+    // SDD contrato-tarjetas-pistoleo (spec: contract-image-intake,
+    // contract-exception-states). `hasContract=false` cards ALWAYS take the
+    // original single-branch path below, byte-identical to pre-feature
+    // behavior — contract images for those cards are treated exactly like
+    // any other delivery image.
+    let nextStatus: CardStatus = card.status;
+    if (card.status === CardStatus.ENTREGADA) {
+      nextStatus = CardStatus.ENTREGADA;
+    } else if (!card.hasContract) {
+      nextStatus = CardStatus.ENTREGA_DIGITAL;
+    } else if (hasDeliveryImage) {
+      nextStatus =
+        hasContractImage || contractAlreadySatisfied
+          ? CardStatus.ENTREGA_DIGITAL
+          : CardStatus.ENTREGA_DIGITAL_SIN_CONTRATO;
+    } else if (hasContractImage) {
+      // Contract-only upload: only resolves an already-pending exception.
+      nextStatus =
+        card.status === CardStatus.ENTREGA_DIGITAL_SIN_CONTRATO
+          ? CardStatus.ENTREGA_DIGITAL
+          : card.status;
+    }
+
     const nextRemote = entry.isRemote ? true : card.isRemote;
-    const shouldUpdate = nextStatus !== card.status || nextRemote !== card.isRemote;
+    const setsContractImage = card.hasContract && hasContractImage && !contractAlreadySatisfied;
+    const nextContractImageAt = setsContractImage ? new Date() : (card.contractImageAt ?? null);
+    const nextContractImageFile = setsContractImage
+      ? (entry.kinds.contract[entry.kinds.contract.length - 1] ?? null)
+      : (card.contractImageFile ?? null);
+    const shouldUpdate = nextStatus !== card.status || nextRemote !== card.isRemote || setsContractImage;
+
     return {
       identifier: entry.identifiers[0] ?? card.tc,
       card,
@@ -523,6 +689,9 @@ export async function POST(request: Request) {
       shouldUpdate,
       fileNames: entry.fileNames,
       hasRemoteTag: entry.isRemote,
+      setsContractImage,
+      nextContractImageAt,
+      nextContractImageFile,
     };
   }).filter(Boolean) as Array<{
     identifier: string;
@@ -532,12 +701,95 @@ export async function POST(request: Request) {
     shouldUpdate: boolean;
     fileNames: string[];
     hasRemoteTag: boolean;
+    setsContractImage: boolean;
+    nextContractImageAt: Date | null;
+    nextContractImageFile: string | null;
   }>;
+
+  type UpdateOutcome =
+    | {
+        kind: "ACTUALIZADA" | "SIN_CAMBIOS";
+        statusBefore: CardStatus;
+        statusAfter: CardStatus;
+        remoteBefore: boolean;
+        remoteAfter: boolean;
+      }
+    | {
+        kind: "CERRADA_DURANTE_PROCESAMIENTO";
+        card: CardRecord;
+      }
+    | {
+        kind: "CAMBIO_CONCURRENTE";
+        status: CardStatus | null;
+      };
+
+  const updateOutcomes = new Map<string, UpdateOutcome>();
 
   if (updatePlan.length) {
     await prisma.$transaction(async (tx) => {
       for (const plan of updatePlan) {
         if (!plan.shouldUpdate) {
+          updateOutcomes.set(plan.card.id, {
+            kind: "SIN_CAMBIOS",
+            statusBefore: plan.card.status,
+            statusAfter: plan.card.status,
+            remoteBefore: plan.card.isRemote,
+            remoteAfter: plan.card.isRemote,
+          });
+          continue;
+        }
+
+        // Claim the exact state we resolved before mutating it. The conditional
+        // write both detects a concurrent status change and holds the row lock
+        // through the transition, so a return cannot be overwritten by this batch.
+        const claim = await tx.card.updateMany({
+          where: {
+            id: plan.card.id,
+            status: plan.card.status,
+            isRemote: plan.card.isRemote,
+            digitalDeliveryCycle: plan.card.digitalDeliveryCycle,
+            contractImageAt: plan.card.contractImageAt,
+          },
+          data: {
+            updatedAt: new Date(),
+          },
+        });
+
+        if (!claim.count) {
+          const current = await tx.card.findUnique({
+            where: { id: plan.card.id },
+            select: {
+              status: true,
+              isRemote: true,
+              returnReason: true,
+              dispatchDate: true,
+              createdAt: true,
+              digitalDeliveryCycle: true,
+            },
+          });
+
+          if (
+            current &&
+            (current.status === CardStatus.RETORNADA || current.status === CardStatus.DEVUELTA_TIENDA)
+          ) {
+            updateOutcomes.set(plan.card.id, {
+              kind: "CERRADA_DURANTE_PROCESAMIENTO",
+              card: {
+                ...plan.card,
+                status: current.status,
+                isRemote: current.isRemote,
+                returnReason: current.returnReason,
+                dispatchDate: current.dispatchDate,
+                createdAt: current.createdAt,
+                digitalDeliveryCycle: current.digitalDeliveryCycle,
+              },
+            });
+          } else {
+            updateOutcomes.set(plan.card.id, {
+              kind: "CAMBIO_CONCURRENTE",
+              status: current?.status ?? null,
+            });
+          }
           continue;
         }
 
@@ -550,8 +802,11 @@ export async function POST(request: Request) {
             ? "marcada como zona remota"
             : "zona remota sin cambio",
         ];
+        if (plan.setsContractImage) {
+          noteParts.push("imagen de contrato registrada");
+        }
 
-        await applyCardTransition({
+        const updated = await applyCardTransition({
           tx,
           card: plan.card,
           nextStatus: plan.nextStatus,
@@ -559,43 +814,106 @@ export async function POST(request: Request) {
           note: noteParts.join(" | "),
           data: {
             isRemote: plan.nextRemote,
+            ...(plan.setsContractImage
+              ? { contractImageAt: plan.nextContractImageAt, contractImageFile: plan.nextContractImageFile }
+              : {}),
           },
+        });
+
+        updateOutcomes.set(plan.card.id, {
+          kind: "ACTUALIZADA",
+          statusBefore: plan.card.status,
+          statusAfter: updated.status,
+          remoteBefore: plan.card.isRemote,
+          remoteAfter: updated.isRemote,
         });
       }
     });
   }
 
+  function operationalCardDetails(card: CardRecord) {
+    return {
+      id: card.id,
+      tc: card.tc,
+      externalReference: card.externalReference,
+      status: card.status,
+      dispatchDate: card.dispatchDate,
+      createdAt: card.createdAt,
+      returnReason: card.returnReason,
+      customer: card.customer,
+    };
+  }
+
   const rows = resolvedRows.map((item) => {
     if (!item.card) {
-      return {
+      const base = {
         fileName: item.fileName,
         identifier: item.identifier || item.lookupCandidates[0] || stripExtension(item.fileName),
         found: false,
+      };
+      if (item.resolution.kind === "SOLO_CERRADAS") {
+        return {
+          ...base,
+          action: "OMITIDA_TARJETA_CERRADA",
+          closedCards: item.resolution.closedCards.map(operationalCardDetails),
+        };
+      }
+      if (item.resolution.kind === "REQUIERE_SELECCION") {
+        return {
+          ...base,
+          action: "AMBIGUA_REQUIERE_REVISION",
+          options: item.resolution.options.map(operationalCardDetails),
+        };
+      }
+      return {
+        ...base,
         action: "NO_ENCONTRADA",
       };
     }
 
     const card = item.card;
+    const base = {
+      fileName: item.fileName,
+      identifier: item.identifier || item.lookupCandidates[0] || card.tc,
+      found: false,
+    };
+    const outcome = updateOutcomes.get(card.id);
+    if (outcome?.kind === "CERRADA_DURANTE_PROCESAMIENTO") {
+      return {
+        ...base,
+        action: "OMITIDA_TARJETA_CERRADA",
+        closedCards: [operationalCardDetails(outcome.card)],
+      };
+    }
+    if (outcome?.kind === "CAMBIO_CONCURRENTE") {
+      return {
+        ...base,
+        action: "OMITIDA_CAMBIO_CONCURRENTE",
+        statusActual: outcome.status,
+      };
+    }
+
     const aggregate = groupedByCard.get(card.id);
     if (!aggregate) {
       return {
-        fileName: item.fileName,
-        identifier: item.identifier || item.lookupCandidates[0] || stripExtension(item.fileName),
-        found: false,
+        ...base,
         action: "NO_ENCONTRADA",
       };
     }
 
-    const nextStatus = card.status === CardStatus.ENTREGADA ? CardStatus.ENTREGADA : CardStatus.ENTREGA_DIGITAL;
-    const nextRemote = aggregate.isRemote ? true : card.isRemote;
+    const statusBefore = outcome?.statusBefore ?? card.status;
+    const statusAfter = outcome?.statusAfter ??
+      (statusBefore === CardStatus.ENTREGADA ? CardStatus.ENTREGADA : CardStatus.ENTREGA_DIGITAL);
+    const remoteBefore = outcome?.remoteBefore ?? card.isRemote;
+    const remoteAfter = outcome?.remoteAfter ?? (aggregate.isRemote ? true : remoteBefore);
 
     let action = "SIN_CAMBIOS";
-    if (nextStatus !== card.status) {
+    if (statusAfter !== statusBefore) {
       action = "STATUS_DIGITAL_APLICADO";
-    } else if (card.status === CardStatus.ENTREGADA) {
+    } else if (statusBefore === CardStatus.ENTREGADA) {
       action = "ENTREGADA_SE_MANTIENE";
     }
-    if (nextRemote !== card.isRemote) {
+    if (remoteAfter !== remoteBefore) {
       action = action === "SIN_CAMBIOS" ? "MARCADA_ZONA_REMOTA" : `${action} + ZONA_REMOTA`;
     }
     if (item.matchMode === "ADICIONAL_NOMBRE_Y_FECHA") {
@@ -606,6 +924,11 @@ export async function POST(request: Request) {
       action = action === "SIN_CAMBIOS" ? "NOMBRE_PRINCIPAL_FECHA" : `${action} + NOMBRE_PRINCIPAL_FECHA`;
     } else if (item.matchMode === "NOMBRE_PRINCIPAL") {
       action = action === "SIN_CAMBIOS" ? "NOMBRE_PRINCIPAL" : `${action} + NOMBRE_PRINCIPAL`;
+    } else if (item.matchMode === "MANUAL") {
+      action = action === "SIN_CAMBIOS" ? "SELECCION_MANUAL" : `${action} + SELECCION_MANUAL`;
+    }
+    if (statusAfter === CardStatus.ENTREGA_DIGITAL_SIN_CONTRATO) {
+      action = action === "SIN_CAMBIOS" ? "SIN_CONTRATO_PENDIENTE" : `${action} + SIN_CONTRATO_PENDIENTE`;
     }
 
     return {
@@ -613,23 +936,48 @@ export async function POST(request: Request) {
       identifier: item.identifier || item.lookupCandidates[0] || card.tc,
       found: true,
       cardId: card.id,
-      statusBefore: card.status,
-      statusAfter: nextStatus,
-      remoteBefore: card.isRemote,
-      remoteAfter: nextRemote,
+      statusBefore,
+      statusAfter,
+      remoteBefore,
+      remoteAfter,
       action,
+      customer: card.customer,
+      provincia: card.customer.provincia,
     };
   });
 
   const matchedFiles = new Set(rows.filter((row) => row.found).map((row) => row.fileName));
   const cardsMatched = matchedFiles.size;
-  const cardsNotFound = cleanItems.length - cardsMatched;
-  const updatedToDigital = updatePlan.filter(
-    (item) => item.shouldUpdate && item.card.status !== CardStatus.ENTREGADA && item.nextStatus === CardStatus.ENTREGA_DIGITAL,
+  const cardsNotFound = rows.filter((row) => row.action === "NO_ENCONTRADA").length;
+  const closedSkipped = rows.filter((row) => row.action === "OMITIDA_TARJETA_CERRADA").length;
+  const ambiguous = rows.filter((row) => row.action === "AMBIGUA_REQUIERE_REVISION").length;
+  const concurrencySkipped = rows.filter((row) => row.action === "OMITIDA_CAMBIO_CONCURRENTE").length;
+  const completedOutcomes = Array.from(updateOutcomes.values()).filter(
+    (outcome): outcome is Extract<UpdateOutcome, { kind: "ACTUALIZADA" | "SIN_CAMBIOS" }> =>
+      outcome.kind === "ACTUALIZADA" || outcome.kind === "SIN_CAMBIOS",
+  );
+  const updatedToDigital = completedOutcomes.filter(
+    (outcome) =>
+      outcome.kind === "ACTUALIZADA" &&
+      outcome.statusBefore !== CardStatus.ENTREGA_DIGITAL &&
+      outcome.statusAfter === CardStatus.ENTREGA_DIGITAL,
   ).length;
-  const keptDelivered = updatePlan.filter((item) => item.card.status === CardStatus.ENTREGADA).length;
-  const markedRemote = updatePlan.filter((item) => item.nextRemote && !item.card.isRemote).length;
-  const unchanged = updatePlan.filter((item) => !item.shouldUpdate).length;
+  const keptDelivered = completedOutcomes.filter(
+    (outcome) => outcome.statusBefore === CardStatus.ENTREGADA,
+  ).length;
+  const markedRemote = completedOutcomes.filter(
+    (outcome) => outcome.remoteAfter && !outcome.remoteBefore,
+  ).length;
+  const unchanged = completedOutcomes.filter((outcome) => outcome.kind === "SIN_CAMBIOS").length;
+  // SDD contrato-tarjetas-pistoleo (spec: contract-image-intake). Cards
+  // diverted to ENTREGA_DIGITAL_SIN_CONTRATO because their batch had a
+  // delivery image but no matching `(C)` contract image.
+  const contractWarnings = completedOutcomes.filter(
+    (outcome) => outcome.statusAfter === CardStatus.ENTREGA_DIGITAL_SIN_CONTRATO,
+  ).length;
+  const contractWarningCards = rows
+    .filter((row) => row.action.includes("SIN_CONTRATO_PENDIENTE"))
+    .map((row) => row.identifier);
 
   await prisma.auditLog.create({
     data: {
@@ -642,9 +990,13 @@ export async function POST(request: Request) {
         uniqueIdentifiers: lookupValues.length,
         cardsMatched,
         cardsNotFound,
+        closedSkipped,
+        ambiguous,
+        concurrencySkipped,
         updatedToDigital,
         keptDelivered,
         markedRemote,
+        contractWarnings,
       } as Prisma.InputJsonValue,
     },
   });
@@ -655,11 +1007,16 @@ export async function POST(request: Request) {
       uniqueIdentifiers: lookupValues.length,
       cardsMatched,
       cardsNotFound,
+      closedSkipped,
+      ambiguous,
+      concurrencySkipped,
       updatedToDigital,
       keptDelivered,
       markedRemote,
       unchanged,
+      contractWarnings,
     },
+    contractWarningCards,
     rows,
   });
 }

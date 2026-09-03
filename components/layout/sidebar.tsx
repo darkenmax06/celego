@@ -18,6 +18,10 @@ import {
   Images,
   Search,
   TimerOff,
+  Upload,
+  Smartphone,
+  ShieldCheck,
+  FileWarning,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { type ModuleName } from "@/lib/constants";
@@ -30,12 +34,16 @@ const NAV_ITEMS: Array<{
 }> = [
   { module: "dashboard", label: "Dashboard", href: "/dashboard", icon: ChartArea },
   { module: "tarjetas", label: "Tarjetas", href: "/tarjetas", icon: CreditCard },
+  { module: "consolidado_debito", label: "Consolidado d\u00e9bito", href: "/consolidado-debito", icon: Upload },
   { module: "modificacion_masiva", label: "Actualizacion masiva", href: "/modificacion-masiva", icon: ScanLine },
   { module: "status_digitales", label: "Entrega digital (imagenes)", href: "/status-digitales", icon: Images },
   { module: "rastreo_masivo", label: "Rastreo masivo", href: "/rastreo-masivo", icon: Search },
-  { module: "sla_vencidas", label: "SLA vencidas", href: "/sla-vencidas", icon: TimerOff },
+  { module: "sla_vencidas", label: "Vencimientos", href: "/sla-vencidas", icon: TimerOff },
   { module: "rutas", label: "Rutas", href: "/rutas", icon: Route },
+  { module: "flota", label: "Flota", href: "/flota", icon: Smartphone },
+  { module: "piloto_movil", label: "Piloto movil", href: "/piloto-movil", icon: ShieldCheck },
   { module: "operativo", label: "Operativo", href: "/operativo", icon: Phone },
+  { module: "contratos_pendientes", label: "Contratos pendientes", href: "/contratos-pendientes", icon: FileWarning },
   { module: "redaccion", label: "Redaccion", href: "/redaccion", icon: FileText },
   { module: "mensajeros", label: "Mensajeros", href: "/mensajeros", icon: Bike },
   { module: "facturacion", label: "Facturacion", href: "/facturacion", icon: HandCoins },

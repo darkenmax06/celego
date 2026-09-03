@@ -104,6 +104,27 @@ function recordSignature(date: string, counts: Counts) {
   return `${date}|${counts.NORMAL}|${counts.REMOTA}|${counts.RECOGIDA}|${counts.MANDADO}`;
 }
 
+async function copyTextToClipboard(value: string) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(value);
+    return;
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = value;
+  textarea.setAttribute("readonly", "true");
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  document.body.appendChild(textarea);
+  textarea.select();
+  const copied = document.execCommand("copy");
+  document.body.removeChild(textarea);
+
+  if (!copied) {
+    throw new Error("Clipboard no disponible");
+  }
+}
+
 function initials(name: string) {
   return name
     .split(" ")
@@ -702,6 +723,7 @@ function MessengerModal({
   const [busy, setBusy] = useState(false);
   const [savingRecord, setSavingRecord] = useState(false);
   const [feedback, setFeedback] = useState("");
+  const [copiedMessengerId, setCopiedMessengerId] = useState(false);
   const skipRecordAutoSave = useRef(true);
   const recordAutoSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastRecordSignature = useRef("");
@@ -764,6 +786,16 @@ function MessengerModal({
     setBusy(false);
     setFeedback("Perfil actualizado");
     await onUpdated("Perfil de mensajero actualizado");
+  }
+
+  async function copyMessengerId() {
+    try {
+      await copyTextToClipboard(messenger.id);
+      setCopiedMessengerId(true);
+      setFeedback("Messenger ID copiado. Pegalo en Expo Go para iniciar sesion.");
+    } catch {
+      setFeedback("No se pudo copiar automaticamente. Selecciona el ID y copialo manualmente.");
+    }
   }
 
   const saveDailyRecord = useCallback(async (silent = false) => {
@@ -929,6 +961,29 @@ function MessengerModal({
         <div className="flex-1 overflow-y-auto px-5 py-4">
           {tab === "perfil" ? (
             <div>
+              <div className="mb-4 rounded-2xl border border-blue-100 bg-blue-50/70 p-4">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <p className="text-xs font-bold uppercase tracking-wide text-blue-700">
+                      Messenger ID para la app movil
+                    </p>
+                    <p className="mt-1 text-sm text-slate-600">
+                      Usalo en Expo Go junto al usuario del mensajero para vincular login, dispositivo y ruta segura.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => void copyMessengerId()}
+                    className="rounded-xl bg-[#0f2544] px-3 py-2 text-xs font-semibold text-white shadow-sm transition hover:bg-[#17345d]"
+                  >
+                    {copiedMessengerId ? "ID copiado" : "Copiar ID"}
+                  </button>
+                </div>
+                <code className="mt-3 block overflow-x-auto rounded-xl border border-blue-100 bg-white px-3 py-2 font-mono text-xs text-slate-800">
+                  {messenger.id}
+                </code>
+              </div>
+
               <div className="mb-3 grid gap-3 md:grid-cols-3">
                 <input
                   value={telefono}

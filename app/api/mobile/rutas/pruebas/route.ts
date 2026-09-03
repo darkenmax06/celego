@@ -6,6 +6,7 @@ import { CardStatus, Prisma, UserRole } from "@prisma/client";
 import { requireMobileSession } from "@/lib/mobile-session";
 import { prisma } from "@/lib/prisma";
 import { clearUrgencyOnCardClosure } from "@/lib/urgent-alerts";
+import { resolveRouteItemCheckedAt } from "@/lib/route-proof-write";
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024;
 const ALLOWED_MIME = new Set([
@@ -142,15 +143,21 @@ export async function POST(request: NextRequest) {
   if (nextStatus) {
     updateData.status = nextStatus;
     updateData.currentMessenger = { connect: { id: item.route.messengerId } };
+    updateData.lastAssignedMessenger = { connect: { id: item.route.messengerId } };
     updateData.returnReason =
       nextStatus === CardStatus.DEVUELTA_TIENDA ? note : null;
-    await prisma.routeItem.update({
-      where: { id: item.id },
-      data: { checkedAt: nextStatus === CardStatus.EN_RUTA ? null : now },
-    });
   }
 
   await prisma.$transaction(async (tx) => {
+    if (nextStatus) {
+      // Must stay inside the transaction: a failure further down would
+      // otherwise leave `checkedAt` already mutated with nothing to roll it back.
+      await tx.routeItem.update({
+        where: { id: item.id },
+        data: { checkedAt: resolveRouteItemCheckedAt(nextStatus, now) },
+      });
+    }
+
     await tx.card.update({
       where: { id: item.cardId },
       data: updateData,

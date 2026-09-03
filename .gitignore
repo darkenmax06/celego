@@ -32,12 +32,17 @@ yarn-error.log*
 
 # local temp
 celego-app-temp/
+.claude/
+.relay/
+/tmp/
 mobile/.expo/
 mobile/dist/
 mobile/build-log.txt
+.atl/
 
 # env files (can opt-in for committing if needed)
 .env*
+!infra/**/.env.example
 
 # vercel
 .vercel
@@ -45,3 +50,6 @@ mobile/build-log.txt
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Production dumps (never commit real card data)
+tmp/dumps/

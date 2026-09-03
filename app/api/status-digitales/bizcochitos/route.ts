@@ -1,24 +1,24 @@
-import { CardStatus } from "@prisma/client";
 import { NextRequest, NextResponse } from "next/server";
 import { requireApiSession } from "@/lib/api-session";
 import { generateBizcochito } from "@/lib/bizcochito";
+import { DIGITAL_DELIVERY_STATUSES } from "@/lib/card-transition";
+import { buildListEnvelope, compile } from "@/lib/list-query";
+import { bizcochitosListQuery } from "@/lib/list-query/descriptors/bizcochitos";
 import { prisma } from "@/lib/prisma";
 
 export async function GET(request: NextRequest) {
   const auth = await requireApiSession(["ADMIN", "OPERADOR"]);
   if ("error" in auth) return auth.error;
 
-  const pageRaw = Number(request.nextUrl.searchParams.get("page") ?? "1");
-  const pageSizeRaw = Number(request.nextUrl.searchParams.get("pageSize") ?? "15");
-  const page = Number.isFinite(pageRaw) ? Math.max(1, Math.trunc(pageRaw)) : 1;
-  const pageSize = Number.isFinite(pageSizeRaw)
-    ? Math.min(50, Math.max(1, Math.trunc(pageSizeRaw)))
-    : 15;
+  // This route accepts no filters, no search and no sort; the descriptor only
+  // carries its 15/50 page sizes and the `generatedAt desc, sequence desc`
+  // ordering. The `count()` below stays unfiltered, exactly as before.
+  const query = compile(bizcochitosListQuery, request.nextUrl.searchParams);
 
   const [pendingCount, batches, total, latest] = await Promise.all([
     prisma.card.count({
       where: {
-        status: CardStatus.ENTREGA_DIGITAL,
+        status: { in: Array.from(DIGITAL_DELIVERY_STATUSES) },
         bizcochito: false,
         digitalDeliveryCycle: { gt: 0 },
       },
@@ -39,9 +39,9 @@ export async function GET(request: NextRequest) {
           },
         },
       },
-      orderBy: [{ generatedAt: "desc" }, { sequence: "desc" }],
-      skip: (page - 1) * pageSize,
-      take: pageSize,
+      orderBy: query.orderBy,
+      skip: query.skip,
+      take: query.take,
     }),
     prisma.bizcochitoBatch.count(),
     prisma.bizcochitoBatch.findFirst({
@@ -54,12 +54,7 @@ export async function GET(request: NextRequest) {
     pendingCount,
     latest,
     batches,
-    pagination: {
-      page,
-      pageSize,
-      total,
-      totalPages: Math.max(1, Math.ceil(total / pageSize)),
-    },
+    pagination: buildListEnvelope({ page: query.page, pageSize: query.pageSize, total }),
   });
 }
 

@@ -112,11 +112,13 @@ export async function POST(
         reassignedProvince: province.nombre,
         reassignedZone: province.zona,
         reassignedMessengerId: messenger.id,
+        lastAssignedMessengerId: messenger.id,
         reassignedAt: reassignment.createdAt,
       },
       include: {
         customer: true,
         currentMessenger: true,
+        lastAssignedMessenger: true,
         reassignedMessenger: true,
       },
     });

@@ -3,6 +3,7 @@ import { CardStatus } from "@prisma/client";
 import { requireApiSession } from "@/lib/api-session";
 import { prisma } from "@/lib/prisma";
 import { remainingBusinessDays } from "@/lib/sla";
+import { SLA_CLOSED_STATUSES } from "@/lib/list-query/descriptors/sla-vencidas";
 import {
   clampUrgencyLevel,
   emitDueUrgentNotifications,
@@ -93,13 +94,7 @@ export async function GET(request: Request) {
     prisma.card.findMany({
       where: {
         status: {
-          notIn: [
-            CardStatus.ENTREGADA,
-            CardStatus.RETORNADA,
-            CardStatus.ENTREGA_DIGITAL,
-            CardStatus.ACUSE_RECIBIDO,
-            CardStatus.DEVUELTA_TIENDA,
-          ],
+          notIn: [...SLA_CLOSED_STATUSES],
         },
         slaDueDate: { not: null },
         dispatchDate: dispatchRange,
@@ -114,7 +109,7 @@ export async function GET(request: Request) {
     }),
     prisma.card.findMany({
       where: {
-        status: { not: CardStatus.ENTREGADA },
+        status: { notIn: [CardStatus.ENTREGADA, CardStatus.TD_ENTREGADO] },
         dispatchDate: dispatchRange,
       },
       select: {
@@ -184,6 +179,23 @@ export async function GET(request: Request) {
     .sort((a, b) => (a.remaining ?? 99) - (b.remaining ?? 99))
     .slice(0, 10);
 
+  const activeZoneStatuses = new Set<CardStatus>([
+    CardStatus.ENTREGADA,
+    CardStatus.RETORNADA,
+    CardStatus.ENTREGA_DIGITAL,
+    CardStatus.ACUSE_RECIBIDO,
+    CardStatus.DEVUELTA_TIENDA,
+  ]);
+  const zoneCounts = new Map<string, number>();
+  for (const card of nonDeliveredCards) {
+    if (activeZoneStatuses.has(card.status)) continue;
+    const zona = card.zona || "Sin zona";
+    zoneCounts.set(zona, (zoneCounts.get(zona) ?? 0) + 1);
+  }
+  const zoneBreakdown = Array.from(zoneCounts.entries())
+    .map(([zona, count]) => ({ zona, count }))
+    .sort((a, b) => b.count - a.count);
+
   const contactadasPendientes = nonDeliveredCards
     .filter((card) => {
       const root =
@@ -225,6 +237,7 @@ export async function GET(request: Request) {
     },
     urgentes: activeUrgentCases,
     slaAlerts,
+    zoneBreakdown,
     recentActivity: recentLogs.map((log) => ({
       ...log,
       card: {

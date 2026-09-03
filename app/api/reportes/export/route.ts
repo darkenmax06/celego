@@ -1,14 +1,29 @@
 import { NextRequest, NextResponse } from "next/server";
-import { CardStatus, Prisma, RedactionStatus, RedactionType } from "@prisma/client";
+import {
+  CardProductType,
+  CardStatus,
+  DispatchOrigin,
+  Prisma,
+  RedactionStatus,
+  RedactionType,
+} from "@prisma/client";
 import ExcelJS from "exceljs";
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 import { requireApiSession } from "@/lib/api-session";
+import {
+  resolveAssignedMessengerName,
+  type ReassignmentEvidence,
+  type RouteAssignmentEvidence,
+} from "@/lib/assigned-messenger";
 import { dedupeBillingCardsByCustomerAndDispatchDate } from "@/lib/billing";
+import { getCardIdentifier } from "@/lib/card-identifier";
 import { formatDateEs } from "@/lib/date";
+import { displayText } from "@/lib/display";
 import { resolveBillableZone } from "@/lib/delivery-location";
 import { fromCents } from "@/lib/money";
 import { prisma } from "@/lib/prisma";
 import { exportRowsToCsv, exportRowsToPdf, exportRowsToXlsx } from "@/lib/reports/export";
+import { getCeleritasLogoPngBuffer } from "@/lib/reports/logo";
 import { normalizeText } from "@/lib/utils";
 
 function fileHeaders(filename: string, contentType: string) {
@@ -41,6 +56,116 @@ function parseFxRate(raw: string | null) {
   const parsed = Number(raw);
   if (!Number.isFinite(parsed) || parsed <= 0) return 1;
   return parsed;
+}
+
+function parseProductType(raw: string | null) {
+  if (raw === CardProductType.CREDITO || raw === CardProductType.DEBITO) {
+    return raw;
+  }
+  return null;
+}
+
+function productFields(card: {
+  productType: CardProductType;
+  tc: string | null;
+  requestNumber: string | null;
+}) {
+  const numeroTarjeta = card.tc ?? "";
+  const numeroSolicitud = card.requestNumber ?? "";
+  return {
+    producto: card.productType,
+    numeroTarjeta,
+    numeroSolicitud,
+    identificador: getCardIdentifier(card),
+  };
+}
+
+type AssignmentHistory = {
+  routeAssignments: RouteAssignmentEvidence[];
+  reassignments: ReassignmentEvidence[];
+};
+
+type CardWithMessengerEvidence = {
+  id: string;
+  lastAssignedMessenger?: { id: string; nombre: string } | null;
+  currentMessenger?: { id: string; nombre: string } | null;
+  reassignedMessenger?: { id: string; nombre: string } | null;
+  reassignedAt?: Date | null;
+};
+
+async function getAssignmentHistoryByCard(cardIds: string[]) {
+  const uniqueCardIds = [...new Set(cardIds.filter(Boolean))];
+  const history = new Map<string, AssignmentHistory>();
+  if (!uniqueCardIds.length) return history;
+
+  const [routeItems = [], reassignments = []] = await Promise.all([
+    prisma.routeItem.findMany({
+      where: { cardId: { in: uniqueCardIds } },
+      select: {
+        cardId: true,
+        route: {
+          select: {
+            id: true,
+            createdAt: true,
+            messenger: { select: { id: true, nombre: true } },
+          },
+        },
+      },
+    }),
+    prisma.cardDeliveryReassignment.findMany({
+      where: { cardId: { in: uniqueCardIds } },
+      select: {
+        id: true,
+        cardId: true,
+        createdAt: true,
+        toMessengerId: true,
+        toMessengerName: true,
+      },
+    }),
+  ]);
+
+  for (const item of routeItems) {
+    const current = history.get(item.cardId) ?? {
+      routeAssignments: [],
+      reassignments: [],
+    };
+    current.routeAssignments.push({
+      id: item.route.id,
+      assignedAt: item.route.createdAt,
+      messenger: item.route.messenger,
+    });
+    history.set(item.cardId, current);
+  }
+
+  for (const item of reassignments) {
+    const current = history.get(item.cardId) ?? {
+      routeAssignments: [],
+      reassignments: [],
+    };
+    current.reassignments.push({
+      id: item.id,
+      assignedAt: item.createdAt,
+      messenger: { id: item.toMessengerId, nombre: item.toMessengerName },
+    });
+    history.set(item.cardId, current);
+  }
+
+  return history;
+}
+
+function assignedMessengerName(
+  card: CardWithMessengerEvidence,
+  historyByCard: Map<string, AssignmentHistory>,
+) {
+  const history = historyByCard.get(card.id);
+  return resolveAssignedMessengerName({
+    lastAssignedMessenger: card.lastAssignedMessenger,
+    currentMessenger: card.currentMessenger,
+    reassignedMessenger: card.reassignedMessenger,
+    reassignedAt: card.reassignedAt,
+    routeAssignments: history?.routeAssignments,
+    reassignments: history?.reassignments,
+  });
 }
 
 type LifecycleDates = {
@@ -96,7 +221,11 @@ async function getLifecycleDatesByCard(cardIds: string[]) {
 type RedactionExportRows = {
   retornadas: Array<{
     no: number;
+    producto: string;
     numeroTc: string;
+    numeroTarjeta: string;
+    numeroSolicitud: string;
+    identificador: string;
     nombre: string;
     cedula: string;
     adicional: string;
@@ -105,10 +234,15 @@ type RedactionExportRows = {
     comentario: string;
     provinciaReasignacion: string;
     mensajeroReasignado: string;
+    mensajero: string;
   }>;
   entregadas: Array<{
     no: number;
+    producto: string;
     numeroTc: string;
+    numeroTarjeta: string;
+    numeroSolicitud: string;
+    identificador: string;
     nombre: string;
     cedula: string;
     adicional: string;
@@ -117,6 +251,7 @@ type RedactionExportRows = {
     estatus: string;
     provinciaReasignacion: string;
     mensajeroReasignado: string;
+    mensajero: string;
   }>;
   zona: string;
   fecha: string;
@@ -132,9 +267,19 @@ async function buildRedactionExportRows(request: NextRequest): Promise<Redaction
     : [];
   const zona = request.nextUrl.searchParams.get("zona");
   const date = request.nextUrl.searchParams.get("date");
+  const productType = parseProductType(
+    request.nextUrl.searchParams.get("producto") ??
+      request.nextUrl.searchParams.get("productType"),
+  );
+  const origin = request.nextUrl.searchParams.get("origin");
+  const redactionType = request.nextUrl.searchParams.get("redactionType");
 
   const where: Record<string, unknown> = {};
   where.status = RedactionStatus.APROBADA;
+  if (origin && origin !== "ALL") where.dispatchOrigin = origin;
+  if (redactionType === RedactionType.ENTREGA || redactionType === RedactionType.RETORNO) {
+    where.tipo = redactionType;
+  }
   if (redactionIds.length) {
     where.id = { in: redactionIds };
   } else {
@@ -156,6 +301,8 @@ async function buildRedactionExportRows(request: NextRequest): Promise<Redaction
           card: {
             include: {
               customer: true,
+              currentMessenger: true,
+              lastAssignedMessenger: true,
               reassignedMessenger: true,
             },
           },
@@ -177,14 +324,23 @@ async function buildRedactionExportRows(request: NextRequest): Promise<Redaction
     ? filteredByDate.filter((red) => normalizeText(red.zona) === normalizeText(zona))
     : filteredByDate;
 
-  const source = filteredRedactions.length ? filteredRedactions : redactions;
+  // Never fall back to unfiltered records: an empty exact filter must export zero rows.
+  const source = filteredRedactions;
+  const historyByCard = await getAssignmentHistoryByCard(
+    source.flatMap((redaction) => redaction.items.map((item) => item.cardId)),
+  );
 
   const retornadas = source
     .filter((red) => red.tipo === RedactionType.RETORNO)
-    .flatMap((red) => red.items.map((item) => ({ red, item })))
+    .flatMap((red) =>
+      red.items
+        .filter((item) => !productType || item.card.productType === productType)
+        .map((item) => ({ red, item })),
+    )
     .map(({ red, item }, index) => ({
       no: index + 1,
-      numeroTc: item.card.tc,
+      ...productFields(item.card),
+      numeroTc: item.card.tc ?? "",
       nombre: item.card.customer.nombre,
       cedula: item.card.customer.cedula,
       adicional: item.card.isAdditional ? "SI" : "NO",
@@ -193,14 +349,20 @@ async function buildRedactionExportRows(request: NextRequest): Promise<Redaction
       comentario: item.comentario ?? "",
       provinciaReasignacion: item.card.reassignedProvince ?? "",
       mensajeroReasignado: item.card.reassignedMessenger?.nombre ?? "",
+      mensajero: assignedMessengerName(item.card, historyByCard),
     }));
 
   const entregadas = source
     .filter((red) => red.tipo === RedactionType.ENTREGA)
-    .flatMap((red) => red.items.map((item) => ({ red, item })))
+    .flatMap((red) =>
+      red.items
+        .filter((item) => !productType || item.card.productType === productType)
+        .map((item) => ({ red, item })),
+    )
     .map(({ red, item }, index) => ({
       no: index + 1,
-      numeroTc: item.card.tc,
+      ...productFields(item.card),
+      numeroTc: item.card.tc ?? "",
       nombre: item.card.customer.nombre,
       cedula: item.card.customer.cedula,
       adicional: item.card.isAdditional ? "SI" : "NO",
@@ -209,6 +371,7 @@ async function buildRedactionExportRows(request: NextRequest): Promise<Redaction
       estatus: "ENTREGADA",
       provinciaReasignacion: item.card.reassignedProvince ?? "",
       mensajeroReasignado: item.card.reassignedMessenger?.nombre ?? "",
+      mensajero: assignedMessengerName(item.card, historyByCard),
     }));
 
   return {
@@ -239,6 +402,10 @@ async function exportRedactionToXlsx(rows: RedactionExportRows) {
     { key: "comentario", width: 30 },
     { key: "provinciaReasignacion", width: 24 },
     { key: "mensajeroReasignado", width: 28 },
+    { key: "producto", width: 14 },
+    { key: "numeroSolicitud", width: 24 },
+    { key: "identificador", width: 24 },
+    { key: "mensajero", width: 28 },
   ];
   retornadas.getRow(3).values = [
     "NO",
@@ -251,6 +418,10 @@ async function exportRedactionToXlsx(rows: RedactionExportRows) {
     "COMENTARIO",
     "PROVINCIA REASIGNACION",
     "MENSAJERO REASIGNADO",
+    "PRODUCTO",
+    "NUMERO SOLICITUD",
+    "IDENTIFICADOR",
+    "MENSAJERO ASIGNADO",
   ];
   for (const row of rows.retornadas) {
     retornadas.addRow(row);
@@ -264,6 +435,10 @@ async function exportRedactionToXlsx(rows: RedactionExportRows) {
     { key: "estatus", width: 18 },
     { key: "provinciaReasignacion", width: 24 },
     { key: "mensajeroReasignado", width: 28 },
+    { key: "producto", width: 14 },
+    { key: "numeroSolicitud", width: 24 },
+    { key: "identificador", width: 24 },
+    { key: "mensajero", width: 28 },
   ];
   entregadas.getRow(3).values = [
     "NO",
@@ -276,6 +451,10 @@ async function exportRedactionToXlsx(rows: RedactionExportRows) {
     "ESTATUS",
     "PROVINCIA REASIGNACION",
     "MENSAJERO REASIGNADO",
+    "PRODUCTO",
+    "NUMERO SOLICITUD",
+    "IDENTIFICADOR",
+    "MENSAJERO ASIGNADO",
   ];
   for (const row of rows.entregadas) {
     entregadas.addRow(row);
@@ -294,15 +473,18 @@ async function exportRedactionToPdf(rows: RedactionExportRows) {
   const regular = await pdf.embedFont(StandardFonts.Helvetica);
   const bold = await pdf.embedFont(StandardFonts.HelveticaBold);
 
+  const logoBuffer = await getCeleritasLogoPngBuffer();
+  const logoImage = logoBuffer ? await pdf.embedPng(logoBuffer).catch(() => null) : null;
+
   const drawSection = (input: {
     title: string;
     headers: string[];
     dataRows: string[][];
   }) => {
-    const rowsPerPage = 41;
+    const rowsPerPage = 38;
     const pageCount = Math.max(1, Math.ceil(input.dataRows.length / rowsPerPage));
-    const cols = [28, 48, 112, 246, 326, 374, 423, 478, 585, 690];
-    const maxLengths = [4, 14, 18, 12, 7, 4, 10, 14, 16, 14];
+    const cols = [18, 35, 88, 184, 244, 273, 296, 339, 410, 469, 532, 565, 640, 710];
+    const maxLengths = [3, 8, 14, 10, 3, 2, 8, 10, 8, 8, 5, 11, 11, 9];
 
     for (let pageIndex = 0; pageIndex < pageCount; pageIndex += 1) {
       const page = pdf.addPage([792, 612]);
@@ -310,33 +492,65 @@ async function exportRedactionToPdf(rows: RedactionExportRows) {
         pageIndex * rowsPerPage,
         (pageIndex + 1) * rowsPerPage,
       );
+
+      if (logoImage) {
+        const logoWidth = 140;
+        const logoHeight = 28;
+        page.drawImage(logoImage, {
+          x: 792 - 28 - logoWidth,
+          y: 568,
+          width: logoWidth,
+          height: logoHeight,
+        });
+      }
+
       page.drawText(input.title, {
         x: 28,
-        y: 580,
-        size: 16,
+        y: 578,
+        size: 15,
         font: bold,
-        color: rgb(0.06, 0.12, 0.24),
+        color: rgb(0.04, 0.11, 0.21),
       });
-      page.drawText(`Fecha: ${rows.fecha}`, { x: 28, y: 562, size: 9, font: regular });
-      page.drawText(`Zona: ${rows.zona}`, { x: 180, y: 562, size: 9, font: regular });
-      page.drawText(`Pagina ${pageIndex + 1} de ${pageCount}`, {
-        x: 690,
+      page.drawText(`Fecha: ${rows.fecha}`, {
+        x: 28,
         y: 562,
+        size: 8.5,
+        font: regular,
+        color: rgb(0.35, 0.4, 0.45),
+      });
+      page.drawText(`Zona: ${rows.zona}`, {
+        x: 140,
+        y: 562,
+        size: 8.5,
+        font: regular,
+        color: rgb(0.35, 0.4, 0.45),
+      });
+      page.drawText(`Pagina ${pageIndex + 1} de ${pageCount}`, {
+        x: 792 - 28 - 70,
+        y: 554,
         size: 8,
         font: regular,
+        color: rgb(0.45, 0.5, 0.55),
       });
 
-      let y = 540;
+      page.drawLine({
+        start: { x: 28, y: 548 },
+        end: { x: 792 - 28, y: 548 },
+        thickness: 0.75,
+        color: rgb(0.85, 0.88, 0.92),
+      });
+
+      let y = 534;
       input.headers.forEach((header, idx) => {
         page.drawText(header, {
           x: cols[idx],
           y,
-          size: 7,
+          size: 7.5,
           font: bold,
-          color: rgb(0.35, 0.35, 0.35),
+          color: rgb(0.2, 0.25, 0.3),
         });
       });
-      y -= 11;
+      y -= 12;
 
       if (!pageRows.length) {
         page.drawText("Sin registros para esta redaccion.", {
@@ -354,7 +568,7 @@ async function exportRedactionToPdf(rows: RedactionExportRows) {
           page.drawText((cell ?? "").slice(0, maxLengths[idx] ?? 18), {
             x: cols[idx],
             y,
-            size: 7,
+            size: 5.5,
             font: regular,
             color: rgb(0.2, 0.2, 0.2),
           });
@@ -375,6 +589,10 @@ async function exportRedactionToPdf(rows: RedactionExportRows) {
     row.comentario || "-",
     row.provinciaReasignacion || "-",
     row.mensajeroReasignado || "-",
+    row.producto,
+    row.numeroSolicitud || "-",
+    row.identificador,
+    row.mensajero,
   ]);
   const entregasRows = rows.entregadas.map((row) => [
     String(row.no),
@@ -387,17 +605,51 @@ async function exportRedactionToPdf(rows: RedactionExportRows) {
     row.estatus,
     row.provinciaReasignacion || "-",
     row.mensajeroReasignado || "-",
+    row.producto,
+    row.numeroSolicitud || "-",
+    row.identificador,
+    row.mensajero,
   ]);
 
   drawSection({
     title: "TARJETAS RETORNADAS",
-    headers: ["NO", "TC", "NOMBRE", "CEDULA", "ADIC.", "NO.", "FECHA", "COMENT.", "PROV. REASIG.", "MENSAJERO"],
+    headers: [
+      "NO",
+      "TC",
+      "NOMBRE",
+      "CEDULA",
+      "ADIC.",
+      "NO.",
+      "FECHA",
+      "COMENT.",
+      "PROV.",
+      "M. REASIG.",
+      "PROD.",
+      "SOLICITUD",
+      "IDENT.",
+      "M. ASIG.",
+    ],
     dataRows: retornosRows,
   });
 
   drawSection({
     title: "TARJETAS ENTREGADAS",
-    headers: ["NO", "TC", "NOMBRE", "CEDULA", "ADIC.", "NO.", "FECHA", "ESTATUS", "PROV. REASIG.", "MENSAJERO"],
+    headers: [
+      "NO",
+      "TC",
+      "NOMBRE",
+      "CEDULA",
+      "ADIC.",
+      "NO.",
+      "FECHA",
+      "ESTATUS",
+      "PROV.",
+      "M. REASIG.",
+      "PROD.",
+      "SOLICITUD",
+      "IDENT.",
+      "M. ASIG.",
+    ],
     dataRows: entregasRows,
   });
 
@@ -410,6 +662,10 @@ export async function GET(request: NextRequest) {
 
   const type = request.nextUrl.searchParams.get("type") ?? "tarjetas";
   const format = (request.nextUrl.searchParams.get("format") ?? "xlsx").toLowerCase();
+  const productType = parseProductType(
+    request.nextUrl.searchParams.get("producto") ??
+      request.nextUrl.searchParams.get("productType"),
+  );
 
   let rows: Record<string, unknown>[] = [];
   let title = "Reporte";
@@ -417,7 +673,10 @@ export async function GET(request: NextRequest) {
   if (type === "tarjetas") {
     title = "Reporte de tarjetas";
     const status = request.nextUrl.searchParams.get("status");
+    const origin = request.nextUrl.searchParams.get("origin");
     const zone = request.nextUrl.searchParams.get("zona");
+    const cardType = request.nextUrl.searchParams.get("cardType") ?? request.nextUrl.searchParams.get("tipoTarjeta");
+    const urgent = request.nextUrl.searchParams.get("urgente") ?? request.nextUrl.searchParams.get("urgent");
     const from = request.nextUrl.searchParams.get("from");
     const to = request.nextUrl.searchParams.get("to");
     const dispatchRange =
@@ -435,7 +694,17 @@ export async function GET(request: NextRequest) {
         : null;
 
     const cardWhere: Prisma.CardWhereInput = {
+      ...(productType ? { productType } : {}),
       ...(status && status !== "ALL" ? { status: status as CardStatus } : {}),
+      ...(origin && origin !== "ALL"
+        ? origin === "SIN_PROCEDENCIA"
+          ? { dispatchOrigin: null }
+          : { dispatchOrigin: origin as DispatchOrigin }
+        : {}),
+      ...(cardType && cardType !== "ALL"
+        ? { isAdditional: cardType === "ADICIONAL" }
+        : {}),
+      ...(urgent === "true" || urgent === "1" ? { urgent: true } : {}),
       ...(zone && zone !== "ALL"
         ? {
             OR: [
@@ -451,6 +720,7 @@ export async function GET(request: NextRequest) {
       include: {
         customer: true,
         currentMessenger: true,
+        lastAssignedMessenger: true,
         reassignedMessenger: true,
       },
       take: 5000,
@@ -458,35 +728,43 @@ export async function GET(request: NextRequest) {
     });
 
     const lifecycleByCard = await getLifecycleDatesByCard(cards.map((card) => card.id));
+    const historyByCard = await getAssignmentHistoryByCard(cards.map((card) => card.id));
 
     rows = cards.map((card) => ({
+      ...productFields(card),
       fechaEntrega: formatDateEs(lifecycleByCard.get(card.id)?.deliveryDate),
       fechaRetorno: formatDateEs(lifecycleByCard.get(card.id)?.returnDate),
       numeroTarjeta: card.tc,
+      origenDespacho: card.dispatchOrigin ?? "SIN_PROCEDENCIA",
       cliente: card.customer.nombre,
       cedula: card.customer.cedula,
       zonaOriginal: card.zona,
       provinciaOriginal: card.provincia,
       zonaFacturable: resolveBillableZone(card),
-      provinciaReasignacion: card.reassignedProvince ?? "",
-      mensajeroReasignado: card.reassignedMessenger?.nombre ?? "",
+      provinciaReasignacion: displayText(card.reassignedProvince),
+      mensajeroReasignado: displayText(card.reassignedMessenger?.nombre),
       tipoTarjeta: card.isAdditional ? "ADICIONAL" : "PRINCIPAL",
       adicional: card.isAdditional ? "SI" : "NO",
       adicionalNumero: card.additionalIndex,
       remota: card.isRemote ? "SI" : "NO",
       estado: card.status,
       urgente: card.urgent ? "SI" : "NO",
-      mensajero: card.currentMessenger?.nombre ?? "",
+      mensajero: assignedMessengerName(card, historyByCard),
       fechaDespacho: formatDateEs(card.dispatchDate),
       slaVence: formatDateEs(card.slaDueDate),
-      comentarioRetorno: card.returnReason ?? "",
+      comentarioRetorno: displayText(card.returnReason),
     }));
   } else if (type === "contactos") {
     title = "Reporte de contactos";
     const provincia = request.nextUrl.searchParams.get("provincia");
     const where: Prisma.ContactLogWhereInput = {
-      ...(provincia && provincia !== "ALL"
-        ? { card: { provincia } }
+      ...(productType || (provincia && provincia !== "ALL")
+        ? {
+            card: {
+              ...(productType ? { productType } : {}),
+              ...(provincia && provincia !== "ALL" ? { provincia } : {}),
+            },
+          }
         : {}),
     };
 
@@ -496,6 +774,8 @@ export async function GET(request: NextRequest) {
         card: {
           include: {
             customer: true,
+            currentMessenger: true,
+            lastAssignedMessenger: true,
             reassignedMessenger: true,
           },
         },
@@ -506,19 +786,24 @@ export async function GET(request: NextRequest) {
     });
 
     const lifecycleByCard = await getLifecycleDatesByCard(contacts.map((contact) => contact.card.id));
+    const historyByCard = await getAssignmentHistoryByCard(
+      contacts.map((contact) => contact.card.id),
+    );
 
     rows = contacts.map((contact) => ({
+      ...productFields(contact.card),
       fecha: formatDateEs(contact.createdAt),
       fechaEntrega: formatDateEs(lifecycleByCard.get(contact.card.id)?.deliveryDate),
       fechaRetorno: formatDateEs(lifecycleByCard.get(contact.card.id)?.returnDate),
       cliente: contact.card.customer.nombre,
       cedula: contact.card.customer.cedula,
-      tc: contact.card.tc,
+      tc: contact.card.tc ?? "",
       provinciaOriginal: contact.card.provincia,
       zonaOriginal: contact.card.zona,
       zonaFacturable: resolveBillableZone(contact.card),
       provinciaReasignacion: contact.card.reassignedProvince ?? "",
       mensajeroReasignado: contact.card.reassignedMessenger?.nombre ?? "",
+      mensajero: assignedMessengerName(contact.card, historyByCard),
       tipoTarjeta: contact.card.isAdditional ? "ADICIONAL" : "PRINCIPAL",
       adicional: contact.card.isAdditional ? "SI" : "NO",
       adicionalNumero: contact.card.additionalIndex,
@@ -551,6 +836,7 @@ export async function GET(request: NextRequest) {
       prisma.card.findMany({
       where: {
         status: CardStatus.ENTREGADA,
+        productType: CardProductType.CREDITO,
         ...(zone && zone !== "ALL"
           ? {
               OR: [
@@ -647,6 +933,16 @@ export async function GET(request: NextRequest) {
       });
     }
   } else if (type === "redaccion") {
+    const origin = request.nextUrl.searchParams.get("origin");
+    const redactionType = request.nextUrl.searchParams.get("redactionType");
+    const redactionIdsRaw = request.nextUrl.searchParams.get("redactionIds");
+    const redactionIds = redactionIdsRaw
+      ? redactionIdsRaw
+          .split(",")
+          .map((value) => value.trim())
+          .filter(Boolean)
+      : [];
+
     title = "Entregas y retornos";
     const redactionRows = await buildRedactionExportRows(request);
 
@@ -657,11 +953,22 @@ export async function GET(request: NextRequest) {
       );
     }
 
+    const dateTag = new Date().toISOString().slice(0, 10);
+    let baseFileName = "relaciones";
+    if (redactionType && origin && origin !== "ALL" && redactionType !== "ALL") {
+      baseFileName = `redaccion-${redactionType.toLowerCase()}-${origin.toLowerCase()}-${dateTag}`;
+    } else if (redactionIds.length === 1) {
+      baseFileName = `relacion-${redactionIds[0].slice(-6)}`;
+    } else {
+      const zonaParam = request.nextUrl.searchParams.get("zona");
+      baseFileName = `entregas-retornos-${zonaParam && zonaParam !== "ALL" ? zonaParam.toLowerCase() + "-" : ""}${dateTag}`;
+    }
+
     if (format === "xlsx") {
       const xlsx = await exportRedactionToXlsx(redactionRows);
       return new NextResponse(Buffer.from(xlsx), {
         headers: fileHeaders(
-          `redaccion-${new Date().toISOString().slice(0, 10)}.xlsx`,
+          `${baseFileName}.xlsx`,
           "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         ),
       });
@@ -671,7 +978,7 @@ export async function GET(request: NextRequest) {
       const pdfBytes = await exportRedactionToPdf(redactionRows);
       return new NextResponse(Buffer.from(pdfBytes), {
         headers: fileHeaders(
-          `redaccion-${new Date().toISOString().slice(0, 10)}.pdf`,
+          `${baseFileName}.pdf`,
           "application/pdf",
         ),
       });
@@ -681,7 +988,10 @@ export async function GET(request: NextRequest) {
       ...redactionRows.retornadas.map((row) => ({
         tipo: "RETORNADA",
         no: row.no,
+        producto: row.producto,
         numeroTc: row.numeroTc,
+        numeroSolicitud: row.numeroSolicitud,
+        identificador: row.identificador,
         nombre: row.nombre,
         cedula: row.cedula,
         adicional: row.adicional,
@@ -690,11 +1000,15 @@ export async function GET(request: NextRequest) {
         comentario: row.comentario,
         provinciaReasignacion: row.provinciaReasignacion,
         mensajeroReasignado: row.mensajeroReasignado,
+        mensajero: row.mensajero,
       })),
       ...redactionRows.entregadas.map((row) => ({
         tipo: "ENTREGADA",
         no: row.no,
+        producto: row.producto,
         numeroTc: row.numeroTc,
+        numeroSolicitud: row.numeroSolicitud,
+        identificador: row.identificador,
         nombre: row.nombre,
         cedula: row.cedula,
         adicional: row.adicional,
@@ -703,6 +1017,7 @@ export async function GET(request: NextRequest) {
         comentario: row.estatus,
         provinciaReasignacion: row.provinciaReasignacion,
         mensajeroReasignado: row.mensajeroReasignado,
+        mensajero: row.mensajero,
       })),
     ];
   } else {
