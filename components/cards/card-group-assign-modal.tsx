@@ -22,10 +22,20 @@ type Props = {
   groups: CardGroupSummary[];
   onClose: () => void;
   onSuccess: (result: AssignResult) => void;
+  initialMode?: "existing" | "new";
 };
 
-export function CardGroupAssignModal({ cardIds, offFilterCount, groups, onClose, onSuccess }: Props) {
-  const [mode, setMode] = useState<"existing" | "new">(groups.length > 0 ? "existing" : "new");
+export function CardGroupAssignModal({
+  cardIds,
+  offFilterCount,
+  groups,
+  onClose,
+  onSuccess,
+  initialMode,
+}: Props) {
+  const [mode, setMode] = useState<"existing" | "new">(
+    initialMode ?? (groups.length > 0 ? "existing" : "new"),
+  );
   const [selectedGroupId, setSelectedGroupId] = useState(groups[0]?.id ?? "");
   const [newName, setNewName] = useState("");
   const [submitting, setSubmitting] = useState(false);
