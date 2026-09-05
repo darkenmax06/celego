@@ -555,8 +555,15 @@ export async function POST(request: Request) {
     // instead of silently landing on its neighbour.
     const ordinalBucket = nameBucket.allCards;
 
+    // A sibling "(adicional N)" file settles WHICH CARD of one customer an
+    // image belongs to. It says nothing about WHICH CUSTOMER when the name is
+    // shared by several people, so homonyms must still reach the operator.
+    const batchDisambiguates =
+      item.hasAdditionalSiblingInBatch &&
+      new Set(ordinalBucket.map((card) => normalizeCedula(card.customer.cedula))).size === 1;
+
     const ordinal = Math.max(0, item.additionalIndex);
-    if (ordinal === 0 && !item.dispatchDateKey && !item.hasAdditionalSiblingInBatch) {
+    if (ordinal === 0 && !item.dispatchDateKey && !batchDisambiguates) {
       return resolvePrimaryNameWithoutDate(bucket);
     }
 
@@ -621,7 +628,7 @@ export async function POST(request: Request) {
       // so once a sibling file claims the additional, pin the principal by its
       // own TC just like the additional ordinals do.
       const resolved =
-        ordinal === 0 && !item.hasAdditionalSiblingInBatch
+        ordinal === 0 && !batchDisambiguates
           ? resolveBucket("CEDULA", selected.customer.cedula, targetGroup.cards, matchMode)
           : resolveBucket("TC", selected.tc, targetGroup.cards, matchMode);
 
