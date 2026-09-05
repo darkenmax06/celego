@@ -324,10 +324,14 @@ function nonEmpty(value: string | null | undefined) {
   return trimmed ? trimmed : null;
 }
 
-function resolveNormalizedImportLocation(item: NormalizedCardImportRow) {
+export function resolveNormalizedImportLocation(item: Pick<NormalizedCardImportRow, "origin" | "provincia" | "zona">) {
   if (item.origin === "CENTRO_ACOPIO") return { province: "Santo Domingo", zone: "Metro" };
-  const province = nonEmpty(item.provincia);
-  const zone = normalizeZoneCandidate(item.zona ?? "") ?? (province ? resolveZone(province, "") : "");
+  const zonaRaw = nonEmpty(item.zona);
+  // Torre dispatch sheets frequently ship a single ZONA column holding the
+  // province name and no PROVINCIA/ENVIADO A column at all, so fall back to it
+  // before treating the row as unresolvable.
+  const province = nonEmpty(item.provincia) ?? zonaRaw;
+  const zone = normalizeZoneCandidate(zonaRaw ?? "") ?? (province ? resolveZone(province, "") : "");
   return { province, zone };
 }
 
@@ -366,7 +370,7 @@ export async function persistNormalizedCardImport(input: {
       }
 
       const { province, zone } = resolveNormalizedImportLocation(item);
-      if (!zone) throw new Error(`UNRESOLVED_ZONE_ROW_${item.sourceRowNumber}`);
+      if (!zone) throw new Error(`UNRESOLVED_ZONE_ROW_${item.sourceRowNumber}:${item.provincia ?? item.zona ?? ""}`);
       const customer = await tx.customer.upsert({
         where: { cedula: item.cedula },
         update: {
