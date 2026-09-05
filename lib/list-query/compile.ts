@@ -8,6 +8,7 @@ import type {
   ListQueryParams,
   SortDirection,
 } from "./types";
+import { buildRelationSomeClause } from "./relation-some";
 
 /** The established "no constraint" sentinel for enum filters across this codebase. */
 export const ALL_SENTINEL = "ALL";
@@ -242,33 +243,12 @@ export function compile<TWhere>(
 
     if (filter.kind === "relationSome") {
       if ((filter.sentinel ?? true) && value === ALL_SENTINEL) continue;
-      const tokens = Array.from(
-        new Set(
-          value
-            .split(",")
-            .map((token) => token.trim())
-            .filter(Boolean),
-        ),
-      );
-      if (!tokens.length) continue;
-      const wantsNone = filter.noneToken ? tokens.includes(filter.noneToken) : false;
-      const ids = filter.noneToken ? tokens.filter((token) => token !== filter.noneToken) : tokens;
-      const noneClause = { [filter.relation]: { none: {} } };
-      if (!ids.length) {
-        if (wantsNone) addClause(noneClause);
-        continue;
-      }
-      const someClause = {
-        [filter.relation]: {
-          some: { [filter.relationField]: ids.length === 1 ? ids[0] : { in: ids } },
-        },
-      };
-      if (!wantsNone) {
-        addClause(someClause);
-        continue;
-      }
-      addClause({ OR: [someClause, noneClause] });
-      usesCombinator = true;
+      // Shared with `card-group-where.ts`, which serves the hand-built `where`
+      // of `app/api/operativo/contacto`. See `relation-some.ts`.
+      const built = buildRelationSomeClause(filter, value);
+      if (!built) continue;
+      addClause(built.clause);
+      if (built.usesCombinator) usesCombinator = true;
       continue;
     }
 

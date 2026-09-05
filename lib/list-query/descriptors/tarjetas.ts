@@ -1,6 +1,7 @@
 import { CardProductType, CardStatus, DispatchOrigin, type Prisma } from "@prisma/client";
 import { toCardStatus } from "../../card-status";
 import { defineListQuery } from "../compile";
+import { CARD_GROUP_FILTER } from "../card-group-where";
 
 /**
  * Mirrors `app/api/tarjetas/route.ts` GET.
@@ -50,13 +51,7 @@ export const tarjetasListQuery = defineListQuery<Prisma.CardWhereInput>({
     { kind: "boolean", param: "urgent", field: "urgent", truthyOnly: true },
     { kind: "boolean", param: "remote", field: "isRemote" },
     { kind: "dateRange", field: "dispatchDate", fromParam: "from", toParam: "to", boundaries: "instant" },
-    {
-      kind: "relationSome",
-      param: "grupo",
-      relation: "groupMemberships",
-      relationField: "groupId",
-      noneToken: "SIN_GRUPO",
-    },
+    CARD_GROUP_FILTER,
   ],
   sort: {
     keys: {},
