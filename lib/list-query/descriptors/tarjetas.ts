@@ -50,6 +50,13 @@ export const tarjetasListQuery = defineListQuery<Prisma.CardWhereInput>({
     { kind: "boolean", param: "urgent", field: "urgent", truthyOnly: true },
     { kind: "boolean", param: "remote", field: "isRemote" },
     { kind: "dateRange", field: "dispatchDate", fromParam: "from", toParam: "to", boundaries: "instant" },
+    {
+      kind: "relationSome",
+      param: "grupo",
+      relation: "groupMemberships",
+      relationField: "groupId",
+      noneToken: "SIN_GRUPO",
+    },
   ],
   sort: {
     keys: {},
