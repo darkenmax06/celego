@@ -5,7 +5,7 @@ import { useSearchParams } from "next/navigation";
 import { CardDetailModal } from "@/components/cards/card-detail-modal";
 import { CardGroupAssignModal } from "@/components/cards/card-group-assign-modal";
 import { CardSelectCheckbox } from "@/components/cards/card-select-checkbox";
-import { CardSelectionBar } from "@/components/cards/card-selection-bar";
+import { CardSelectionBar, type SelectedCardEntry } from "@/components/cards/card-selection-bar";
 import { FilterBar, ViewType } from "@/components/filters/filter-bar";
 import { PageHeader } from "@/components/ui/page-header";
 import { Panel } from "@/components/ui/panel";
@@ -297,9 +297,57 @@ export default function TarjetasClient({ role }: TarjetasClientProps) {
   const cardGroups = useCardGroups();
   const [assignModalMode, setAssignModalMode] = useState<"existing" | "new" | null>(null);
   const [groupActionError, setGroupActionError] = useState<string | null>(null);
+  // SDD card-groups remediation — FIX 2: the off-filter count can only be
+  // answered by the database (the browser cannot know whether an unloaded
+  // card matches the active filter), so it is fetched from
+  // `POST /api/tarjetas/off-filter-count` when the confirmation opens rather
+  // than derived from the loaded page. `null` means "still loading/unknown"
+  // and is rendered as such — never as a fabricated 0.
+  const [offFilterCount, setOffFilterCount] = useState<number | null>(null);
+  const [offFilterError, setOffFilterError] = useState<string | null>(null);
 
   const activeGroupFilterIds = (filters.grupo ?? "").split(",").filter(Boolean);
-  const offFilterCount = cardSelection.ids.filter((id) => !cards.some((c) => c.id === id)).length;
+
+  // SDD card-groups remediation — FIX 1: identity lookup for the selection
+  // review panel, built ONLY from the loaded page. An id absent here means
+  // the card is selected but outside the current page/filter, and the bar
+  // renders it as a clearly-labelled minimal entry instead of dropping it.
+  const cardsById = useMemo(() => {
+    const map: Record<string, SelectedCardEntry> = {};
+    for (const card of cards) {
+      map[card.id] = { id: card.id, tc: card.tc, customerName: card.customer.nombre, cedula: card.customer.cedula };
+    }
+    return map;
+  }, [cards]);
+
+  useEffect(() => {
+    if (!assignModalMode) return;
+    let cancelled = false;
+    setOffFilterCount(null);
+    setOffFilterError(null);
+    (async () => {
+      try {
+        const response = await fetch("/api/tarjetas/off-filter-count", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ cardIds: cardSelection.ids, filters }),
+        });
+        if (!response.ok) throw new Error("off-filter-count request failed");
+        const body = (await response.json()) as { offFilterCount: number };
+        if (!cancelled) setOffFilterCount(body.offFilterCount);
+      } catch {
+        if (!cancelled) {
+          setOffFilterError(
+            "No se pudo calcular cuántas tarjetas seleccionadas están fuera del filtro actual.",
+          );
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [assignModalMode]);
 
   async function afterGroupAction() {
     setAssignModalMode(null);
@@ -1324,8 +1372,11 @@ export default function TarjetasClient({ role }: TarjetasClientProps) {
       {canManageGroups ? (
         <CardSelectionBar
           count={cardSelection.count}
+          selectedIds={cardSelection.ids}
+          cardsById={cardsById}
           activeGroupFilterIds={activeGroupFilterIds}
           onClear={cardSelection.clear}
+          onDeselect={cardSelection.toggle}
           onCreateGroup={() => setAssignModalMode("new")}
           onAssignExisting={() => setAssignModalMode("existing")}
           onRemoveFromGroup={() => void handleRemoveFromGroup()}
@@ -1339,6 +1390,7 @@ export default function TarjetasClient({ role }: TarjetasClientProps) {
         <CardGroupAssignModal
           cardIds={cardSelection.ids}
           offFilterCount={offFilterCount}
+          offFilterError={offFilterError}
           groups={cardGroups.groups}
           initialMode={assignModalMode}
           onClose={() => setAssignModalMode(null)}

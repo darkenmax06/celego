@@ -13,12 +13,20 @@ import type { CardGroupSummary } from "@/lib/use-card-groups";
  * off-filter count before the action executes (spec: bulk-action
  * confirmations must name it), and surfaces `{added, alreadyMember}` after a
  * successful assignment.
+ *
+ * SDD card-groups remediation — FIX 2: `offFilterCount` is now fetched
+ * server-side by the caller (the browser cannot know whether an unloaded
+ * card matches the active filter), so it arrives as `number | null` — `null`
+ * means "still loading or unavailable" and MUST NOT render as a count. While
+ * loading it shows "Calculando..."; if the caller reports `offFilterError`
+ * it shows that message instead of any number, fabricated or stale.
  */
 type AssignResult = { added: number; alreadyMember: number };
 
 type Props = {
   cardIds: string[];
-  offFilterCount: number;
+  offFilterCount: number | null;
+  offFilterError?: string | null;
   groups: CardGroupSummary[];
   onClose: () => void;
   onSuccess: (result: AssignResult) => void;
@@ -28,6 +36,7 @@ type Props = {
 export function CardGroupAssignModal({
   cardIds,
   offFilterCount,
+  offFilterError,
   groups,
   onClose,
   onSuccess,
@@ -93,7 +102,15 @@ export function CardGroupAssignModal({
         </div>
 
         <div className="space-y-4 p-5">
-          {offFilterCount > 0 ? (
+          {offFilterError ? (
+            <p className="rounded-lg border border-red-200 bg-red-50 p-2.5 text-xs font-semibold text-red-700">
+              {offFilterError}
+            </p>
+          ) : offFilterCount === null ? (
+            <p className="rounded-lg border border-slate-200 bg-slate-50 p-2.5 text-xs text-slate-600">
+              Calculando cuántas tarjetas seleccionadas están fuera del filtro actual...
+            </p>
+          ) : offFilterCount > 0 ? (
             <p className="rounded-lg border border-amber-200 bg-amber-50 p-2.5 text-xs text-amber-900">
               {offFilterCount} de las {cardIds.length} tarjetas seleccionadas están fuera del filtro
               actual.

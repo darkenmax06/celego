@@ -4,15 +4,23 @@ import { describe, expect, it, vi } from "vitest";
 import { CardSelectionBar } from "@/components/cards/card-selection-bar";
 
 /**
- * SDD card-groups — Work Unit F, Task 17. RED against the missing
- * `@/components/cards/card-selection-bar` module.
+ * SDD card-groups — Work Unit F, Task 17.
+ * SDD card-groups remediation — FIX 1 (selection review panel, Tasks below).
  *
  * "Quitar del grupo" must be visible only when the current `grupo` filter
  * holds exactly ONE token that is a real group id (not `SIN_GRUPO`).
+ *
+ * Remediation adds a review affordance: clicking the count opens a panel
+ * listing every selected card (including ids not on the loaded page, which
+ * render as a clearly-labelled minimal entry rather than being silently
+ * dropped) and lets the operator deselect one entry at a time.
  */
 describe("CardSelectionBar", () => {
   const baseProps = {
+    selectedIds: [],
+    cardsById: {},
     onClear: vi.fn(),
+    onDeselect: vi.fn(),
     onCreateGroup: vi.fn(),
     onAssignExisting: vi.fn(),
     onRemoveFromGroup: vi.fn(),
@@ -87,5 +95,86 @@ describe("CardSelectionBar", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Quitar del grupo" }));
     expect(onRemoveFromGroup).toHaveBeenCalledTimes(1);
+  });
+
+  describe("selection review panel", () => {
+    const cardsById = {
+      "card-1": { id: "card-1", tc: "4000000000000001", customerName: "Ana Perez", cedula: "001-1111111-1" },
+      "card-2": { id: "card-2", tc: "4000000000000002", customerName: "Beto Diaz", cedula: "001-2222222-2" },
+    };
+
+    it("does not render the review panel until the count is opened", () => {
+      render(
+        <CardSelectionBar
+          {...baseProps}
+          count={2}
+          selectedIds={["card-1", "card-2"]}
+          cardsById={cardsById}
+          activeGroupFilterIds={[]}
+        />,
+      );
+      expect(screen.queryByText("Ana Perez")).not.toBeInTheDocument();
+    });
+
+    it("opens the review panel and lists every selected card by identity", () => {
+      render(
+        <CardSelectionBar
+          {...baseProps}
+          count={2}
+          selectedIds={["card-1", "card-2"]}
+          cardsById={cardsById}
+          activeGroupFilterIds={[]}
+        />,
+      );
+      fireEvent.click(screen.getByRole("button", { name: "2 seleccionadas" }));
+      expect(screen.getByText("Ana Perez")).toBeInTheDocument();
+      expect(screen.getByText("Beto Diaz")).toBeInTheDocument();
+    });
+
+    it("renders a clearly-labelled minimal entry for a selected id not on the loaded page", () => {
+      render(
+        <CardSelectionBar
+          {...baseProps}
+          count={3}
+          selectedIds={["card-1", "off-page-card"]}
+          cardsById={cardsById}
+          activeGroupFilterIds={[]}
+        />,
+      );
+      fireEvent.click(screen.getByRole("button", { name: "3 seleccionadas" }));
+      expect(screen.getByText("off-page-card")).toBeInTheDocument();
+      expect(screen.getByText(/fuera de esta página/i)).toBeInTheDocument();
+    });
+
+    it("deselects a single card from the review panel without clearing the rest", () => {
+      const onDeselect = vi.fn();
+      render(
+        <CardSelectionBar
+          {...baseProps}
+          onDeselect={onDeselect}
+          count={2}
+          selectedIds={["card-1", "card-2"]}
+          cardsById={cardsById}
+          activeGroupFilterIds={[]}
+        />,
+      );
+      fireEvent.click(screen.getByRole("button", { name: "2 seleccionadas" }));
+      fireEvent.click(screen.getByRole("button", { name: "Quitar tarjeta 4000000000000001 de la selección" }));
+      expect(onDeselect).toHaveBeenCalledExactlyOnceWith("card-1");
+    });
+
+    it("keeps 'Limpiar selección' available for the all-at-once case", () => {
+      render(
+        <CardSelectionBar
+          {...baseProps}
+          count={2}
+          selectedIds={["card-1", "card-2"]}
+          cardsById={cardsById}
+          activeGroupFilterIds={[]}
+        />,
+      );
+      fireEvent.click(screen.getByRole("button", { name: "2 seleccionadas" }));
+      expect(screen.getByRole("button", { name: "Limpiar selección" })).toBeInTheDocument();
+    });
   });
 });

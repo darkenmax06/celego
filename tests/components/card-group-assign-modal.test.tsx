@@ -65,6 +65,37 @@ describe("CardGroupAssignModal", () => {
     expect(screen.getByText(/6 de las 8 tarjetas seleccionadas est(a|á)n fuera del filtro actual/i)).toBeInTheDocument();
   });
 
+  it("shows a calculating state instead of a stale count while offFilterCount is null", () => {
+    render(
+      <CardGroupAssignModal
+        cardIds={["card-1", "card-2"]}
+        offFilterCount={null}
+        groups={groups}
+        onClose={vi.fn()}
+        onSuccess={vi.fn()}
+      />,
+    );
+    expect(screen.getByText(/calculando/i)).toBeInTheDocument();
+    expect(screen.queryByText(/^\d+ de las \d+/)).not.toBeInTheDocument();
+  });
+
+  it("shows the error message instead of a fabricated count when the count could not be obtained", () => {
+    render(
+      <CardGroupAssignModal
+        cardIds={["card-1", "card-2"]}
+        offFilterCount={null}
+        offFilterError="No se pudo calcular cuántas tarjetas seleccionadas están fuera del filtro actual."
+        groups={groups}
+        onClose={vi.fn()}
+        onSuccess={vi.fn()}
+      />,
+    );
+    expect(
+      screen.getByText(/no se pudo calcular cuántas tarjetas seleccionadas/i),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/calculando/i)).not.toBeInTheDocument();
+  });
+
   it("submits a PATCH to the selected existing group with addCardIds", async () => {
     fetchMock.mockResolvedValue({
       ok: true,
