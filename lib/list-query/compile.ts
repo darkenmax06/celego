@@ -130,6 +130,10 @@ export function compile<TWhere>(
   const filterClauses: Record<string, unknown>[] = [];
   const addClause = (clause: Record<string, unknown>) => filterClauses.push(clause);
   let impossible = false;
+  // Set only by a `relationSome` filter that mixes real ids with its
+  // `noneToken`, so it must emit its own `OR` and therefore needs the
+  // composed `AND` shape even when the route passed no andPrefix/andSuffix.
+  let usesCombinator = false;
 
   // --- free-text search over the whitelisted paths only -------------------
   const q = params.get(descriptor.searchParam)?.trim();
@@ -236,6 +240,38 @@ export function compile<TWhere>(
       continue;
     }
 
+    if (filter.kind === "relationSome") {
+      if ((filter.sentinel ?? true) && value === ALL_SENTINEL) continue;
+      const tokens = Array.from(
+        new Set(
+          value
+            .split(",")
+            .map((token) => token.trim())
+            .filter(Boolean),
+        ),
+      );
+      if (!tokens.length) continue;
+      const wantsNone = filter.noneToken ? tokens.includes(filter.noneToken) : false;
+      const ids = filter.noneToken ? tokens.filter((token) => token !== filter.noneToken) : tokens;
+      const noneClause = { [filter.relation]: { none: {} } };
+      if (!ids.length) {
+        if (wantsNone) addClause(noneClause);
+        continue;
+      }
+      const someClause = {
+        [filter.relation]: {
+          some: { [filter.relationField]: ids.length === 1 ? ids[0] : { in: ids } },
+        },
+      };
+      if (!wantsNone) {
+        addClause(someClause);
+        continue;
+      }
+      addClause({ OR: [someClause, noneClause] });
+      usesCombinator = true;
+      continue;
+    }
+
     if (filter.kind === "boolean") {
       const [truthy, falsy] =
         (filter.encoding ?? "binary") === "literal" ? ["true", "false"] : ["1", "0"];
@@ -261,7 +297,7 @@ export function compile<TWhere>(
 
   const andPrefix = options.andPrefix ?? [];
   const andSuffix = options.andSuffix ?? [];
-  const compose = andPrefix.length > 0 || andSuffix.length > 0;
+  const compose = andPrefix.length > 0 || andSuffix.length > 0 || usesCombinator;
 
   let where: Record<string, unknown>;
   if (compose) {

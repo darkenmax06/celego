@@ -144,6 +144,28 @@ export type StringListFilter<TWhere = unknown> = {
   readonly sentinel?: boolean;
 };
 
+/**
+ * Filters on a to-many RELATION rather than a scalar column. `param` carries a
+ * COMMA-SEPARATED list of tokens (mirroring `stringList`), compiled to
+ * `{ [relation]: { some: { [relationField]: <id or in:> } } }` (OR semantics
+ * across selected ids). `noneToken`, when present and among the tokens,
+ * compiles to `{ [relation]: { none: {} } }`; mixing it with real ids emits an
+ * `OR` of both clauses and forces the composed `AND` `where` shape (see
+ * `CompileOptions`) so this filter's own `OR` never collides with the
+ * free-text search's `OR` in the flat-`where` branch.
+ */
+export type RelationSomeFilter<TWhere = unknown> = {
+  readonly kind: "relationSome";
+  readonly param: string;
+  /** SINGLE-segment to-many relation key. Never dotted: the clause must be one key. */
+  readonly relation: keyof TWhere & string;
+  /** Scalar column inside the related model matched against the token list. */
+  readonly relationField: string;
+  /** Token meaning "no related rows at all" -> `{ none: {} }`. */
+  readonly noneToken?: string;
+  readonly sentinel?: boolean;
+};
+
 export type ListFilter<TWhere = unknown> =
   | EnumFilter<TWhere>
   | EnumListFilter<TWhere>
@@ -151,7 +173,8 @@ export type ListFilter<TWhere = unknown> =
   | StringFilter<TWhere>
   | StringListFilter<TWhere>
   | DateRangeFilter<TWhere>
-  | SingleDayFilter<TWhere>;
+  | SingleDayFilter<TWhere>
+  | RelationSomeFilter<TWhere>;
 
 export type ListQuerySort<TWhere = unknown> = {
   /** Whitelist of accepted `sort` keys mapped to their field path. */
