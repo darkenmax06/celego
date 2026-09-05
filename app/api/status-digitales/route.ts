@@ -208,11 +208,28 @@ export async function POST(request: Request) {
     })
     .filter((item) => item.fileName && (item.overrideCardId || item.lookupCandidates.length));
 
+  // A batch that carries "NOMBRE (adicional N)" alongside a bare "NOMBRE"
+  // already says which card each image belongs to, so the untagged file is the
+  // principal and must not stop the operator with an ambiguity prompt.
+  const additionalSiblingKeys = new Set(
+    cleanItems
+      .filter((item) => item.additionalIndex > 0)
+      .flatMap((item) => item.lookupCandidates.map(normalizeLookupValue).filter(Boolean)),
+  );
+  const batchItems = cleanItems.map((item) => ({
+    ...item,
+    hasAdditionalSiblingInBatch:
+      item.additionalIndex === 0 &&
+      item.lookupCandidates.some((candidate) =>
+        additionalSiblingKeys.has(normalizeLookupValue(candidate)),
+      ),
+  }));
+
   if (!cleanItems.length) {
     return NextResponse.json({ error: "No hay nombres de imagen validos para procesar" }, { status: 400 });
   }
 
-  const lookupValues = Array.from(new Set(cleanItems.flatMap((item) => item.lookupCandidates)));
+  const lookupValues = Array.from(new Set(batchItems.flatMap((item) => item.lookupCandidates)));
   const databaseLookupValues = expandDatabaseLookupValues(lookupValues);
   const cardsByTcOrRef = await prisma.card.findMany({
     where: {
@@ -402,7 +419,7 @@ export async function POST(request: Request) {
     );
   }
 
-  function findDirectCardForItem(item: (typeof cleanItems)[number]) {
+  function findDirectCardForItem(item: (typeof batchItems)[number]) {
     for (const candidate of item.lookupCandidates) {
       const byTc = cardByTc.get(candidate);
       if (byTc?.length) return resolveBucket("TC", candidate, byTc, "DIRECT");
@@ -441,8 +458,15 @@ export async function POST(request: Request) {
     return null;
   }
 
-  function resolveNameBucket(item: (typeof cleanItems)[number]) {
+  /**
+   * Resolving one ambiguity re-posts the whole batch, so the images processed
+   * in the previous pass come back with their card already closed for this
+   * flow. Those must report as "already closed", never as "not found", or the
+   * operator is told to re-validate work that in fact succeeded.
+   */
+  function resolveNameBucket(item: (typeof batchItems)[number]) {
     const seen = new Set<string>();
+    let closedFallback: CardRecord[] | null = null;
     for (const candidate of item.lookupCandidates) {
       const nameKey = normalizeLookupValue(candidate);
       if (!nameKey || seen.has(nameKey)) continue;
@@ -451,9 +475,10 @@ export async function POST(request: Request) {
       if (!bucket?.length) continue;
 
       const openBucket = bucket.filter((card) => !NAME_AMBIGUITY_EXCLUDED_STATUSES.has(card.status));
-      if (openBucket.length) return openBucket;
+      if (openBucket.length) return { cards: openBucket, allCards: bucket, allClosed: false };
+      closedFallback ??= bucket;
     }
-    return null;
+    return closedFallback ? { cards: closedFallback, allCards: closedFallback, allClosed: true } : null;
   }
 
   function resolvePrimaryNameWithoutDate(bucket: CardRecord[]): ResolvedSelection {
@@ -504,7 +529,7 @@ export async function POST(request: Request) {
       : noCardSelection();
   }
 
-  function findCardsForItem(item: (typeof cleanItems)[number]): ResolvedSelection {
+  function findCardsForItem(item: (typeof batchItems)[number]): ResolvedSelection {
     if (item.overrideCardId) {
       const card = cardById.get(item.overrideCardId);
       return card
@@ -515,11 +540,23 @@ export async function POST(request: Request) {
     const directMatch = findDirectCardForItem(item);
     if (directMatch) return directMatch;
 
-    const bucket = resolveNameBucket(item);
-    if (!bucket?.length) return noCardSelection();
+    const nameBucket = resolveNameBucket(item);
+    if (!nameBucket) return noCardSelection();
+    if (nameBucket.allClosed) {
+      return toResolvedSelection(
+        { kind: "SOLO_CERRADAS", closedCards: [...nameBucket.cards].sort(compareOperationalCardRecency) },
+        "NOMBRE_PRINCIPAL",
+      );
+    }
+    const bucket = nameBucket.cards;
+    // "(adicional N)" counts positions in the customer's whole card set. Ranking
+    // only the still-open cards makes those positions slide as deliveries land,
+    // so an ordinal lookup reads the full set and reports an already-closed hit
+    // instead of silently landing on its neighbour.
+    const ordinalBucket = nameBucket.allCards;
 
     const ordinal = Math.max(0, item.additionalIndex);
-    if (ordinal === 0 && !item.dispatchDateKey) {
+    if (ordinal === 0 && !item.dispatchDateKey && !item.hasAdditionalSiblingInBatch) {
       return resolvePrimaryNameWithoutDate(bucket);
     }
 
@@ -530,7 +567,7 @@ export async function POST(request: Request) {
     };
 
     const groupsByKey = new Map<string, Omit<NameGroup, "latestCard">>();
-    for (const card of bucket) {
+    for (const card of ordinalBucket) {
       const dispatchKey = dateKeyUtc(card.dispatchDate);
       const key = `${normalizeCedula(card.customer.cedula)}|${dispatchKey || "SIN_FECHA"}`;
       const existing = groupsByKey.get(key);
@@ -580,8 +617,11 @@ export async function POST(request: Request) {
         ordinal === 0
           ? (item.dispatchDateKey ? ("NOMBRE_PRINCIPAL_FECHA" as const) : ("NOMBRE_PRINCIPAL" as const))
           : (item.dispatchDateKey ? ("ADICIONAL_NOMBRE_Y_FECHA" as const) : ("ADICIONAL_NOMBRE_ORDINAL" as const));
+      // A cedula lookup re-opens the very ambiguity the batch already settled,
+      // so once a sibling file claims the additional, pin the principal by its
+      // own TC just like the additional ordinals do.
       const resolved =
-        ordinal === 0
+        ordinal === 0 && !item.hasAdditionalSiblingInBatch
           ? resolveBucket("CEDULA", selected.customer.cedula, targetGroup.cards, matchMode)
           : resolveBucket("TC", selected.tc, targetGroup.cards, matchMode);
 
@@ -595,13 +635,13 @@ export async function POST(request: Request) {
 
     return closedSelection ?? noCardSelection();
   }
-  type ResolvedRow = (typeof cleanItems)[number] & {
+  type ResolvedRow = (typeof batchItems)[number] & {
     card: (typeof cards)[number] | null;
     matchMode: MatchMode;
     resolution: OperationalCardResolution<CardRecord>;
   };
 
-  const resolvedRows = cleanItems.map<ResolvedRow>((item) => {
+  const resolvedRows = batchItems.map<ResolvedRow>((item) => {
     const resolved = findCardsForItem(item);
     return {
       ...item,
