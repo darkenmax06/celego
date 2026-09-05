@@ -13,11 +13,17 @@ import { tarjetasListQuery } from "@/lib/list-query/descriptors/tarjetas";
  * function is what keeps the off-filter count from drifting out of sync with
  * what the list itself considers "in filter".
  */
-export function compileTarjetasWhere(
+/**
+ * Composes the `contactoEstado` constraint (a JSON `metadata` read, not a
+ * `list-query` filter kind) onto an already-compiled `where`. Single source
+ * of truth for this composition — shared by `compileTarjetasWhere` (used by
+ * `POST /api/tarjetas/off-filter-count`) and `GET /api/tarjetas` directly, so
+ * the two can never drift apart again.
+ */
+export function applyContactoEstado(
+  where: Prisma.CardWhereInput,
   params: URLSearchParams,
-): { query: CompiledListQuery<Prisma.CardWhereInput>; where: Prisma.CardWhereInput } {
-  const query = compile(tarjetasListQuery, params);
-
+): Prisma.CardWhereInput {
   const contactoEstadoParam = params.get("contactoEstado");
   let contactoConstraint: Prisma.CardWhereInput | undefined;
   if (contactoEstadoParam && contactoEstadoParam !== "ALL") {
@@ -40,9 +46,14 @@ export function compileTarjetasWhere(
     }
   }
 
-  const where: Prisma.CardWhereInput = contactoConstraint
-    ? { AND: [query.where, contactoConstraint] }
-    : query.where;
+  return contactoConstraint ? { AND: [where, contactoConstraint] } : where;
+}
+
+export function compileTarjetasWhere(
+  params: URLSearchParams,
+): { query: CompiledListQuery<Prisma.CardWhereInput>; where: Prisma.CardWhereInput } {
+  const query = compile(tarjetasListQuery, params);
+  const where = applyContactoEstado(query.where, params);
 
   return { query, where };
 }
