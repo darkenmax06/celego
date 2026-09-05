@@ -219,6 +219,27 @@ function getCardGroupKey(card: CardRow, groupBy: string): { key: string; label: 
 
 const URL_FILTER_KEYS = ["status", "zona", "provincia", "urgent", "from", "to", "origin", "remote", "productType", "contactoEstado"] as const;
 
+type RowError = { row?: number; message?: string };
+
+/** Groups rejected-row reasons so a partial import never looks like a clean one. */
+function summarizeRowErrors(errors: RowError[] | undefined) {
+  if (!errors?.length) return undefined;
+  const byReason = new Map<string, number[]>();
+  for (const error of errors) {
+    const reason = error.message?.trim() || "motivo no especificado";
+    const rows = byReason.get(reason) ?? [];
+    if (typeof error.row === "number") rows.push(error.row);
+    byReason.set(reason, rows);
+  }
+  return [...byReason.entries()]
+    .map(([reason, rows]) => {
+      const shown = rows.slice(0, 10).join(", ");
+      const rest = rows.length > 10 ? ` y ${rows.length - 10} más` : "";
+      return rows.length ? `${reason} (${rows.length}): filas ${shown}${rest}` : reason;
+    })
+    .join(" — ");
+}
+
 export default function TarjetasClient() {
   const searchParams = useSearchParams();
   const [cards, setCards] = useState<CardRow[]>([]);
@@ -375,11 +396,19 @@ export default function TarjetasClient() {
         const created = data.created ?? 0;
         const updated = data.updated ?? 0;
         const skipped = data.skipped ?? 0;
+        const rejected = data.rejected ?? 0;
         const parsed = data.parsedRows ?? (created + updated + skipped);
+        const totalRows = parsed + rejected;
         const msg = data.replay
           ? `Data Diaria Crédito ya procesada anteriormente: ${created} creadas, ${updated} actualizadas.`
-          : `Data Diaria Crédito importada con éxito: ${created} creadas, ${updated} actualizadas, ${skipped} omitidas (${parsed} filas).`;
-        setUploadStatus({ type: "success", message: msg });
+          : `Data Diaria Crédito importada: ${created} creadas, ${updated} actualizadas, ${skipped} omitidas, ${rejected} rechazadas (${totalRows} filas en el archivo).`;
+        // Rejected rows are dropped silently unless the reasons are surfaced here.
+        const reasons = summarizeRowErrors(data.errors);
+        setUploadStatus({
+          type: rejected > 0 ? "error" : "success",
+          message: msg,
+          details: reasons,
+        });
       } else if (endpoint === "/api/importaciones/urgentes") {
         const linked = data.linked ?? 0;
         const notFound = data.notFound ?? 0;

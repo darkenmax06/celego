@@ -380,7 +380,7 @@ export async function persistNormalizedCardImport(input: {
           ...(province ? { provincia: province } : {}),
           ...(zone ? { zona: zone } : {}),
         },
-        create: { cedula: item.cedula, nombre: item.nombre, direccionRaw: item.direccionRaw, telefonosRaw: item.telefonosRaw, provincia: province, zona: zone },
+        create: { cedula: item.cedula, nombre: item.nombre, direccionRaw: item.direccionRaw || null, telefonosRaw: item.telefonosRaw, provincia: province, zona: zone },
       });
 
       // Upsert first to serialize all creations for this TC, including the first one.

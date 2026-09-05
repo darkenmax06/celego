@@ -5,7 +5,7 @@ export type NormalizedCardImportRow = {
   tc: string;
   cedula: string;
   nombre: string;
-  direccionRaw: string;
+  direccionRaw: string | null;
   telefonosRaw: string | null;
   provincia: string | null;
   zona: string | null;
@@ -128,7 +128,7 @@ export function parseNormalizedCardRows(rows: Rows) {
     const dispatchDate = parseDate(indexes.date >= 0 ? row[indexes.date] : null);
     const direccionRaw = cell(row, indexes.direccion);
     const quantity = detected.origin === "CENTRO_ACOPIO" ? Number(quantityRaw) : 1;
-    const failures = [!tc && "TC invalido", !cedula && "cedula invalida", !name && "nombre requerido", !direccionRaw && "direccion requerida", !dispatchDate && "fecha requerida", !(Number.isInteger(quantity) && quantity > 0) && "cantidad invalida"].filter(Boolean) as string[];
+    const failures = [!tc && "TC invalido", !cedula && "cedula invalida", !name && "nombre requerido", !dispatchDate && "fecha requerida", !(Number.isInteger(quantity) && quantity > 0) && "cantidad invalida"].filter(Boolean) as string[];
     if (failures.length) { errors.push({ row: offset + 1, code: "INVALID_ROW", message: failures.join(", ") }); continue; }
     const sourceTerminal = indexes.terminal >= 0 ? cell(row, indexes.terminal) || null : null;
     const sourceRecordKey = buildSourceRecordKey({ origin: detected.origin, tc: tc!, cedula: cedula!, dispatchDate: dispatchDate! });
@@ -140,7 +140,7 @@ export function parseNormalizedCardRows(rows: Rows) {
     const location = detected.origin === "CENTRO_ACOPIO"
       ? centroAcopioLocation
       : { provincia: cell(row, indexes.provincia) || null, zona: cell(row, indexes.zona) || null };
-    output.push({ origin: detected.origin, tc: tc!, cedula: cedula!, nombre: name, direccionRaw, telefonosRaw: phoneList([indexes.telefono >= 0 ? row[indexes.telefono] : null, indexes.additionalPhone >= 0 ? row[indexes.additionalPhone] : null]), ...location, isRemote: indexes.remote >= 0 ? /^(SI|S|TRUE|1|X)$/i.test(cell(row, indexes.remote)) : null, dispatchDate: dispatchDate!, quantity, sourceTerminal, deliveryType: cell(row, indexes.delivery) || null, emissionType: cell(row, indexes.emission) || null, supplier: cell(row, indexes.supplier) || null, contractType: cell(row, indexes.contract) || null, externalReference: cell(row, indexes.reference) || null, status: "DESPACHADA", sourceRowNumber: offset + 1, sourceRecordKey });
+    output.push({ origin: detected.origin, tc: tc!, cedula: cedula!, nombre: name, direccionRaw: direccionRaw || null, telefonosRaw: phoneList([indexes.telefono >= 0 ? row[indexes.telefono] : null, indexes.additionalPhone >= 0 ? row[indexes.additionalPhone] : null]), ...location, isRemote: indexes.remote >= 0 ? /^(SI|S|TRUE|1|X)$/i.test(cell(row, indexes.remote)) : null, dispatchDate: dispatchDate!, quantity, sourceTerminal, deliveryType: cell(row, indexes.delivery) || null, emissionType: cell(row, indexes.emission) || null, supplier: cell(row, indexes.supplier) || null, contractType: cell(row, indexes.contract) || null, externalReference: cell(row, indexes.reference) || null, status: "DESPACHADA", sourceRowNumber: offset + 1, sourceRecordKey });
   }
   return { ...detected, rows: output, errors };
 }
