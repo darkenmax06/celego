@@ -140,8 +140,16 @@ export function createTransactionalPrismaMock(): TransactionalPrismaMock {
       update: vi.fn(async ({ where, data }: { where: unknown; data: Record<string, unknown> }) => {
         const row = rowOf(where);
         if (!row) throw new Error(`${name}.update: no row for ${JSON.stringify(where)}`);
-        Object.assign(row, data);
-        return row;
+        // Real Prisma never mutates an object a caller is already holding —
+        // `update()` returns a fresh row. Mutating `row` in place here made a
+        // pre-update reference (e.g. a handler's `existing` snapshot read
+        // before calling update) silently observe the POST-update value for
+        // any field checked after the update call, which both hides real
+        // regressions and fabricates false ones in tests that read a
+        // held-onto object after the store's copy has moved on.
+        const merged = { ...row, ...data } as StoreRow;
+        table(name).set(row.id, merged);
+        return merged;
       }),
       updateMany: vi.fn(
         async ({ where, data }: { where: Record<string, unknown>; data: Record<string, unknown> }) => {
