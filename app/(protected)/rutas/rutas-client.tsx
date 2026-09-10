@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, KeyboardEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
   OperationalCardPicker,
   type OperationalCard,
@@ -476,6 +476,12 @@ export default function RutasClient() {
   );
 
   const [scanInput, setScanInput] = useState("");
+  const routeScanInputRef = useRef<HTMLInputElement>(null);
+  const focusRouteScanInput = () => {
+    window.requestAnimationFrame(() => {
+      routeScanInputRef.current?.focus();
+    });
+  };
   const [scanResult, setScanResult] = useState<ScanResult | null>(null);
   const [routeScanConflict, setRouteScanConflict] = useState<ScanConflict | null>(null);
   const [scanStatus, setScanStatus] = usePersistentState<
@@ -976,6 +982,7 @@ export default function RutasClient() {
       }
       setRouteScanConflict(null);
       setMessage(data.error ?? "No se pudo pistolear");
+      focusRouteScanInput();
       return;
     }
 
@@ -986,6 +993,7 @@ export default function RutasClient() {
     setMessage(`Tarjeta ${data.scanned.tc} actualizada a ${scanStatus}`);
     await workflowDraft.clearDraft();
     await Promise.all([loadRoutes(routePage), loadLots(lotPage)]);
+    focusRouteScanInput();
   }
 
   async function scanLotTrackingCard(
@@ -1462,6 +1470,7 @@ export default function RutasClient() {
 
                   <div className="grid gap-2 md:grid-cols-[1fr_170px_1fr_auto]">
                     <input
+                      ref={routeScanInputRef}
                       value={scanInput}
                       onChange={(event) => {
                         setScanInput(event.target.value);
@@ -1499,7 +1508,10 @@ export default function RutasClient() {
                     routeScanConflict.candidates[0] ? (
                       <ContractDeliveryWizardModal
                         candidate={routeScanConflict.candidates[0]}
-                        onClose={() => setRouteScanConflict(null)}
+                        onClose={() => {
+                          setRouteScanConflict(null);
+                          focusRouteScanInput();
+                        }}
                         onConfirmWithoutContract={() => {
                           const candidate = routeScanConflict.candidates[0];
                           setRouteScanConflict(null);
@@ -1520,7 +1532,10 @@ export default function RutasClient() {
                     ) : (
                       <ScanResolutionPanel
                         conflict={routeScanConflict}
-                        onDismiss={() => setRouteScanConflict(null)}
+                        onDismiss={() => {
+                          setRouteScanConflict(null);
+                          focusRouteScanInput();
+                        }}
                         onSelect={(candidate) =>
                           void scanCard({
                             itemId: candidate.itemId,
@@ -2124,6 +2139,17 @@ function TrackingLotModal({
   onRequireReturnReason: (existing?: string | null) => Promise<string | null>;
 }) {
   const [scanInput, setScanInput] = useState("");
+  const lotScanInputRef = useRef<HTMLInputElement>(null);
+  const focusLotScanInput = () => {
+    window.requestAnimationFrame(() => {
+      lotScanInputRef.current?.focus();
+    });
+  };
+
+  useEffect(() => {
+    focusLotScanInput();
+  }, []);
+
   const [scanResult, setScanResult] = useState("");
   const [scanConflict, setScanConflict] = useState<ScanConflict | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
@@ -2191,6 +2217,7 @@ function TrackingLotModal({
       } else {
         setScanConflict(null);
         setScanResult(response.error);
+        focusLotScanInput();
       }
       return;
     }
@@ -2198,6 +2225,7 @@ function TrackingLotModal({
     setScanConflict(null);
     setScanResult(`Tarjeta ${response.scanned.tc} marcada como acuse recibido`);
     setScanInput("");
+    focusLotScanInput();
   }
 
   function onScanKeyDown(event: KeyboardEvent<HTMLInputElement>) {
@@ -2275,6 +2303,7 @@ function TrackingLotModal({
 
           <div className="mb-3 rounded-xl border border-slate-200 p-3">
             <input
+              ref={lotScanInputRef}
               value={scanInput}
               onChange={(event) => {
                 setScanInput(event.target.value);
@@ -2287,7 +2316,10 @@ function TrackingLotModal({
             {scanConflict ? (
               <ScanResolutionPanel
                 conflict={scanConflict}
-                onDismiss={() => setScanConflict(null)}
+                onDismiss={() => {
+                  setScanConflict(null);
+                  focusLotScanInput();
+                }}
                 onSelect={(candidate) =>
                   void scanLotItem({
                     itemId: candidate.itemId,
