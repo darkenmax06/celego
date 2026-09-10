@@ -26,6 +26,19 @@ describe("dual card import parsing", () => {
     expect(parsed.errors[0].message).toContain("TC");
   });
 
+  it("ignores decorative footer rows that do not identify a card", () => {
+    const rows = [
+      ["TC", "TCC", "TERMINAL", "NOMBRE DEL CLIENTE", "CEDULA", "SECTOR", "NUMEROS DE CONTACTO", "NUMEROS ADC", "CANTIDAD", "FECHA DE CARGA"],
+      ["5188123412349747", "", "047584", "Ana Perez", "00123456789", "Calle 1", "8095551234", "", 1, "09/09/2026"],
+      ["", "", "", ".XXXX.XXXX.", "", "", "", "", "", ""],
+    ];
+
+    const parsed = parseNormalizedCardRows(rows);
+
+    expect(parsed.rows).toHaveLength(1);
+    expect(parsed.errors).toEqual([]);
+  });
+
   it("detects the historical Torre Popular signature and quarantines duplicate source identities", () => {
     const rows = [
       ["TIPO DE ENTREGA", "FECHA", "NO. TC", "CEDULA", "NOMBRES", "DIRECCION", "PROVINCIA"],
