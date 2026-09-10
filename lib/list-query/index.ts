@@ -21,6 +21,7 @@ export type {
   ListQueryPagination,
   ListQueryParams,
   ListQuerySort,
+  RelationSomeFilter,
   SingleDayFilter,
   SortDirection,
   StringFilter,

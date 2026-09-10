@@ -50,6 +50,7 @@ type OperationalCardPickerProps = {
   autoFocus?: boolean;
   disabled?: boolean;
   className?: string;
+  inputRef?: React.RefObject<HTMLInputElement | null>;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -122,16 +123,31 @@ export function OperationalCardPicker({
   autoFocus = false,
   disabled = false,
   className,
+  inputRef: externalInputRef,
 }: OperationalCardPickerProps) {
   const inputId = useId();
   const dialogTitleId = useId();
   const dialogDescriptionId = useId();
   const dialogRef = useRef<HTMLDivElement>(null);
+  const internalInputRef = useRef<HTMLInputElement>(null);
+  const inputRef = externalInputRef ?? internalInputRef;
   const priorFocusRef = useRef<HTMLElement | null>(null);
   const [dialog, setDialog] = useState<PickerDialog | null>(null);
   const [selectedClosedCardId, setSelectedClosedCardId] = useState("");
   const [isSearching, setIsSearching] = useState(false);
   const [feedback, setFeedback] = useState("");
+
+  const focusInput = () => {
+    window.requestAnimationFrame(() => {
+      inputRef.current?.focus();
+    });
+  };
+
+  useEffect(() => {
+    if (autoFocus) {
+      focusInput();
+    }
+  }, [autoFocus]);
 
   useEffect(() => {
     if (!dialog) return;
@@ -142,6 +158,7 @@ export function OperationalCardPicker({
         event.preventDefault();
         setDialog(null);
         setSelectedClosedCardId("");
+        focusInput();
       }
     };
 
@@ -149,18 +166,20 @@ export function OperationalCardPicker({
     window.requestAnimationFrame(() => dialogRef.current?.focus());
     return () => {
       document.removeEventListener("keydown", onKeyDown);
-      priorFocusRef.current?.focus();
+      focusInput();
     };
   }, [dialog]);
 
   function publishMessage(message: string) {
     setFeedback(message);
     onMessage?.(message);
+    focusInput();
   }
 
   function closeDialog() {
     setDialog(null);
     setSelectedClosedCardId("");
+    focusInput();
   }
 
   function selectCard(card: OperationalCard) {
@@ -168,6 +187,7 @@ export function OperationalCardPicker({
     onValueChange("");
     setFeedback("");
     closeDialog();
+    focusInput();
   }
 
   async function search() {
@@ -239,6 +259,7 @@ export function OperationalCardPicker({
         publishMessage("Error al procesar la búsqueda en lote");
       } finally {
         setIsSearching(false);
+        focusInput();
       }
       return;
     }
@@ -293,6 +314,7 @@ export function OperationalCardPicker({
       publishMessage("No se pudo buscar la tarjeta. Intenta nuevamente.");
     } finally {
       setIsSearching(false);
+      focusInput();
     }
   }
 
@@ -310,18 +332,20 @@ export function OperationalCardPicker({
   return (
     <>
       <div
+        onClick={() => inputRef.current?.focus()}
         className={cn(
-          "flex items-center gap-3 rounded-xl border border-blue-200 bg-blue-50 px-4 py-3",
+          "flex items-center gap-3 rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 cursor-text",
           className,
         )}
       >
-        <span aria-hidden="true" className="text-lg text-blue-700">
+        <span aria-hidden="true" className="text-lg text-blue-700 select-none">
           O
         </span>
         <label className="sr-only" htmlFor={inputId}>
           {inputLabel}
         </label>
         <input
+          ref={inputRef}
           id={inputId}
           value={value}
           onChange={(event) => {
@@ -332,14 +356,17 @@ export function OperationalCardPicker({
           placeholder={placeholder}
           className="flex-1 bg-transparent text-sm outline-none"
           autoFocus={autoFocus}
-          disabled={disabled || isSearching}
+          disabled={disabled}
           aria-describedby={feedback ? `${inputId}-feedback` : undefined}
         />
         <button
           type="button"
-          onClick={() => void search()}
+          onClick={(e) => {
+            e.stopPropagation();
+            void search();
+          }}
           disabled={disabled || isSearching || !value.trim()}
-          className="rounded-lg border border-blue-300 bg-white px-3 py-1.5 text-xs font-semibold text-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+          className="rounded-lg border border-blue-300 bg-white px-3 py-1.5 text-xs font-semibold text-blue-700 disabled:cursor-not-allowed disabled:opacity-60 cursor-pointer"
         >
           {isSearching ? "Buscando..." : buttonLabel}
         </button>

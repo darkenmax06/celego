@@ -3,11 +3,16 @@
 import { ChangeEvent, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { CardDetailModal } from "@/components/cards/card-detail-modal";
+import { CardGroupAssignModal } from "@/components/cards/card-group-assign-modal";
+import { CardSelectCheckbox } from "@/components/cards/card-select-checkbox";
+import { CardSelectionBar, type SelectedCardEntry } from "@/components/cards/card-selection-bar";
 import { FilterBar, ViewType } from "@/components/filters/filter-bar";
 import { PageHeader } from "@/components/ui/page-header";
 import { Panel } from "@/components/ui/panel";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { notificationFailureMessage, notifyInBrowser } from "@/lib/browser-notifications";
+import { useCardGroups } from "@/lib/use-card-groups";
+import { useCardSelection } from "@/lib/use-card-selection";
 import { usePersistentState } from "@/lib/use-persistent-state";
 
 type CardRow = {
@@ -217,7 +222,7 @@ function getCardGroupKey(card: CardRow, groupBy: string): { key: string; label: 
   }
 }
 
-const URL_FILTER_KEYS = ["status", "zona", "provincia", "urgent", "from", "to", "origin", "remote", "productType", "contactoEstado"] as const;
+const URL_FILTER_KEYS = ["status", "zona", "provincia", "urgent", "from", "to", "origin", "remote", "productType", "contactoEstado", "grupo"] as const;
 
 type RowError = { row?: number; message?: string };
 
@@ -240,7 +245,13 @@ function summarizeRowErrors(errors: RowError[] | undefined) {
     .join(" — ");
 }
 
-export default function TarjetasClient() {
+type TarjetasClientProps = {
+  /** SDD card-groups — Work Unit G, Task 22: gates selection/bulk UI to ADMIN/OPERADOR. */
+  role: string;
+};
+
+export default function TarjetasClient({ role }: TarjetasClientProps) {
+  const canManageGroups = role === "ADMIN" || role === "OPERADOR";
   const searchParams = useSearchParams();
   const [cards, setCards] = useState<CardRow[]>([]);
   const [filters, setFilters] = useState<Record<string, string>>(() => {
@@ -280,6 +291,87 @@ export default function TarjetasClient() {
     total: 0,
     totalPages: 1,
   });
+
+  // SDD card-groups — Work Unit G, Task 22.
+  const cardSelection = useCardSelection();
+  const cardGroups = useCardGroups();
+  const [assignModalMode, setAssignModalMode] = useState<"existing" | "new" | null>(null);
+  const [groupActionError, setGroupActionError] = useState<string | null>(null);
+  // SDD card-groups remediation — FIX 2: the off-filter count can only be
+  // answered by the database (the browser cannot know whether an unloaded
+  // card matches the active filter), so it is fetched from
+  // `POST /api/tarjetas/off-filter-count` when the confirmation opens rather
+  // than derived from the loaded page. `null` means "still loading/unknown"
+  // and is rendered as such — never as a fabricated 0.
+  const [offFilterCount, setOffFilterCount] = useState<number | null>(null);
+  const [offFilterError, setOffFilterError] = useState<string | null>(null);
+
+  const activeGroupFilterIds = (filters.grupo ?? "").split(",").filter(Boolean);
+
+  // SDD card-groups remediation — FIX 1: identity lookup for the selection
+  // review panel, built ONLY from the loaded page. An id absent here means
+  // the card is selected but outside the current page/filter, and the bar
+  // renders it as a clearly-labelled minimal entry instead of dropping it.
+  const cardsById = useMemo(() => {
+    const map: Record<string, SelectedCardEntry> = {};
+    for (const card of cards) {
+      map[card.id] = { id: card.id, tc: card.tc, customerName: card.customer.nombre, cedula: card.customer.cedula };
+    }
+    return map;
+  }, [cards]);
+
+  useEffect(() => {
+    if (!assignModalMode) return;
+    let cancelled = false;
+    setOffFilterCount(null);
+    setOffFilterError(null);
+    (async () => {
+      try {
+        const response = await fetch("/api/tarjetas/off-filter-count", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ cardIds: cardSelection.ids, filters }),
+        });
+        if (!response.ok) throw new Error("off-filter-count request failed");
+        const body = (await response.json()) as { offFilterCount: number };
+        if (!cancelled) setOffFilterCount(body.offFilterCount);
+      } catch {
+        if (!cancelled) {
+          setOffFilterError(
+            "No se pudo calcular cuántas tarjetas seleccionadas están fuera del filtro actual.",
+          );
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [assignModalMode]);
+
+  async function afterGroupAction() {
+    setAssignModalMode(null);
+    cardSelection.clear();
+    await cardGroups.reload();
+    await fetchCards(filters);
+  }
+
+  async function handleRemoveFromGroup() {
+    const [groupId] = activeGroupFilterIds.filter((id) => id !== "SIN_GRUPO");
+    if (!groupId) return;
+    setGroupActionError(null);
+    const response = await fetch(`/api/card-groups/${groupId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ removeCardIds: cardSelection.ids }),
+    });
+    if (!response.ok) {
+      const body = (await response.json().catch(() => ({}))) as { error?: string };
+      setGroupActionError(body.error ?? "No se pudo quitar la selección del grupo");
+      return;
+    }
+    await afterGroupAction();
+  }
 
   async function fetchCards(currentFilters = filters) {
     setLoading(true);
@@ -473,6 +565,15 @@ export default function TarjetasClient() {
 
   const renderCardRow = (card: CardRow) => (
     <tr key={card.id} className="border-t border-slate-100 hover:bg-slate-50/70 transition-colors">
+      {canManageGroups ? (
+        <td className="px-3 py-2.5">
+          <CardSelectCheckbox
+            checked={cardSelection.isSelected(card.id)}
+            onChange={() => cardSelection.toggle(card.id)}
+            label={`Seleccionar tarjeta ${card.tc}`}
+          />
+        </td>
+      ) : null}
       {visibleColumns.includes("tc") ? (
         <td
           className="cursor-pointer px-3 py-2.5 font-mono font-bold text-blue-700 hover:underline truncate"
@@ -615,6 +716,60 @@ export default function TarjetasClient() {
     </tr>
   );
 
+  // SDD card-groups — Work Unit G, Task 22. Moved out of an inline literal:
+  // `filter-bar.tsx:149` depends on `facets` for its effect, so the ORIGINAL
+  // inline array already re-ran that effect on every render — this is
+  // required, not hygiene, once `groups` is a real dependency.
+  const tarjetaFacets = useMemo(
+    () => [
+      {
+        field: "contactoEstado",
+        label: "Gestión Contacto",
+        options: [
+          { label: "Contactadas", value: "CONTACTADA" },
+          { label: "No contactadas / Pendientes", value: "NO_CONTACTADA" },
+          { label: "Retorno solicitado", value: "RETORNO_SOLICITADO" },
+          { label: "Traslado solicitado", value: "TRASLADO_SOLICITADO" },
+        ],
+      },
+      {
+        field: "productType",
+        label: "Producto",
+        options: [
+          { label: "Crédito", value: "CREDITO" },
+          { label: "Débito", value: "DEBITO" },
+        ],
+      },
+      { field: "status", label: "Estado", multi: true },
+      { field: "provincia", label: "Provincia", multi: true },
+      { field: "zona", label: "Zona", multi: true },
+      {
+        field: "grupo",
+        label: "Grupo",
+        multi: true,
+        options: [
+          ...cardGroups.groups.map((group) => ({ label: group.name, value: group.id })),
+          { label: "Sin grupo", value: "SIN_GRUPO" },
+        ],
+      },
+      {
+        field: "origin",
+        label: "Origen",
+        options: [
+          { label: "Torre Popular", value: "TORRE_POPULAR" },
+          { label: "Centro de Acopio", value: "CENTRO_ACOPIO" },
+          { label: "BPD Débito", value: "BPD_DEBITO" },
+        ],
+      },
+      {
+        field: "urgent",
+        label: "Urgente",
+        options: [{ label: "Solo urgentes", value: "1" }],
+      },
+    ],
+    [cardGroups.groups],
+  );
+
   return (
     <div className="flex flex-col gap-5">
       <PageHeader title="Tarjetas" subtitle="Importacion, consulta y clasificacion de tarjetas" />
@@ -630,43 +785,7 @@ export default function TarjetasClient() {
         allowedViews={["list", "cards"]}
         currentView={viewMode}
         onViewChange={setViewMode}
-        facets={[
-          {
-            field: "contactoEstado",
-            label: "Gestión Contacto",
-            options: [
-              { label: "Contactadas", value: "CONTACTADA" },
-              { label: "No contactadas / Pendientes", value: "NO_CONTACTADA" },
-              { label: "Retorno solicitado", value: "RETORNO_SOLICITADO" },
-              { label: "Traslado solicitado", value: "TRASLADO_SOLICITADO" },
-            ],
-          },
-          {
-            field: "productType",
-            label: "Producto",
-            options: [
-              { label: "Crédito", value: "CREDITO" },
-              { label: "Débito", value: "DEBITO" },
-            ],
-          },
-          { field: "status", label: "Estado", multi: true },
-          { field: "provincia", label: "Provincia", multi: true },
-          { field: "zona", label: "Zona", multi: true },
-          {
-            field: "origin",
-            label: "Origen",
-            options: [
-              { label: "Torre Popular", value: "TORRE_POPULAR" },
-              { label: "Centro de Acopio", value: "CENTRO_ACOPIO" },
-              { label: "BPD Débito", value: "BPD_DEBITO" },
-            ],
-          },
-          {
-            field: "urgent",
-            label: "Urgente",
-            options: [{ label: "Solo urgentes", value: "1" }],
-          },
-        ]}
+        facets={tarjetaFacets}
         groupByOptions={[
           { field: "contactoEstado", label: "Gestión Contacto" },
           { field: "productType", label: "Producto" },
@@ -851,7 +970,16 @@ export default function TarjetasClient() {
                           >
                             <div>
                               <div className="flex items-start justify-between gap-2 flex-wrap">
-                                <span className="font-mono text-sm font-bold text-blue-700">{card.tc}</span>
+                                <div className="flex items-center gap-2">
+                                  {canManageGroups ? (
+                                    <CardSelectCheckbox
+                                      checked={cardSelection.isSelected(card.id)}
+                                      onChange={() => cardSelection.toggle(card.id)}
+                                      label={`Seleccionar tarjeta ${card.tc}`}
+                                    />
+                                  ) : null}
+                                  <span className="font-mono text-sm font-bold text-blue-700">{card.tc}</span>
+                                </div>
                                 <div className="flex items-center gap-1 flex-wrap">
                                   {card.solicitudRetorno || card.contactoEstado === "RETORNO_SOLICITADO" ? (
                                     <span className="inline-flex items-center gap-1 rounded-md bg-rose-50 border border-rose-200 px-1.5 py-0.5 text-[10px] font-bold text-rose-700">
@@ -918,7 +1046,16 @@ export default function TarjetasClient() {
                 >
                   <div>
                     <div className="flex items-start justify-between gap-2 flex-wrap">
-                      <span className="font-mono text-sm font-bold text-blue-700">{card.tc}</span>
+                      <div className="flex items-center gap-2">
+                        {canManageGroups ? (
+                          <CardSelectCheckbox
+                            checked={cardSelection.isSelected(card.id)}
+                            onChange={() => cardSelection.toggle(card.id)}
+                            label={`Seleccionar tarjeta ${card.tc}`}
+                          />
+                        ) : null}
+                        <span className="font-mono text-sm font-bold text-blue-700">{card.tc}</span>
+                      </div>
                       <div className="flex items-center gap-1 flex-wrap">
                         {card.solicitudRetorno || card.contactoEstado === "RETORNO_SOLICITADO" ? (
                           <span className="inline-flex items-center gap-1 rounded-md bg-rose-50 border border-rose-200 px-1.5 py-0.5 text-[10px] font-bold text-rose-700">
@@ -978,6 +1115,23 @@ export default function TarjetasClient() {
             <table className="w-full min-w-[1100px] text-left text-sm table-fixed">
               <thead className="bg-slate-50/80 text-xs uppercase tracking-wide text-slate-600 border-b border-slate-200">
                 <tr>
+                  {canManageGroups ? (
+                    <th className="w-10 px-3">
+                      <CardSelectCheckbox
+                        checked={cards.length > 0 && cards.every((c) => cardSelection.isSelected(c.id))}
+                        onChange={(checked) => {
+                          if (checked) {
+                            cardSelection.selectMany(cards.map((c) => c.id));
+                          } else {
+                            for (const c of cards) {
+                              if (cardSelection.isSelected(c.id)) cardSelection.toggle(c.id);
+                            }
+                          }
+                        }}
+                        label="Seleccionar todas en esta página"
+                      />
+                    </th>
+                  ) : null}
                   {visibleColumns.includes("tc") ? (
                     <ResizableHeader
                       columnKey="tc"
@@ -1128,7 +1282,7 @@ export default function TarjetasClient() {
                           }
                           className="cursor-pointer bg-slate-100/90 font-semibold text-slate-900 transition hover:bg-slate-200/80 select-none border-y border-slate-200"
                         >
-                          <td colSpan={visibleColumns.length + 1} className="py-2.5 px-3">
+                          <td colSpan={visibleColumns.length + (canManageGroups ? 2 : 1)} className="py-2.5 px-3">
                             <div className="flex items-center gap-2">
                               {isCollapsed ? (
                                 <ChevronRight className="h-4 w-4 text-slate-600" />
@@ -1160,7 +1314,7 @@ export default function TarjetasClient() {
                 )}
                 {!cards.length ? (
                   <tr>
-                    <td colSpan={visibleColumns.length + 1} className="py-8 text-center text-sm text-slate-500">
+                    <td colSpan={visibleColumns.length + (canManageGroups ? 2 : 1)} className="py-8 text-center text-sm text-slate-500">
                       {loading ? "Cargando..." : "No hay tarjetas que coincidan con estos filtros."}
                     </td>
                   </tr>
@@ -1214,6 +1368,35 @@ export default function TarjetasClient() {
           </div>
         ) : null}
       </Panel>
+
+      {canManageGroups ? (
+        <CardSelectionBar
+          count={cardSelection.count}
+          selectedIds={cardSelection.ids}
+          cardsById={cardsById}
+          activeGroupFilterIds={activeGroupFilterIds}
+          onClear={cardSelection.clear}
+          onDeselect={cardSelection.toggle}
+          onCreateGroup={() => setAssignModalMode("new")}
+          onAssignExisting={() => setAssignModalMode("existing")}
+          onRemoveFromGroup={() => void handleRemoveFromGroup()}
+        />
+      ) : null}
+      {groupActionError ? (
+        <p className="text-xs font-semibold text-red-600">{groupActionError}</p>
+      ) : null}
+
+      {canManageGroups && assignModalMode ? (
+        <CardGroupAssignModal
+          cardIds={cardSelection.ids}
+          offFilterCount={offFilterCount}
+          offFilterError={offFilterError}
+          groups={cardGroups.groups}
+          initialMode={assignModalMode}
+          onClose={() => setAssignModalMode(null)}
+          onSuccess={() => void afterGroupAction()}
+        />
+      ) : null}
 
       {selectedCardId ? (
         <CardDetailModal

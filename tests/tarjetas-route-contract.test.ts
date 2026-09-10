@@ -1,5 +1,6 @@
+import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { readJson, type TransactionalPrismaMock } from "./golden/helpers/mock-route";
+import { firstCallArg, readJson, type TransactionalPrismaMock } from "./golden/helpers/mock-route";
 
 /**
  * SDD contrato-tarjetas-pistoleo — Phase 4 (task 4.1).
@@ -27,7 +28,7 @@ vi.mock("@/lib/urgent-alerts", () => ({
 }));
 
 import { prisma as prismaImport } from "@/lib/prisma";
-import { PATCH as patchTarjetas } from "@/app/api/tarjetas/route";
+import { GET as getTarjetas, PATCH as patchTarjetas } from "@/app/api/tarjetas/route";
 
 const prisma = prismaImport as unknown as TransactionalPrismaMock;
 
@@ -84,5 +85,32 @@ describe("PATCH /api/tarjetas — hasContract edit", () => {
     expect((response as Response).status).toBe(200);
     expect((body.card as Record<string, unknown>).hasContract).toBe(false);
     expect((body.card as Record<string, unknown>).status).toBe("ENTREGA_DIGITAL_SIN_CONTRATO");
+  });
+});
+
+/**
+ * SDD card-groups — Work Unit C, Task 5.
+ *
+ * `?grupo=<id>` on `GET /api/tarjetas` MUST reach Prisma as the
+ * `groupMemberships.some.groupId` relation clause, via the `relationSome`
+ * descriptor filter wired in `lib/list-query/descriptors/tarjetas.ts`.
+ */
+describe("GET /api/tarjetas — grupo facet (card-groups Work Unit C)", () => {
+  function getReq(url: string) {
+    return new NextRequest(`http://localhost${url}`);
+  }
+
+  it("compiles a single grupo id to the relation clause", async () => {
+    await getTarjetas(getReq("/api/tarjetas?grupo=g1"));
+    expect(firstCallArg(prisma.card.findMany).where).toEqual({
+      groupMemberships: { some: { groupId: "g1" } },
+    });
+  });
+
+  it("compiles SIN_GRUPO to the none clause", async () => {
+    await getTarjetas(getReq("/api/tarjetas?grupo=SIN_GRUPO"));
+    expect(firstCallArg(prisma.card.findMany).where).toEqual({
+      groupMemberships: { none: {} },
+    });
   });
 });
