@@ -67,6 +67,7 @@ enum RouteStatus {
   PENDIENTE
   EN_PROCESO
   COMPLETADA
+  CANCELADA
 }
 
 enum DispatchOrigin {

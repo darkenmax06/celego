@@ -96,6 +96,21 @@ function indexMap(headers: string[], aliases: Record<string, string[]>) {
 }
 function cell(row: Cell[], index: number) { return index >= 0 ? text(row[index]) : ""; }
 function hasDetailShape(row: Cell[]) { return row.some((value) => text(value)); }
+function isDecorativeCentroFooter(
+  rawTc: string,
+  rawCedula: string,
+  name: string,
+  quantityRaw: string,
+  dispatchDate: Date | null,
+) {
+  return (
+    !rawTc &&
+    !rawCedula &&
+    !quantityRaw &&
+    !dispatchDate &&
+    /^[.X*\s_-]+$/i.test(name)
+  );
+}
 
 export function detectCardImportFormat(rows: Rows): { origin: DispatchOrigin; headerRowIndex: number } {
   const centroIndex = findHeader(rows, (headers) => centroRequired.every((required) => headers.includes(required)));
@@ -121,11 +136,15 @@ export function parseNormalizedCardRows(rows: Rows) {
     const rawCedula = cell(row, indexes.cedula);
     const name = cell(row, indexes.nombre);
     const quantityRaw = cell(row, indexes.quantity);
+    const dispatchDate = parseDate(indexes.date >= 0 ? row[indexes.date] : null);
     if (!rawTc && !rawCedula && !name) continue;
     if (/subtotal|total/i.test(name) || (detected.origin === "CENTRO_ACOPIO" && !rawTc && quantityRaw)) continue;
+    if (
+      detected.origin === "CENTRO_ACOPIO" &&
+      isDecorativeCentroFooter(rawTc, rawCedula, name, quantityRaw, dispatchDate)
+    ) continue;
     const tc = validIdentifier(rawTc, 15, 19);
     const cedula = validIdentifier(rawCedula, 9, 13);
-    const dispatchDate = parseDate(indexes.date >= 0 ? row[indexes.date] : null);
     const direccionRaw = cell(row, indexes.direccion);
     const quantity = detected.origin === "CENTRO_ACOPIO" ? Number(quantityRaw) : 1;
     const failures = [!tc && "TC invalido", !cedula && "cedula invalida", !name && "nombre requerido", !dispatchDate && "fecha requerida", !(Number.isInteger(quantity) && quantity > 0) && "cantidad invalida"].filter(Boolean) as string[];
