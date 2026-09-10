@@ -38,7 +38,11 @@ export async function POST(request: Request) {
   } catch (error) {
     await prisma.cardImportBatch.update({ where: { id: batch.id }, data: { status: "REJECTED", rejectedCount: parsed.errors.length, completedAt: new Date() } }).catch(() => undefined);
     if (error instanceof CardImportConflictError) return NextResponse.json({ error: error.code, batchId: batch.id }, { status: 409 });
-    if (error instanceof Error && error.message.startsWith("UNRESOLVED_ZONE")) return NextResponse.json({ error: "Zona/provincia no resoluble", batchId: batch.id }, { status: 422 });
+    if (error instanceof Error && error.message.startsWith("UNRESOLVED_ZONE")) {
+      const [, row = "", value = ""] = /^UNRESOLVED_ZONE_ROW_(\d+):?(.*)$/.exec(error.message) ?? [];
+      const detail = value ? `fila ${row}: "${value}"` : `fila ${row}`;
+      return NextResponse.json({ error: `Zona/provincia no resoluble (${detail})`, batchId: batch.id }, { status: 422 });
+    }
     throw error;
   }
 }

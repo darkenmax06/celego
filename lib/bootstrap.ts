@@ -83,20 +83,21 @@ export async function ensureDebitCardIntegrity() {
     );
   }
 
+  // NOTE: the `card_product_identifier_valid` CHECK constraint used to be created
+  // here. It required DEBITO cards to carry `tc = ''`, but every write path in
+  // this codebase stores the request number in `tc` for debit cards
+  // (`persistDebitConsolidadoImport`, `debit-despacho`, `debit-consolidado`), so
+  // the constraint rejected every debit card the app itself created.
+  //
+  // Migrating debit cards to `tc = ''` is not a viable fix either: `CardTcGuard`
+  // uses `tc` as its primary key and `activeCardId` is unique, so an empty `tc`
+  // would collapse every debit card onto a single guard row.
+  //
+  // Reconciling the debit identity model (identify debit by `requestNumber` and
+  // stop keying the guard on `tc`) is tracked separately. Until then this
+  // constraint is not created, and any leftover copy is dropped below.
   await prisma.$executeRawUnsafe(`
-    DO $$
-    BEGIN
-      IF NOT EXISTS (
-        SELECT 1 FROM pg_constraint WHERE conname = 'card_product_identifier_valid'
-      ) THEN
-        ALTER TABLE "Card"
-        ADD CONSTRAINT card_product_identifier_valid CHECK (
-          ("productType" = 'CREDITO' AND "tc" IS NOT NULL AND "requestNumber" IS NULL)
-          OR
-          ("productType" = 'DEBITO' AND "tc" = '' AND "requestNumber" IS NOT NULL AND "dispatchDate" IS NOT NULL)
-        ) NOT VALID;
-      END IF;
-    END $$;
+    ALTER TABLE "Card" DROP CONSTRAINT IF EXISTS card_product_identifier_valid
   `);
 }
 

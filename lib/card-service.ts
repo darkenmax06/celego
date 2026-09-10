@@ -123,7 +123,10 @@ export async function upsertCardsFromImport(rows: ParsedCardRow[], byUserId?: st
           card: existing,
           nextStatus: status,
           byUserId,
-          note: "Actualizacion por importacion",
+          // Re-importing the same daily file re-touches every row regardless
+          // of whether its status actually moved; only log a real transition,
+          // matching persistDebitConsolidadoImport's guard below.
+          note: existing.status !== status ? "Actualizacion por importacion" : undefined,
           data: {
             zona,
             provincia,
@@ -324,10 +327,14 @@ function nonEmpty(value: string | null | undefined) {
   return trimmed ? trimmed : null;
 }
 
-function resolveNormalizedImportLocation(item: NormalizedCardImportRow) {
+export function resolveNormalizedImportLocation(item: Pick<NormalizedCardImportRow, "origin" | "provincia" | "zona">) {
   if (item.origin === "CENTRO_ACOPIO") return { province: "Santo Domingo", zone: "Metro" };
-  const province = nonEmpty(item.provincia);
-  const zone = normalizeZoneCandidate(item.zona ?? "") ?? (province ? resolveZone(province, "") : "");
+  const zonaRaw = nonEmpty(item.zona);
+  // Torre dispatch sheets frequently ship a single ZONA column holding the
+  // province name and no PROVINCIA/ENVIADO A column at all, so fall back to it
+  // before treating the row as unresolvable.
+  const province = nonEmpty(item.provincia) ?? zonaRaw;
+  const zone = normalizeZoneCandidate(zonaRaw ?? "") ?? (province ? resolveZone(province, "") : "");
   return { province, zone };
 }
 
@@ -366,7 +373,7 @@ export async function persistNormalizedCardImport(input: {
       }
 
       const { province, zone } = resolveNormalizedImportLocation(item);
-      if (!zone) throw new Error(`UNRESOLVED_ZONE_ROW_${item.sourceRowNumber}`);
+      if (!zone) throw new Error(`UNRESOLVED_ZONE_ROW_${item.sourceRowNumber}:${item.provincia ?? item.zona ?? ""}`);
       const customer = await tx.customer.upsert({
         where: { cedula: item.cedula },
         update: {
@@ -376,7 +383,7 @@ export async function persistNormalizedCardImport(input: {
           ...(province ? { provincia: province } : {}),
           ...(zone ? { zona: zone } : {}),
         },
-        create: { cedula: item.cedula, nombre: item.nombre, direccionRaw: item.direccionRaw, telefonosRaw: item.telefonosRaw, provincia: province, zona: zone },
+        create: { cedula: item.cedula, nombre: item.nombre, direccionRaw: item.direccionRaw || null, telefonosRaw: item.telefonosRaw, provincia: province, zona: zone },
       });
 
       // Upsert first to serialize all creations for this TC, including the first one.
@@ -490,7 +497,16 @@ export async function persistDebitConsolidadoImport(input: {
           card: existing,
           nextStatus: item.status,
           byUserId: input.byUserId,
-          note: item.comment || "Actualización por importación de consolidado débito",
+          // A re-imported consolidado re-touches every requestNumber row on
+          // every run; most carry no real status movement. Logging then would
+          // read as a status change that never happened (matches the guard
+          // lib/debit-consolidation/service.ts already applies for its own
+          // consolidado path). item.comment is still worth keeping when the
+          // status genuinely moves.
+          note:
+            existing.status !== item.status
+              ? item.comment || "Actualización por importación de consolidado débito"
+              : undefined,
           data: {
             provincia: item.provincia,
             zona: item.zona,
@@ -687,7 +703,13 @@ export async function updateCardsFromPinitExport(input: {
         card: targetCard,
         nextStatus: item.mappedStatus!,
         byUserId: input.byUserId,
-        note: `Actualizado desde Pinit (${item.rawStatus})`,
+        // Pinit exports repeat every requestNumber on every download; only
+        // log when the mapped status actually moves the card, or a reprocessed
+        // export reads as a fresh status change on cards that never moved.
+        note:
+          targetCard.status !== item.mappedStatus
+            ? `Actualizado desde Pinit (${item.rawStatus})`
+            : undefined,
         data: {
           metadata: updatedMeta as Prisma.InputJsonValue,
         },

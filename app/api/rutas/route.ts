@@ -16,6 +16,7 @@ import {
   ITEM_NOT_FOUND,
 } from "@/lib/item-outcome-service";
 import { emitTransitionObservations, type TransitionObservation } from "@/lib/card-transition-observer";
+import { buildRouteReassignmentNote } from "@/lib/route-reassignment";
 
 const createSchema = z.object({
   fecha: z.string(),
@@ -238,29 +239,37 @@ export async function POST(request: Request) {
     );
   }
 
-  const alreadyAssigned = await prisma.routeItem.findMany({
-    where: {
-      cardId: { in: selectedCards.map((card) => card.id) },
-      route: { status: { in: [RouteStatus.PENDIENTE, RouteStatus.EN_PROCESO] } },
-    },
-    select: { cardId: true },
-  });
-  if (alreadyAssigned.length) {
-    return NextResponse.json(
-      {
-        error: "Hay tarjetas ya asignadas a una ruta activa",
-        cardIds: alreadyAssigned.map((item) => item.cardId),
-      },
-      { status: 409 },
-    );
-  }
-
   try {
     const route = await prisma.$transaction(async (tx) => {
+      const priorItems = await tx.routeItem.findMany({
+        where: {
+          cardId: { in: selectedCards.map((card) => card.id) },
+          route: { status: { in: [RouteStatus.PENDIENTE, RouteStatus.EN_PROCESO] } },
+        },
+        select: {
+          id: true,
+          cardId: true,
+          routeId: true,
+          route: { select: { messenger: { select: { nombre: true } } } },
+        },
+      });
+
+      if (priorItems.length) {
+        await tx.routeItem.deleteMany({ where: { id: { in: priorItems.map((item) => item.id) } } });
+        await tx.route.updateMany({
+          where: {
+            id: { in: [...new Set(priorItems.map((item) => item.routeId))] },
+            status: { in: [RouteStatus.PENDIENTE, RouteStatus.EN_PROCESO] },
+            items: { none: {} },
+          },
+          data: { status: RouteStatus.CANCELADA },
+        });
+      }
+
       const assigned = await tx.card.updateMany({
         where: {
           id: { in: selectedCards.map((card) => card.id) },
-          status: { notIn: [...CLOSED_CARD_STATUSES] },
+          status: { notIn: TERMINAL_CARD_STATUSES },
         },
         data: {
           currentMessengerId: parsed.data.messengerId,
@@ -271,6 +280,17 @@ export async function POST(request: Request) {
 
       if (assigned.count !== selectedCards.length) {
         throw new Error(CARD_ASSIGNMENT_CLOSED);
+      }
+
+      const reassignedCardIds = [...new Set(priorItems.map((item) => item.cardId))];
+      if (reassignedCardIds.length) {
+        await tx.card.updateMany({
+          where: { id: { in: reassignedCardIds } },
+          data: {
+            reassignedMessengerId: parsed.data.messengerId,
+            reassignedAt: new Date(),
+          },
+        });
       }
 
       if (contractCardIds.size) {
@@ -300,14 +320,34 @@ export async function POST(request: Request) {
         },
       });
 
-      await tx.cardStatusLog.createMany({
-        data: selectedCards.map((card) => ({
+      const reassignmentLogs = priorItems.map((item) => {
+        const card = selectedCards.find((candidate) => candidate.id === item.cardId)!;
+        return {
+          cardId: item.cardId,
+          fromStatus: card.status,
+          toStatus: CardStatus.EN_RUTA,
+          note: buildRouteReassignmentNote({
+            previousRouteId: item.routeId,
+            previousMessengerName: item.route.messenger.nombre,
+            nextRouteId: created.id,
+            nextMessengerName: created.messenger.nombre,
+          }),
+          byUserId: auth.session.user.id,
+        };
+      });
+      const reassignedCardIdSet = new Set(reassignedCardIds);
+      const assignmentLogs = selectedCards
+        .filter((card) => !reassignedCardIdSet.has(card.id))
+        .map((card) => ({
           cardId: card.id,
           fromStatus: card.status,
           toStatus: CardStatus.EN_RUTA,
           note: "Asignada a mensajero " + created.messenger.nombre + " (ruta " + created.id + ")",
           byUserId: auth.session.user.id,
-        })),
+        }));
+
+      await tx.cardStatusLog.createMany({
+        data: [...reassignmentLogs, ...assignmentLogs],
       });
 
       return created;

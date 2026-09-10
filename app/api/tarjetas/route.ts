@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { CardProductType, CardStatus, Prisma } from "@prisma/client";
+import { CardProductType, CardStatus } from "@prisma/client";
 import { z } from "zod";
 import { requireApiSession } from "@/lib/api-session";
 import { prisma } from "@/lib/prisma";
@@ -7,6 +7,7 @@ import { recalculateAdditionalCardsForGroups } from "@/lib/card-additional";
 import { toCardStatus } from "@/lib/card-status";
 import { buildListEnvelope, compile, ListQueryValidationError } from "@/lib/list-query";
 import { tarjetasListQuery } from "@/lib/list-query/descriptors/tarjetas";
+import { applyContactoEstado } from "@/lib/list-query/tarjetas-where";
 import { applyCardTransition, RETURN_REASON_REQUIRED } from "@/lib/card-transition";
 
 const originSchema = z.enum(["TORRE_POPULAR", "CENTRO_ACOPIO"]);
@@ -63,33 +64,7 @@ export async function GET(request: NextRequest) {
     }
     throw error;
   }
-  const contactoEstadoParam = request.nextUrl.searchParams.get("contactoEstado");
-
-  let contactoConstraint: Prisma.CardWhereInput | undefined;
-  if (contactoEstadoParam && contactoEstadoParam !== "ALL") {
-    if (contactoEstadoParam === "CONTACTADA") {
-      contactoConstraint = {
-        metadata: { path: ["operativo", "contactado"], equals: true },
-      };
-    } else if (contactoEstadoParam === "RETORNO_SOLICITADO") {
-      contactoConstraint = {
-        metadata: { path: ["operativo", "solicitudRetorno"], equals: true },
-      };
-    } else if (contactoEstadoParam === "TRASLADO_SOLICITADO") {
-      contactoConstraint = {
-        metadata: { path: ["operativo", "traslado", "provinciaDestino"], not: Prisma.AnyNull },
-      };
-    } else if (contactoEstadoParam === "NO_CONTACTADA") {
-      contactoConstraint = {
-        NOT: { metadata: { path: ["operativo", "contactado"], equals: true } },
-      };
-    }
-  }
-
-  const { where } = query;
-  const finalWhere: Prisma.CardWhereInput = contactoConstraint
-    ? { AND: [where, contactoConstraint] }
-    : where;
+  const finalWhere = applyContactoEstado(query.where, request.nextUrl.searchParams);
 
   const [cards, total] = await Promise.all([
     prisma.card.findMany({

@@ -371,3 +371,93 @@ describe("AND composition (task 10.7 — operativo/contacto)", () => {
     });
   });
 });
+
+/**
+ * Task 2 (card-groups Work Unit B) — regression proof that every EXISTING
+ * filter kind still emits a byte-identical FLAT `where`, taken BEFORE the
+ * `relationSome` branch is added. `relationSome` must never flip an unrelated
+ * descriptor's `where` to `{ AND: [...] }` just because the kind exists.
+ */
+describe("regression: existing descriptors stay flat (card-groups Work Unit B, task 2)", () => {
+  it("the base descriptor's flat where is unaffected by unrelated filter kinds existing", () => {
+    const { where } = compile(descriptor, params({ status: "EN_RUTA", provincia: "SANTIAGO", urgent: "1" }));
+    expect(where).toEqual({ status: "EN_RUTA", provincia: "SANTIAGO", urgent: true });
+    expect(Object.keys(where as object)).not.toContain("AND");
+  });
+});
+
+/**
+ * Task 3 (card-groups Work Unit B) — RED before the `relationSome` branch
+ * exists in `compile.ts`. Covers: single id, multi id OR, `SIN_GRUPO` alone,
+ * mixed -> AND+OR, mixed + `q` (Object.assign regression proof), absent
+ * param unchanged.
+ */
+describe("relationSome filter kind (card-groups Work Unit B, task 3)", () => {
+  const grouped = defineListQuery<TestWhere>({
+    key: "grouped",
+    searchFields: ["tc"],
+    filters: [
+      {
+        kind: "relationSome",
+        param: "grupo",
+        relation: "groupMemberships",
+        relationField: "groupId",
+        noneToken: "SIN_GRUPO",
+      },
+    ],
+    sort: { keys: {}, fallbackOrderBy: [{ updatedAt: "desc" }] },
+    pagination: { defaultPageSize: 25, maxPageSize: 200 },
+  });
+
+  it("compiles a single id to a bare relation clause", () => {
+    expect(compile(grouped, params({ grupo: "g1" })).where).toEqual({
+      groupMemberships: { some: { groupId: "g1" } },
+    });
+  });
+
+  it("compiles multiple ids to an OR (in:) clause", () => {
+    expect(compile(grouped, params({ grupo: "g1,g2" })).where).toEqual({
+      groupMemberships: { some: { groupId: { in: ["g1", "g2"] } } },
+    });
+  });
+
+  it("compiles SIN_GRUPO alone to a none clause", () => {
+    expect(compile(grouped, params({ grupo: "SIN_GRUPO" })).where).toEqual({
+      groupMemberships: { none: {} },
+    });
+  });
+
+  it("compiles a mix of ids and SIN_GRUPO to an OR combinator, forcing the AND shape", () => {
+    const { where } = compile(grouped, params({ grupo: "g1,SIN_GRUPO" }));
+    expect(Object.keys(where as object)).toEqual(["AND"]);
+    expect((where as { AND: unknown[] }).AND).toEqual([
+      {
+        OR: [
+          { groupMemberships: { some: { groupId: "g1" } } },
+          { groupMemberships: { none: {} } },
+        ],
+      },
+    ]);
+  });
+
+  it("keeps the mixed OR and the search OR as SEPARATE conjuncts (Object.assign regression proof)", () => {
+    const { where } = compile(grouped, params({ grupo: "g1,SIN_GRUPO", q: "abc" }));
+    expect((where as { AND: unknown[] }).AND).toEqual([
+      {
+        OR: [
+          { groupMemberships: { some: { groupId: "g1" } } },
+          { groupMemberships: { none: {} } },
+        ],
+      },
+      { OR: [{ tc: { contains: "abc", mode: "insensitive" } }] },
+    ]);
+  });
+
+  it("leaves the where unchanged when the param is absent", () => {
+    expect(compile(grouped, params({})).where).toEqual({});
+  });
+
+  it("treats an empty value as absent", () => {
+    expect(compile(grouped, params({ grupo: "" })).where).toEqual({});
+  });
+});

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   OperationalCardPicker,
   type OperationalCard,
@@ -90,6 +90,12 @@ export default function RedaccionClient() {
     "retorno",
   );
   const [scanInput, setScanInput] = useState("");
+  const cardPickerInputRef = useRef<HTMLInputElement>(null);
+  const focusCardPicker = () => {
+    window.requestAnimationFrame(() => {
+      cardPickerInputRef.current?.focus();
+    });
+  };
   const [zona, setZona] = usePersistentState("redaccion:zona", "Este");
   const [fecha, setFecha] = usePersistentState(
     "redaccion:fecha",
@@ -760,7 +766,10 @@ export default function RedaccionClient() {
 
         <div className="mb-4 flex gap-2">
           <button
-            onClick={() => setMode("retorno")}
+            onClick={() => {
+              setMode("retorno");
+              focusCardPicker();
+            }}
             className={`rounded-xl border px-4 py-2 text-sm font-semibold ${
               mode === "retorno"
                 ? "border-rose-300 bg-rose-50 text-rose-700"
@@ -770,7 +779,10 @@ export default function RedaccionClient() {
             Tarjetas Retornadas ({retornos.length})
           </button>
           <button
-            onClick={() => setMode("entrega")}
+            onClick={() => {
+              setMode("entrega");
+              focusCardPicker();
+            }}
             className={`rounded-xl border px-4 py-2 text-sm font-semibold ${
               mode === "entrega"
                 ? "border-blue-300 bg-blue-50 text-blue-700"
@@ -794,6 +806,7 @@ export default function RedaccionClient() {
         ) : null}
 
         <OperationalCardPicker
+          inputRef={cardPickerInputRef}
           value={scanInput}
           onValueChange={setScanInput}
           onCardSelected={addSelectedCard}
@@ -1088,8 +1101,14 @@ export default function RedaccionClient() {
       {errorWizard ? (
         <RedaccionErrorWizardModal
           error={errorWizard}
-          onClose={() => setErrorWizard(null)}
-          onSaveCurrentAndSwitchOrigin={handleSaveAndSwitchToCardOrigin}
+          onClose={() => {
+            setErrorWizard(null);
+            focusCardPicker();
+          }}
+          onSaveCurrentAndSwitchOrigin={(newOrigin, card) => {
+            handleSaveAndSwitchToCardOrigin(newOrigin, card);
+            focusCardPicker();
+          }}
         />
       ) : null}
 
