@@ -4,6 +4,7 @@ import { ChangeEvent, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { CardDetailModal } from "@/components/cards/card-detail-modal";
 import { CardGroupAssignModal } from "@/components/cards/card-group-assign-modal";
+import { CardGroupFanoutNote } from "@/components/cards/card-group-fanout-note";
 import { CardSelectCheckbox } from "@/components/cards/card-select-checkbox";
 import { CardSelectionBar, type SelectedCardEntry } from "@/components/cards/card-selection-bar";
 import { FilterBar, ViewType } from "@/components/filters/filter-bar";
@@ -11,6 +12,15 @@ import { PageHeader } from "@/components/ui/page-header";
 import { Panel } from "@/components/ui/panel";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { notificationFailureMessage, notifyInBrowser } from "@/lib/browser-notifications";
+import {
+  CARD_GROUP_BY_FIELD,
+  bucketCountLabel,
+  cardGroupBuckets,
+  groupRows,
+  singleBucket,
+  toGroupNameMap,
+} from "@/lib/grouping";
+import { useCardGroupBucketTotals } from "@/lib/use-card-group-bucket-totals";
 import { useCardGroups } from "@/lib/use-card-groups";
 import { useCardSelection } from "@/lib/use-card-selection";
 import { usePersistentState } from "@/lib/use-persistent-state";
@@ -395,18 +405,24 @@ export default function TarjetasClient({ role }: TarjetasClientProps) {
     void fetchCards(filters);
   }, [filters]);
 
+  const groupNameById = useMemo(() => toGroupNameMap(cardGroups.groups), [cardGroups.groups]);
+
+  /** Grouping by "Grupo" is the only group-by where a row lands in several buckets. */
+  const isGroupByGrupo = filters.groupBy === CARD_GROUP_BY_FIELD;
+
+  /** True per-group totals; `null` while loading or when none can be computed. */
+  const bucketTotals = useCardGroupBucketTotals("tarjetas", filters, isGroupByGrupo);
+
   const groupedCards = useMemo(() => {
-    if (!filters.groupBy) return null;
-    const groups: Record<string, { groupKey: string; groupLabel: string; items: CardRow[] }> = {};
-    for (const card of cards) {
-      const { key, label } = getCardGroupKey(card, filters.groupBy);
-      if (!groups[key]) {
-        groups[key] = { groupKey: key, groupLabel: label, items: [] };
-      }
-      groups[key].items.push(card);
-    }
-    return Object.values(groups);
-  }, [cards, filters.groupBy]);
+    const groupBy = filters.groupBy;
+    if (!groupBy) return null;
+    return groupRows(
+      cards,
+      groupBy === CARD_GROUP_BY_FIELD
+        ? (card: CardRow) => cardGroupBuckets(card.groupIds, groupNameById)
+        : singleBucket((card: CardRow) => getCardGroupKey(card, groupBy)),
+    );
+  }, [cards, filters.groupBy, groupNameById]);
 
   async function pullImmediateUrgentNotifications() {
     const res = await fetch("/api/operativo/urgencias", { cache: "no-store" });
@@ -795,6 +811,7 @@ export default function TarjetasClient({ role }: TarjetasClientProps) {
           { field: "status", label: "Estado" },
           { field: "provincia", label: "Provincia" },
           { field: "zona", label: "Zona" },
+          { field: CARD_GROUP_BY_FIELD, label: "Grupo" },
         ]}
       />
 
@@ -920,6 +937,7 @@ export default function TarjetasClient({ role }: TarjetasClientProps) {
                 Agrupado por: {filters.groupBy}
               </span>
             ) : null}
+            {isGroupByGrupo ? <CardGroupFanoutNote /> : null}
           </div>
           {viewMode === "list" ? (
             <TableColumnSelector
@@ -958,8 +976,7 @@ export default function TarjetasClient({ role }: TarjetasClientProps) {
                         </span>
                         <span className="text-sm font-bold text-slate-900">{group.groupLabel}</span>
                         <span className="rounded-full bg-slate-200/90 px-2 py-0.5 text-xs font-semibold text-slate-700">
-                          {group.items.length}{" "}
-                          {group.items.length === 1 ? "tarjeta" : "tarjetas"}
+                          {bucketCountLabel(group.items.length, bucketTotals?.[group.groupKey] ?? null)}
                         </span>
                       </div>
                     </div>
@@ -1298,8 +1315,7 @@ export default function TarjetasClient({ role }: TarjetasClientProps) {
                                 {group.groupLabel}
                               </span>
                               <span className="rounded-full bg-slate-200/90 px-2 py-0.5 text-xs font-semibold text-slate-700">
-                                {group.items.length}{" "}
-                                {group.items.length === 1 ? "tarjeta" : "tarjetas"}
+                                {bucketCountLabel(group.items.length, bucketTotals?.[group.groupKey] ?? null)}
                               </span>
                             </div>
                           </td>

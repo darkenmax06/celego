@@ -4,12 +4,21 @@ import { useEffect, useMemo, useState } from "react";
 import { PageHeader } from "@/components/ui/page-header";
 import { Panel } from "@/components/ui/panel";
 import { usePersistentState } from "@/lib/use-persistent-state";
+import {
+  CARD_GROUP_BY_FIELD,
+  bucketCountLabel,
+  cardGroupBuckets,
+  groupRows,
+  singleBucket,
+  toGroupNameMap,
+} from "@/lib/grouping";
 import { useCardGroups } from "@/lib/use-card-groups";
 import { useCardSelection } from "@/lib/use-card-selection";
 import {
   CardGroupAssignModal,
   OFF_FILTER_COUNT_UNAVAILABLE,
 } from "@/components/cards/card-group-assign-modal";
+import { CardGroupFanoutNote } from "@/components/cards/card-group-fanout-note";
 import { CardSelectCheckbox } from "@/components/cards/card-select-checkbox";
 import { CardSelectionBar, type SelectedCardEntry } from "@/components/cards/card-selection-bar";
 import { OperativeContactWizard, type PhoneState, type OperativeWizardCard } from "@/components/operativo/operative-contact-wizard";
@@ -303,18 +312,27 @@ export default function OperativoClient({ role }: OperativoClientProps) {
     };
   }, []);
 
+  const groupNameById = useMemo(() => toGroupNameMap(cardGroups.groups), [cardGroups.groups]);
+
+  /** Grouping by "Grupo" is the only group-by where a row lands in several buckets. */
+  const isGroupByGrupo = filters.groupBy === CARD_GROUP_BY_FIELD;
+
+  /**
+   * No server totals here on purpose: `app/api/operativo/contacto/route.ts`
+   * hand-builds its `where` across three tab branches and filters rows in
+   * memory, so no honest per-group total exists for this screen. The bucket
+   * headers therefore state only what this page shows, and the note says so.
+   */
   const groupedCards = useMemo(() => {
-    if (!filters.groupBy) return null;
-    const groups: Record<string, { groupKey: string; groupLabel: string; items: OperativeWizardCard[] }> = {};
-    for (const card of cards) {
-      const { key, label } = getOperativeGroupKey(card, filters.groupBy);
-      if (!groups[key]) {
-        groups[key] = { groupKey: key, groupLabel: label, items: [] };
-      }
-      groups[key].items.push(card);
-    }
-    return Object.values(groups);
-  }, [cards, filters.groupBy]);
+    const groupBy = filters.groupBy;
+    if (!groupBy) return null;
+    return groupRows(
+      cards,
+      groupBy === CARD_GROUP_BY_FIELD
+        ? (card: OperativeWizardCard) => cardGroupBuckets(card.groupIds, groupNameById)
+        : singleBucket((card: OperativeWizardCard) => getOperativeGroupKey(card, groupBy)),
+    );
+  }, [cards, filters.groupBy, groupNameById]);
 
   const selectedIndex = selectedCardId ? cards.findIndex((card) => card.id === selectedCardId) : -1;
   const current = selectedIndex >= 0 ? cards[selectedIndex] : undefined;
@@ -838,6 +856,7 @@ export default function OperativoClient({ role }: OperativoClientProps) {
             { field: "canalContacto", label: "Canal de Contacto" },
             { field: "mensajero", label: "Mensajero" },
             { field: "gestion", label: "Estado de Gestión" },
+            { field: CARD_GROUP_BY_FIELD, label: "Grupo" },
           ]}
         />
       ) : null}
@@ -894,6 +913,7 @@ export default function OperativoClient({ role }: OperativoClientProps) {
           {groupedCards ? (
             /* GROUPED ACCORDION VIEW */
             <div className="space-y-4">
+              {isGroupByGrupo ? <CardGroupFanoutNote pageScopedCounts /> : null}
               {groupedCards.map((group) => {
                 const isCollapsed = Boolean(collapsedGroups[group.groupKey]);
                 return (
@@ -918,7 +938,7 @@ export default function OperativoClient({ role }: OperativoClientProps) {
                         </span>
                         <span className="text-sm font-bold text-slate-900">{group.groupLabel}</span>
                         <span className="rounded-full bg-slate-200/90 px-2 py-0.5 text-xs font-semibold text-slate-700">
-                          {group.items.length} {group.items.length === 1 ? "tarjeta" : "tarjetas"}
+                          {bucketCountLabel(group.items.length, null)}
                         </span>
                       </div>
                     </div>
