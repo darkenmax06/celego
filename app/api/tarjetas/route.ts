@@ -83,6 +83,10 @@ export async function GET(request: NextRequest) {
             lastNotifiedAt: true,
           },
         },
+        // Bare group ids only. Clients resolve id -> name through
+        // `lib/use-card-groups.ts`, so shipping names here would duplicate
+        // that lookup. Same shape as `app/api/urgentes/route.ts`.
+        groupMemberships: { select: { groupId: true } },
       },
       orderBy: query.orderBy,
       skip: query.skip,
@@ -91,7 +95,7 @@ export async function GET(request: NextRequest) {
     prisma.card.count({ where: finalWhere }),
   ]);
 
-  const normalizedCards = cards.map(({ urgentCases, ...card }) => {
+  const normalizedCards = cards.map(({ urgentCases, groupMemberships, ...card }) => {
     const root = (card.metadata && typeof card.metadata === "object" ? card.metadata : {}) as Record<string, unknown>;
     const op = (root.operativo && typeof root.operativo === "object" ? root.operativo : {}) as Record<string, unknown>;
     const contactado = Boolean(op.contactado);
@@ -122,6 +126,7 @@ export async function GET(request: NextRequest) {
       traslado,
       comentarioContacto,
       activeUrgentCase: urgentCases[0] ?? null,
+      groupIds: groupMemberships.map((membership) => membership.groupId),
     };
   });
 

@@ -47,6 +47,8 @@ type CardRow = {
   fechaPreferenciaEntrega?: string | null;
   comentarioContacto?: string | null;
   metadata?: unknown;
+  /** Ids of the CardGroups this card belongs to. Names resolve via useCardGroups. */
+  groupIds?: string[];
 };
 
 type PaginationMeta = { page: number; pageSize: number; total: number; totalPages: number };
@@ -255,7 +257,7 @@ export default function TarjetasClient({ role }: TarjetasClientProps) {
   const searchParams = useSearchParams();
   const [cards, setCards] = useState<CardRow[]>([]);
   const [filters, setFilters] = useState<Record<string, string>>(() => {
-    const initial: Record<string, string> = { page: "1", pageSize: "25" };
+    const initial: Record<string, string> = { page: "1", pageSize: "50" };
     for (const key of URL_FILTER_KEYS) {
       const value = searchParams.get(key);
       if (value) initial[key] = value;
@@ -287,7 +289,7 @@ export default function TarjetasClient({ role }: TarjetasClientProps) {
   const [urgencyTarget, setUrgencyTarget] = useState<CardRow | null>(null);
   const [pagination, setPagination] = useState<PaginationMeta>({
     page: 1,
-    pageSize: 25,
+    pageSize: 50,
     total: 0,
     totalPages: 1,
   });
@@ -779,8 +781,8 @@ export default function TarjetasClient({ role }: TarjetasClientProps) {
         resource="tarjetas"
         sectionKey="tarjetas"
         filters={filters}
-        onFilterChange={(next) => setFilters({ ...next, page: "1", pageSize: filters.pageSize || "25" })}
-        onReset={() => setFilters({ page: "1", pageSize: "25" })}
+        onFilterChange={(next) => setFilters({ ...next, page: "1", pageSize: filters.pageSize || "50" })}
+        onReset={() => setFilters({ page: "1", pageSize: "50" })}
         searchPlaceholder="Buscar por TC, cédula, nombre o referencia..."
         allowedViews={["list", "cards"]}
         currentView={viewMode}
@@ -1335,7 +1337,7 @@ export default function TarjetasClient({ role }: TarjetasClientProps) {
               <label className="flex items-center gap-1">
                 <span>Por página:</span>
                 <select
-                  value={filters.pageSize || "25"}
+                  value={filters.pageSize || "50"}
                   onChange={(e) => setFilters((prev) => ({ ...prev, pageSize: e.target.value, page: "1" }))}
                   className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs"
                 >

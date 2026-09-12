@@ -52,6 +52,8 @@ type Row = {
   fechaPreferenciaEntrega?: string | null;
   comentarioContacto?: string | null;
   metadata?: unknown;
+  /** Ids of the CardGroups this card belongs to. Names resolve via useCardGroups. */
+  groupIds?: string[];
 };
 
 type PaginationMeta = {
@@ -167,14 +169,14 @@ export default function SlaVencidasClient() {
   const [filters, setFilters] = useState<Record<string, string>>({
     messengerId: "ALL",
     page: "1",
-    pageSize: "50",
+    pageSize: "100",
   });
   const cardGroups = useCardGroups();
   const [messengers, setMessengers] = useState<MessengerOption[]>([]);
   const [rows, setRows] = useState<Row[]>([]);
   const [pagination, setPagination] = useState<PaginationMeta>({
     page: 1,
-    pageSize: 50,
+    pageSize: 100,
     total: 0,
     totalPages: 1,
   });
@@ -483,8 +485,8 @@ export default function SlaVencidasClient() {
         resource="sla-vencidas"
         sectionKey="sla-vencidas"
         filters={filters}
-        onFilterChange={(next) => setFilters({ ...next, page: "1", pageSize: filters.pageSize || "50" })}
-        onReset={() => setFilters({ messengerId: "ALL", page: "1", pageSize: "50" })}
+        onFilterChange={(next) => setFilters({ ...next, page: "1", pageSize: filters.pageSize || "100" })}
+        onReset={() => setFilters({ messengerId: "ALL", page: "1", pageSize: "100" })}
         searchPlaceholder="Buscar por TC, cédula, nombre, provincia o zona..."
         facets={[
           {
@@ -770,7 +772,7 @@ export default function SlaVencidasClient() {
               <label className="flex items-center gap-1">
                 <span>Por página:</span>
                 <select
-                  value={filters.pageSize || "50"}
+                  value={filters.pageSize || "100"}
                   onChange={(e) => setFilters((prev) => ({ ...prev, pageSize: e.target.value, page: "1" }))}
                   className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs"
                 >

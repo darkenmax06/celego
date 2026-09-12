@@ -41,6 +41,8 @@ export type OperativeWizardCard = {
   motivoRetorno?: string | null;
   traslado?: Record<string, unknown> | null;
   hasAttempt?: boolean;
+  /** Ids of the CardGroups this card belongs to. Names resolve via useCardGroups. */
+  groupIds?: string[];
   readOnly?: boolean;
 };
 

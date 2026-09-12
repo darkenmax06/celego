@@ -49,14 +49,14 @@ describe("golden envelopes for the nine list routes", () => {
         ]),
       ),
     ).toEqual({
-      tarjetas: "25/200",
+      tarjetas: "50/200",
       rutas: "20/100",
       mensajeros: "25/100",
       redacciones: "20/100",
       lotes: "20/100",
       "config-usuarios": "20/100",
       actividad: "25/100",
-      "operativo-contacto": "25/100",
+      "operativo-contacto": "50/100",
       bizcochitos: "15/50",
     });
   });

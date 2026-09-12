@@ -150,7 +150,7 @@ export default function OperativoClient() {
   const [tab, setTab] = usePersistentState<OperativeTab>("operativo:tab", "activos");
   const [filters, setFilters] = useState<Record<string, string>>(() => ({
     page: "1",
-    pageSize: "25",
+    pageSize: "50",
     days: "3",
   }));
   const cardGroups = useCardGroups();
@@ -164,7 +164,7 @@ export default function OperativoClient() {
   const [showReport, setShowReport] = usePersistentState("operativo:report-modal", false);
   const [pagination, setPagination] = useState<PaginationMeta>({
     page: 1,
-    pageSize: 25,
+    pageSize: 50,
     total: 0,
     totalPages: 1,
   });
@@ -203,7 +203,7 @@ export default function OperativoClient() {
     const params = new URLSearchParams();
     params.set("tab", tab);
     params.set("page", currentFilters.page || "1");
-    params.set("pageSize", currentFilters.pageSize || "25");
+    params.set("pageSize", currentFilters.pageSize || "50");
     if (currentFilters.days) params.set("days", currentFilters.days);
 
     Object.entries(currentFilters).forEach(([k, v]) => {
@@ -661,8 +661,8 @@ export default function OperativoClient() {
           resource="operativo"
           sectionKey="operativo"
           filters={filters}
-          onFilterChange={(next) => setFilters({ ...next, page: "1", pageSize: filters.pageSize || "25" })}
-          onReset={() => setFilters({ page: "1", pageSize: "25", days: "3" })}
+          onFilterChange={(next) => setFilters({ ...next, page: "1", pageSize: filters.pageSize || "50" })}
+          onReset={() => setFilters({ page: "1", pageSize: "50", days: "3" })}
           searchPlaceholder="Buscar por TC, cédula, nombre o referencia..."
           allowedViews={["list", "cards"]}
           currentView={viewMode}
