@@ -17,15 +17,33 @@ import type { CardGroupSummary } from "@/lib/use-card-groups";
  * SDD card-groups remediation — FIX 2: `offFilterCount` is now fetched
  * server-side by the caller (the browser cannot know whether an unloaded
  * card matches the active filter), so it arrives as `number | null` — `null`
- * means "still loading or unavailable" and MUST NOT render as a count. While
+ * means "still loading" and MUST NOT render as a count. While
  * loading it shows "Calculando..."; if the caller reports `offFilterError`
  * it shows that message instead of any number, fabricated or stale.
+ *
+ * Stage B adds a THIRD, explicit state: `OFF_FILTER_COUNT_UNAVAILABLE`, for a
+ * screen whose dataset cannot answer the question at all (`/operativo`
+ * hand-builds its `where` across three tab branches and filters rows in
+ * memory, so no single `prisma.card.count` is equivalent). It is deliberately
+ * NOT `0` — a fabricated zero reads exactly like a measured zero and would
+ * tell the operator "nothing is outside your filter" when nobody checked —
+ * and deliberately not `null` either, which would leave the modal stuck on
+ * "Calculando..." forever.
  */
 type AssignResult = { added: number; alreadyMember: number };
 
+/** The view itself cannot determine the off-filter count. Never a number. */
+export const OFF_FILTER_COUNT_UNAVAILABLE = "unavailable" as const;
+
+/**
+ * `number` = measured, `null` = still loading, `OFF_FILTER_COUNT_UNAVAILABLE`
+ * = this view has no way to know.
+ */
+export type OffFilterCountState = number | null | typeof OFF_FILTER_COUNT_UNAVAILABLE;
+
 type Props = {
   cardIds: string[];
-  offFilterCount: number | null;
+  offFilterCount: OffFilterCountState;
   offFilterError?: string | null;
   groups: CardGroupSummary[];
   onClose: () => void;
@@ -105,6 +123,11 @@ export function CardGroupAssignModal({
           {offFilterError ? (
             <p className="rounded-lg border border-red-200 bg-red-50 p-2.5 text-xs font-semibold text-red-700">
               {offFilterError}
+            </p>
+          ) : offFilterCount === OFF_FILTER_COUNT_UNAVAILABLE ? (
+            <p className="rounded-lg border border-amber-200 bg-amber-50 p-2.5 text-xs text-amber-900">
+              Esta vista no puede determinar cuántas de las {cardIds.length} tarjetas seleccionadas
+              están fuera del filtro actual. Algunas podrían quedar fuera de lo que ves aquí.
             </p>
           ) : offFilterCount === null ? (
             <p className="rounded-lg border border-slate-200 bg-slate-50 p-2.5 text-xs text-slate-600">
