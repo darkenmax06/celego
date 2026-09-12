@@ -1065,6 +1065,12 @@ export default function OperativoClient({ role }: OperativoClientProps) {
             setSelectedCardId(cards[Math.min(selectedIndex + 1, cards.length - 1)]?.id ?? null)
           }
           onSave={saveContact}
+          canManageGroups={canManageGroups}
+          cardGroups={cardGroups.groups}
+          onGroupsChanged={() => {
+            void cardGroups.reload();
+            void loadCards(current.id, filters);
+          }}
         />
       ) : null}
 

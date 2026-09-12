@@ -970,6 +970,12 @@ export default function SlaVencidasClient({ role }: SlaVencidasClientProps) {
             setSelectedCardId(rows[Math.min(selectedIndex + 1, rows.length - 1)]?.id ?? null)
           }
           onSave={saveContactFromWizard}
+          canManageGroups={canManageGroups}
+          cardGroups={cardGroups.groups}
+          onGroupsChanged={() => {
+            void cardGroups.reload();
+            void loadData(filters);
+          }}
         />
       ) : null}
     </div>

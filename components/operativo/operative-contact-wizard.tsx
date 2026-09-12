@@ -1,7 +1,9 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Copy, Check, Phone, MessageSquare, MapPin, Send, ArrowLeft, ArrowRight, X, AlertTriangle, Truck } from "lucide-react";
+import { Copy, Check, Phone, MessageSquare, MapPin, Send, ArrowLeft, ArrowRight, X, AlertTriangle, Truck, Layers } from "lucide-react";
+import { CardGroupAssignModal } from "@/components/cards/card-group-assign-modal";
+import type { CardGroupSummary } from "@/lib/use-card-groups";
 
 export type PhoneState = {
   num: string;
@@ -66,6 +68,19 @@ type Props = {
     trasladoProvincia?: string | null;
     trasladoMotivo?: string | null;
   }) => Promise<string | null>;
+  /**
+   * Stage B, Task B3. Gates the footer's group action to ADMIN/OPERADOR.
+   */
+  canManageGroups?: boolean;
+  /**
+   * The group list the host screen already fetched with `useCardGroups()`.
+   * Passed in rather than fetched here so opening the wizard does not repeat
+   * a request the screen behind it has already made. Also resolves
+   * `card.groupIds` into names with no extra endpoint.
+   */
+  cardGroups?: CardGroupSummary[];
+  /** Lets the host refresh its own group state after an assignment. */
+  onGroupsChanged?: () => void;
 };
 
 const DEFAULT_SCRIPT =
@@ -91,6 +106,9 @@ export function OperativeContactWizard({
   onPrev,
   onNext,
   onSave,
+  canManageGroups = false,
+  cardGroups = [],
+  onGroupsChanged,
 }: Props) {
   // Column 2 state
   const [telefonos, setTelefonos] = useState<PhoneState[]>([]);
@@ -113,6 +131,20 @@ export function OperativeContactWizard({
   const [transferReason, setTransferReason] = useState("");
   const [showReturnModal, setShowReturnModal] = useState(false);
   const [returnReason, setReturnReason] = useState("");
+
+  // Stage B, Task B3: group assignment for this single card.
+  const [groupModalOpen, setGroupModalOpen] = useState(false);
+
+  /**
+   * The groups this card already belongs to, resolved from `card.groupIds`
+   * (Stage A) against the list the host screen already loaded. A group id with
+   * no match is skipped rather than rendered raw: the only way that happens is
+   * a group created or deleted since the host's last `reload()`.
+   */
+  const memberOfGroups = useMemo(() => {
+    const ids = new Set(card.groupIds ?? []);
+    return cardGroups.filter((group) => ids.has(group.id));
+  }, [card.groupIds, cardGroups]);
 
   // Save states
   const [saving, setSaving] = useState(false);
@@ -828,6 +860,34 @@ export function OperativeContactWizard({
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
+            {/* Asignar a grupo (Stage B, Task B3) */}
+            {canManageGroups && card.cardId ? (
+              <div className="flex items-center gap-2">
+                {memberOfGroups.length ? (
+                  <span className="flex flex-wrap items-center gap-1 text-[11px] text-slate-500">
+                    En grupo:
+                    {memberOfGroups.map((group) => (
+                      <span
+                        key={group.id}
+                        className="rounded-md border border-slate-200 bg-slate-50 px-1.5 py-0.5 font-semibold text-slate-700"
+                      >
+                        {group.name}
+                      </span>
+                    ))}
+                  </span>
+                ) : null}
+                <button
+                  type="button"
+                  onClick={() => setGroupModalOpen(true)}
+                  disabled={saving}
+                  className="flex items-center gap-1.5 rounded-xl border border-slate-300 bg-white px-3.5 py-2 text-xs font-bold text-slate-700 hover:bg-slate-100 transition-all disabled:opacity-50"
+                >
+                  <Layers className="h-3.5 w-3.5" />
+                  Asignar a grupo
+                </button>
+              </div>
+            ) : null}
+
             {/* Solicitar Retorno */}
             <button
               type="button"
@@ -871,6 +931,25 @@ export function OperativeContactWizard({
             </button>
           </div>
         </div>
+
+        {/* MODAL ASIGNAR A GRUPO (Stage B, Task B3) */}
+        {groupModalOpen && card.cardId ? (
+          <CardGroupAssignModal
+            cardIds={[card.cardId]}
+            /* 0, not the undeterminable state: the operator named exactly ONE
+               card explicitly, so there is no filter to fall outside of. The
+               question is answered by construction, and 0 renders no banner -
+               which is right, since warning "some may fall outside this view"
+               about a card the operator is looking at would be false. */
+            offFilterCount={0}
+            groups={cardGroups}
+            onClose={() => setGroupModalOpen(false)}
+            onSuccess={() => {
+              setGroupModalOpen(false);
+              onGroupsChanged?.();
+            }}
+          />
+        ) : null}
 
         {/* MODAL TRASLADO A OTRA PROVINCIA */}
         {showTransferModal ? (

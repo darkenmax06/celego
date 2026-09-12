@@ -76,10 +76,10 @@ function stubFetch(cards: ReturnType<typeof buildCard>[]) {
   });
 }
 
-function contactoCalls() {
-  return fetchMock.mock.calls.filter(([url]: [string]) =>
-    url.startsWith("/api/operativo/contacto"),
-  );
+function contactoCalls(): string[] {
+  return fetchMock.mock.calls
+    .map((call) => String(call[0]))
+    .filter((url) => url.startsWith("/api/operativo/contacto"));
 }
 
 beforeEach(() => {
@@ -124,7 +124,7 @@ describe("OperativoClient — card-groups selection wiring (ADMIN)", () => {
     expect(screen.queryByText(/calculando/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/0 de las/)).not.toBeInTheDocument();
     expect(
-      fetchMock.mock.calls.some(([url]: [string]) => url.includes("off-filter-count")),
+      fetchMock.mock.calls.some((call) => String(call[0]).includes("off-filter-count")),
     ).toBe(false);
   });
 
@@ -164,10 +164,10 @@ describe("OperativoClient — page-size selector (Task B5)", () => {
 
     await waitFor(() =>
       expect(
-        contactoCalls().some(([url]: [string]) => url.includes("pageSize=100")),
+        contactoCalls().some((url) => url.includes("pageSize=100")),
       ).toBe(true),
     );
-    const last = contactoCalls().at(-1)![0] as string;
+    const last = contactoCalls().at(-1)!;
     expect(last).toContain("page=1");
   });
 });
