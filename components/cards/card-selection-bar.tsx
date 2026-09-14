@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
-import { Layers, Plus, UserMinus, X } from "lucide-react";
+import { type ReactNode, useState } from "react";
+import { Download, Layers, Plus, UserMinus, X } from "lucide-react";
 
 /**
  * SDD card-groups — Work Unit F, Task 18.
@@ -22,6 +22,9 @@ import { Layers, Plus, UserMinus, X } from "lucide-react";
  *
  * "Quitar del grupo" is visible only when the current `grupo` filter holds
  * EXACTLY one real group id (not `SIN_GRUPO`) — removal targets one group.
+ *
+ * Group actions are optional so views without card groups (e.g. Actualizacion
+ * masiva) can reuse the bar for other bulk actions such as "Exportar".
  */
 export type SelectedCardEntry = {
   id: string;
@@ -34,31 +37,37 @@ type Props = {
   count: number;
   selectedIds: string[];
   cardsById: Record<string, SelectedCardEntry>;
-  activeGroupFilterIds: string[];
+  activeGroupFilterIds?: string[];
   onClear: () => void;
   onDeselect: (cardId: string) => void;
-  onCreateGroup: () => void;
-  onAssignExisting: () => void;
-  onRemoveFromGroup: () => void;
+  onCreateGroup?: () => void;
+  onAssignExisting?: () => void;
+  onRemoveFromGroup?: () => void;
+  /** Opens the export wizard for the current selection. */
+  onExport?: () => void;
+  /** Extra view-specific actions rendered before the built-in ones. */
+  actions?: ReactNode;
 };
 
 export function CardSelectionBar({
   count,
   selectedIds,
   cardsById,
-  activeGroupFilterIds,
+  activeGroupFilterIds = [],
   onClear,
   onDeselect,
   onCreateGroup,
   onAssignExisting,
   onRemoveFromGroup,
+  onExport,
+  actions,
 }: Props) {
   const [reviewOpen, setReviewOpen] = useState(false);
 
   if (count === 0) return null;
 
   const realGroupIds = activeGroupFilterIds.filter((id) => id !== "SIN_GRUPO");
-  const canRemoveFromGroup = realGroupIds.length === 1;
+  const canRemoveFromGroup = Boolean(onRemoveFromGroup) && realGroupIds.length === 1;
   const label = `${count} seleccionadas`;
 
   return (
@@ -115,22 +124,37 @@ export function CardSelectionBar({
       </div>
 
       <div className="ml-auto flex flex-wrap items-center gap-2">
-        <button
-          type="button"
-          onClick={onCreateGroup}
-          className="flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
-        >
-          <Plus className="h-3.5 w-3.5" />
-          Crear grupo con la selección
-        </button>
-        <button
-          type="button"
-          onClick={onAssignExisting}
-          className="flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
-        >
-          <Layers className="h-3.5 w-3.5" />
-          Asignar a grupo existente
-        </button>
+        {actions}
+        {onExport ? (
+          <button
+            type="button"
+            onClick={onExport}
+            className="flex items-center gap-1.5 rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-800 hover:bg-emerald-100"
+          >
+            <Download className="h-3.5 w-3.5" />
+            Exportar
+          </button>
+        ) : null}
+        {onCreateGroup ? (
+          <button
+            type="button"
+            onClick={onCreateGroup}
+            className="flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+          >
+            <Plus className="h-3.5 w-3.5" />
+            Crear grupo con la selección
+          </button>
+        ) : null}
+        {onAssignExisting ? (
+          <button
+            type="button"
+            onClick={onAssignExisting}
+            className="flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+          >
+            <Layers className="h-3.5 w-3.5" />
+            Asignar a grupo existente
+          </button>
+        ) : null}
         {canRemoveFromGroup ? (
           <button
             type="button"
