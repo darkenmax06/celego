@@ -8,6 +8,16 @@ import { useCardGroups } from "@/lib/use-card-groups";
 import { OperativeContactWizard, type PhoneState, type OperativeWizardCard } from "@/components/operativo/operative-contact-wizard";
 import { SLAExtensionRequestsTable } from "@/components/operativo/sla-extension-requests-table";
 import { FilterBar, ViewType } from "@/components/filters/filter-bar";
+import { NestedGroupList, useCollapsedGroups } from "@/components/grouping/nested-group-list";
+import { dateRangeFilterBarProps } from "@/components/filters/date-range-filter";
+import {
+  cardDateFilterOptions,
+  cardDateGroupOptions,
+  getCardDateGroup,
+  parseDateGroupToken,
+} from "@/lib/card-date-fields";
+import { groupRowsNested, parseGroupByLevels } from "@/lib/grouping";
+import { normalizeDateRangeFilters } from "@/lib/date-range-params";
 import {
   Phone,
   AlertTriangle,
@@ -16,8 +26,6 @@ import {
   Clock,
   FileSpreadsheet,
   RotateCcw,
-  ChevronDown,
-  ChevronRight,
 } from "lucide-react";
 
 type OperativeTab =
@@ -65,6 +73,24 @@ const STATUS_OPTIONS = [
   { value: "NO_LOCALIZADO", label: "No Localizado" },
 ] as const;
 
+const OPERATIVO_DATE_FILTER_FIELDS = cardDateFilterOptions([
+  "dispatchDate",
+  "slaDueDate",
+  "reassignedAt",
+  "createdAt",
+  "updatedAt",
+]);
+
+const OPERATIVO_GROUP_BY_OPTIONS = [
+  { field: "provincia", label: "Provincia" },
+  { field: "zona", label: "Zona" },
+  { field: "status", label: "Estado" },
+  { field: "canalContacto", label: "Canal de Contacto" },
+  { field: "mensajero", label: "Mensajero" },
+  { field: "gestion", label: "Estado de Gestión" },
+  ...cardDateGroupOptions(["dispatchDate", "slaDueDate", "fechaPreferenciaEntrega"]),
+];
+
 function normalizeStatus(value: string) {
   return value
     .normalize("NFD")
@@ -108,6 +134,15 @@ function formatUrgentClock(value: string | null) {
 }
 
 function getOperativeGroupKey(card: OperativeWizardCard, groupBy: string): { key: string; label: string } {
+  const dateGroup = parseDateGroupToken(groupBy);
+  if (dateGroup) {
+    const source = {
+      dispatchDate: card.fechaDespacho,
+      slaDueDate: card.slaDueDate,
+      fechaPreferenciaEntrega: card.fechaPreferenciaEntrega,
+    };
+    return getCardDateGroup(source, dateGroup.key, dateGroup.granularity);
+  }
   switch (groupBy) {
     case "provincia":
       return { key: card.provincia || "SIN_PROVINCIA", label: card.provincia || "Sin Provincia" };
@@ -155,7 +190,7 @@ export default function OperativoClient() {
   }));
   const cardGroups = useCardGroups();
   const [viewMode, setViewMode] = useState<ViewType>("list");
-  const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
+  const collapsedGroups = useCollapsedGroups();
   const [loading, setLoading] = useState(false);
   const [selectedCardId, setSelectedCardId] = usePersistentState<string | null>(
     "operativo:selected-card",
@@ -253,18 +288,11 @@ export default function OperativoClient() {
     };
   }, []);
 
-  const groupedCards = useMemo(() => {
-    if (!filters.groupBy) return null;
-    const groups: Record<string, { groupKey: string; groupLabel: string; items: OperativeWizardCard[] }> = {};
-    for (const card of cards) {
-      const { key, label } = getOperativeGroupKey(card, filters.groupBy);
-      if (!groups[key]) {
-        groups[key] = { groupKey: key, groupLabel: label, items: [] };
-      }
-      groups[key].items.push(card);
-    }
-    return Object.values(groups);
-  }, [cards, filters.groupBy]);
+  const groupLevels = useMemo(() => parseGroupByLevels(filters.groupBy), [filters.groupBy]);
+  const groupedCards = useMemo(
+    () => groupRowsNested(cards, groupLevels, getOperativeGroupKey),
+    [cards, groupLevels],
+  );
 
   const selectedIndex = selectedCardId ? cards.findIndex((card) => card.id === selectedCardId) : -1;
   const current = selectedIndex >= 0 ? cards[selectedIndex] : undefined;
@@ -661,7 +689,9 @@ export default function OperativoClient() {
           resource="operativo"
           sectionKey="operativo"
           filters={filters}
-          onFilterChange={(next) => setFilters({ ...next, page: "1", pageSize: filters.pageSize || "25" })}
+          onFilterChange={(next) =>
+            setFilters({ ...normalizeDateRangeFilters(next), page: "1", pageSize: filters.pageSize || "25" })
+          }
           onReset={() => setFilters({ page: "1", pageSize: "25", days: "3" })}
           searchPlaceholder="Buscar por TC, cédula, nombre o referencia..."
           allowedViews={["list", "cards"]}
@@ -741,14 +771,12 @@ export default function OperativoClient() {
                 ]
               : []),
           ]}
-          groupByOptions={[
-            { field: "provincia", label: "Provincia" },
-            { field: "zona", label: "Zona" },
-            { field: "status", label: "Estado" },
-            { field: "canalContacto", label: "Canal de Contacto" },
-            { field: "mensajero", label: "Mensajero" },
-            { field: "gestion", label: "Estado de Gestión" },
-          ]}
+          groupByOptions={OPERATIVO_GROUP_BY_OPTIONS}
+          {...dateRangeFilterBarProps({
+            fields: OPERATIVO_DATE_FILTER_FIELDS,
+            filters,
+            onChange: (next) => setFilters({ ...next, page: "1" }),
+          })}
         />
       ) : null}
 
@@ -804,49 +832,22 @@ export default function OperativoClient() {
           {groupedCards ? (
             /* GROUPED ACCORDION VIEW */
             <div className="space-y-4">
-              {groupedCards.map((group) => {
-                const isCollapsed = Boolean(collapsedGroups[group.groupKey]);
-                return (
-                  <div key={group.groupKey} className="space-y-3">
-                    <div
-                      onClick={() =>
-                        setCollapsedGroups((prev) => ({
-                          ...prev,
-                          [group.groupKey]: !prev[group.groupKey],
-                        }))
-                      }
-                      className="flex cursor-pointer select-none items-center justify-between rounded-xl bg-slate-100/90 px-4 py-2.5 transition hover:bg-slate-200/80 border border-slate-200"
-                    >
-                      <div className="flex items-center gap-2">
-                        {isCollapsed ? (
-                          <ChevronRight className="h-4 w-4 text-slate-600" />
-                        ) : (
-                          <ChevronDown className="h-4 w-4 text-slate-600" />
-                        )}
-                        <span className="text-xs font-bold uppercase tracking-wider text-slate-500">
-                          Grupo:
-                        </span>
-                        <span className="text-sm font-bold text-slate-900">{group.groupLabel}</span>
-                        <span className="rounded-full bg-slate-200/90 px-2 py-0.5 text-xs font-semibold text-slate-700">
-                          {group.items.length} {group.items.length === 1 ? "tarjeta" : "tarjetas"}
-                        </span>
-                      </div>
+              <NestedGroupList
+                groups={groupedCards}
+                variant="blocks"
+                isCollapsed={collapsedGroups.isCollapsed}
+                onToggle={collapsedGroups.toggle}
+                countLabel={(count) => `${count} ${count === 1 ? "tarjeta" : "tarjetas"}`}
+                renderRows={(groupCards) =>
+                  viewMode === "cards" ? (
+                    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+                      {groupCards.map((card) => renderCardItem(card, "cards"))}
                     </div>
-
-                    {!isCollapsed ? (
-                      viewMode === "cards" ? (
-                        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-                          {group.items.map((card) => renderCardItem(card, "cards"))}
-                        </div>
-                      ) : (
-                        <div className="space-y-2.5">
-                          {group.items.map((card) => renderCardItem(card, "list"))}
-                        </div>
-                      )
-                    ) : null}
-                  </div>
-                );
-              })}
+                  ) : (
+                    <div className="space-y-2.5">{groupCards.map((card) => renderCardItem(card, "list"))}</div>
+                  )
+                }
+              />
               {!groupedCards.length && !loading ? (
                 <p className="py-12 text-center text-sm text-slate-500">
                   No hay tarjetas con esos filtros.

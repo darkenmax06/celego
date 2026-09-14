@@ -1,13 +1,28 @@
 "use client";
 
-import React, { useEffect, useMemo, useState } from "react";
-import { ChevronDown, ChevronRight, PhoneCall } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { PhoneCall } from "lucide-react";
 import { PageHeader } from "@/components/ui/page-header";
 import { Panel } from "@/components/ui/panel";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { usePersistentState } from "@/lib/use-persistent-state";
+import { groupRowsNested, parseGroupByLevels } from "@/lib/grouping";
 import { useCardGroups } from "@/lib/use-card-groups";
-import { FilterBar } from "@/components/filters/filter-bar";
+import { FilterBar, groupByLevelLabel } from "@/components/filters/filter-bar";
+import { NestedGroupList, useCollapsedGroups } from "@/components/grouping/nested-group-list";
+import { dateRangeFilterBarProps } from "@/components/filters/date-range-filter";
+import {
+  cardDateFilterOptions,
+  cardDateGroupOptions,
+  getCardDateGroup,
+  parseDateGroupToken,
+  formatCardDate,
+} from "@/lib/card-date-fields";
+import {
+  normalizeDateRangeFilters,
+  parseDateRangeParamKey,
+  readDateRanges,
+} from "@/lib/date-range-params";
 import { TableColumnSelector } from "@/components/ui/table-column-selector";
 import {
   useResizableColumns,
@@ -123,6 +138,29 @@ const DEFAULT_SLA_COLUMN_WIDTHS: Record<string, number> = {
   telefonos: 150,
 };
 
+const SLA_DATE_FILTER_FIELDS = cardDateFilterOptions([
+  "slaDueDate",
+  "dispatchDate",
+  "reassignedAt",
+  "createdAt",
+  "updatedAt",
+]);
+
+const SLA_GROUP_BY_OPTIONS = [
+  { field: "contactoEstado", label: "Gestión Contacto" },
+  { field: "productType", label: "Producto" },
+  { field: "messengerId", label: "Mensajero" },
+  { field: "provincia", label: "Provincia" },
+  { field: "zona", label: "Zona" },
+  { field: "status", label: "Status" },
+  ...cardDateGroupOptions(["slaDueDate", "dispatchDate", "fechaPreferenciaEntrega"]),
+];
+
+/** Only the date range params, for the exports that must honour the list filters. */
+function dateParamsOf(filters: Record<string, string>) {
+  return Object.fromEntries(Object.entries(filters).filter(([key, value]) => value && parseDateRangeParamKey(key)));
+}
+
 function dateLabel(value: string | null) {
   if (!value) return "-";
   const date = new Date(value);
@@ -131,6 +169,8 @@ function dateLabel(value: string | null) {
 }
 
 function getSlaGroupKey(row: Row, groupBy: string): { key: string; label: string } {
+  const dateGroup = parseDateGroupToken(groupBy);
+  if (dateGroup) return getCardDateGroup(row, dateGroup.key, dateGroup.granularity);
   switch (groupBy) {
     case "contactoEstado": {
       if (row.contactoEstado === "RETORNO_SOLICITADO") return { key: "RETORNO_SOLICITADO", label: "⚠ Retorno Solicitado" };
@@ -188,7 +228,7 @@ export default function SlaVencidasClient() {
     "sla-vencidas",
     DEFAULT_SLA_COLUMN_WIDTHS,
   );
-  const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
+  const collapsedGroups = useCollapsedGroups();
 
   // Wizard state for SLA Vencidas
   const [selectedCardId, setSelectedCardId] = useState<string | null>(null);
@@ -244,18 +284,8 @@ export default function SlaVencidasClient() {
     void loadData(filters);
   }, [filters]);
 
-  const groupedRows = useMemo(() => {
-    if (!filters.groupBy) return null;
-    const groups: Record<string, { groupKey: string; groupLabel: string; items: Row[] }> = {};
-    for (const row of rows) {
-      const { key, label } = getSlaGroupKey(row, filters.groupBy);
-      if (!groups[key]) {
-        groups[key] = { groupKey: key, groupLabel: label, items: [] };
-      }
-      groups[key].items.push(row);
-    }
-    return Object.values(groups);
-  }, [rows, filters.groupBy]);
+  const groupLevels = useMemo(() => parseGroupByLevels(filters.groupBy), [filters.groupBy]);
+  const groupedRows = useMemo(() => groupRowsNested(rows, groupLevels, getSlaGroupKey), [rows, groupLevels]);
 
   // Selected card for OperativeContactWizard
   const selectedIndex = selectedCardId ? rows.findIndex((r) => r.id === selectedCardId) : -1;
@@ -330,7 +360,7 @@ export default function SlaVencidasClient() {
   }
 
   async function exportJpgZip() {
-    const params = new URLSearchParams();
+    const params = new URLSearchParams(dateParamsOf(filters));
     if (filters.messengerId && filters.messengerId !== "ALL") {
       params.set("messengerId", filters.messengerId);
     }
@@ -361,6 +391,7 @@ export default function SlaVencidasClient() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         messengerId: filters.messengerId || "ALL",
+        dateRanges: readDateRanges(filters),
         columns: exportColumns,
         format,
       }),
@@ -454,6 +485,11 @@ export default function SlaVencidasClient() {
           <span className="truncate block">{dateLabel(row.slaDueDate)}</span>
         </td>
       ) : null}
+      {exportColumns.includes("dispatchDate") ? (
+        <td className="px-3 py-2.5 text-slate-600 truncate">
+          <span className="truncate block">{formatCardDate(row, "dispatchDate")}</span>
+        </td>
+      ) : null}
       {exportColumns.includes("diasVencidos") ? (
         <td className="px-3 py-2.5 text-rose-700 font-semibold truncate">
           <span className="truncate block">{row.diasVencidos} día(s)</span>
@@ -483,7 +519,9 @@ export default function SlaVencidasClient() {
         resource="sla-vencidas"
         sectionKey="sla-vencidas"
         filters={filters}
-        onFilterChange={(next) => setFilters({ ...next, page: "1", pageSize: filters.pageSize || "50" })}
+        onFilterChange={(next) =>
+          setFilters({ ...normalizeDateRangeFilters(next), page: "1", pageSize: filters.pageSize || "50" })
+        }
         onReset={() => setFilters({ messengerId: "ALL", page: "1", pageSize: "50" })}
         searchPlaceholder="Buscar por TC, cédula, nombre, provincia o zona..."
         facets={[
@@ -523,14 +561,12 @@ export default function SlaVencidasClient() {
             ],
           },
         ]}
-        groupByOptions={[
-          { field: "contactoEstado", label: "Gestión Contacto" },
-          { field: "productType", label: "Producto" },
-          { field: "messengerId", label: "Mensajero" },
-          { field: "provincia", label: "Provincia" },
-          { field: "zona", label: "Zona" },
-          { field: "status", label: "Status" },
-        ]}
+        groupByOptions={SLA_GROUP_BY_OPTIONS}
+        {...dateRangeFilterBarProps({
+          fields: SLA_DATE_FILTER_FIELDS,
+          filters,
+          onChange: (next) => setFilters({ ...next, page: "1" }),
+        })}
       />
 
       <Panel>
@@ -579,9 +615,10 @@ export default function SlaVencidasClient() {
             <h2 className="font-display text-lg font-semibold text-slate-900">
               {loading ? "Cargando..." : `Listado (${rows.length})`}
             </h2>
-            {filters.groupBy ? (
+            {groupLevels.length ? (
               <span className="rounded-full bg-emerald-50 px-2.5 py-0.5 text-xs font-semibold text-emerald-700 ring-1 ring-emerald-200">
-                Agrupado por: {filters.groupBy}
+                Agrupado por:{" "}
+                {groupLevels.map((token) => groupByLevelLabel(token, SLA_GROUP_BY_OPTIONS)).join(" › ")}
               </span>
             ) : null}
           </div>
@@ -602,6 +639,7 @@ export default function SlaVencidasClient() {
               exportColumns.includes("tipoTarjeta") || exportColumns.includes("adicional"),
               exportColumns.includes("status"),
               exportColumns.includes("slaDueDate"),
+              exportColumns.includes("dispatchDate"),
               exportColumns.includes("diasVencidos"),
               exportColumns.includes("direccion"),
               exportColumns.includes("telefonos"),
@@ -674,6 +712,15 @@ export default function SlaVencidasClient() {
                         className="px-3"
                       />
                     ) : null}
+                    {exportColumns.includes("dispatchDate") ? (
+                      <ResizableHeader
+                        columnKey="dispatchDate"
+                        label="Despacho"
+                        width={columnWidths.dispatchDate}
+                        onResize={onColumnResize}
+                        className="px-3"
+                      />
+                    ) : null}
                     {exportColumns.includes("diasVencidos") ? (
                       <ResizableHeader
                         columnKey="diasVencidos"
@@ -705,45 +752,15 @@ export default function SlaVencidasClient() {
                 </thead>
                 <tbody>
                   {groupedRows ? (
-                    groupedRows.map((group) => {
-                      const isCollapsed = Boolean(collapsedGroups[group.groupKey]);
-                      return (
-                        <React.Fragment key={group.groupKey}>
-                          <tr
-                            onClick={() =>
-                              setCollapsedGroups((prev) => ({
-                                ...prev,
-                                [group.groupKey]: !prev[group.groupKey],
-                              }))
-                            }
-                            className="cursor-pointer bg-slate-100/90 font-semibold text-slate-900 transition hover:bg-slate-200/80 select-none border-y border-slate-200"
-                          >
-                            <td colSpan={visibleHeaderCount} className="py-2.5 px-3">
-                              <div className="flex items-center gap-2">
-                                {isCollapsed ? (
-                                  <ChevronRight className="h-4 w-4 text-slate-600" />
-                                ) : (
-                                  <ChevronDown className="h-4 w-4 text-slate-600" />
-                                )}
-                                <span className="text-xs uppercase tracking-wider text-slate-500 font-bold">
-                                  Grupo:
-                                </span>
-                                <span className="text-sm font-bold text-slate-900">
-                                  {group.groupLabel}
-                                </span>
-                                <span className="rounded-full bg-slate-200/90 px-2 py-0.5 text-xs font-semibold text-slate-700">
-                                  {group.items.length}{" "}
-                                  {group.items.length === 1 ? "tarjeta" : "tarjetas"}
-                                </span>
-                              </div>
-                            </td>
-                          </tr>
-                          {!isCollapsed
-                            ? group.items.map((row) => renderSlaRow(row))
-                            : null}
-                        </React.Fragment>
-                      );
-                    })
+                    <NestedGroupList
+                      groups={groupedRows}
+                      variant="table"
+                      colSpan={visibleHeaderCount}
+                      isCollapsed={collapsedGroups.isCollapsed}
+                      onToggle={collapsedGroups.toggle}
+                      countLabel={(count) => `${count} ${count === 1 ? "tarjeta" : "tarjetas"}`}
+                      renderRows={(groupRows) => groupRows.map((row) => renderSlaRow(row))}
+                    />
                   ) : (
                     rows.map((row) => renderSlaRow(row))
                   )}
@@ -774,10 +791,10 @@ export default function SlaVencidasClient() {
                   onChange={(e) => setFilters((prev) => ({ ...prev, pageSize: e.target.value, page: "1" }))}
                   className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs"
                 >
-                  <option value="25">25</option>
                   <option value="50">50</option>
                   <option value="100">100</option>
                   <option value="200">200</option>
+                  <option value="400">400</option>
                 </select>
               </label>
             </div>
