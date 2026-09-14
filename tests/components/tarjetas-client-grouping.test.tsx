@@ -19,6 +19,8 @@ let capturedGroupByOptions: GroupByConfig[] = [];
 let capturedOnFilterChange: ((next: Record<string, string>) => void) | null = null;
 
 vi.mock("@/components/filters/filter-bar", () => ({
+  groupByLevelLabel: (token: string, options: GroupByConfig[]) =>
+    options.find((option) => option.field === token)?.label ?? token,
   FilterBar: (props: {
     groupByOptions: GroupByConfig[];
     onFilterChange: (next: Record<string, string>) => void;

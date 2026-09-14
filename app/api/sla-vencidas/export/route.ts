@@ -6,7 +6,9 @@ import { requireApiSession } from "@/lib/api-session";
 import { prisma } from "@/lib/prisma";
 import { displayText } from "@/lib/display";
 import { remainingBusinessDays } from "@/lib/sla";
-import { slaWhere } from "../shared";
+import { compileCardDateRangeWhere } from "@/lib/list-query/card-date-range";
+import { ListQueryValidationError } from "@/lib/list-query";
+import { slaWhereWithDates } from "../shared";
 
 function escapeXml(value: string) {
   return value
@@ -112,12 +114,25 @@ export async function GET(request: NextRequest) {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
 
+  let dateClauses;
+  try {
+    dateClauses = compileCardDateRangeWhere(request.nextUrl.searchParams).clauses;
+  } catch (error) {
+    if (error instanceof ListQueryValidationError) {
+      return NextResponse.json({ error: error.message }, { status: 400 });
+    }
+    throw error;
+  }
+
   const cards = await prisma.card.findMany({
-    where: slaWhere({
-      tab: "OVERDUE",
-      productType: rawProductType && rawProductType !== "ALL" ? rawProductType as CardProductType : undefined,
-      messengerId: messengerId && messengerId !== "ALL" ? messengerId : undefined,
-    }),
+    where: slaWhereWithDates(
+      {
+        tab: "OVERDUE",
+        productType: rawProductType && rawProductType !== "ALL" ? rawProductType as CardProductType : undefined,
+        messengerId: messengerId && messengerId !== "ALL" ? messengerId : undefined,
+      },
+      dateClauses,
+    ),
     select: {
       tc: true,
       requestNumber: true,

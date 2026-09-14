@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition, type ReactNode } from "react";
 import {
   Search,
   X,
@@ -18,6 +18,7 @@ import {
   BookmarkPlus,
   Sparkles,
 } from "lucide-react";
+import { parseGroupByLevels, toggleGroupByLevel } from "@/lib/grouping";
 import { cn } from "@/lib/utils";
 
 export type FacetConfig = {
@@ -42,7 +43,22 @@ function formatFacetValue(facet: FacetConfig | undefined, val: string) {
 export type GroupByConfig = {
   field: string;
   label: string;
+  /**
+   * Sub-options (for example the year/month/week/day buckets of a date field).
+   * The row expands like a facet row and each child `field` is a level token.
+   */
+  children?: Array<{ field: string; label: string }>;
 };
+
+/** Human label of one `groupBy` level token, e.g. `Fecha de despacho (Mes)`. */
+export function groupByLevelLabel(token: string, options: GroupByConfig[], facets: FacetConfig[] = []) {
+  for (const option of options) {
+    if (option.field === token && !option.children) return option.label;
+    const child = option.children?.find((item) => item.field === token);
+    if (child) return `${option.label} (${child.label})`;
+  }
+  return facets.find((facet) => facet.field === token)?.label ?? token;
+}
 
 export type ViewType = "list" | "cards" | "kanban" | "pivot" | "calendar" | "timeline" | "grid";
 
@@ -66,6 +82,18 @@ export type FilterBarProps = {
   currentView?: ViewType;
   onViewChange?: (nextView: ViewType) => void;
   className?: string;
+  /**
+   * Custom chip text for a filter key. Return `null` to hide the chip or
+   * `undefined` to fall back to the default label.
+   */
+  chipLabel?: (key: string, value: string) => string | null | undefined;
+  /**
+   * Filter keys cleared together when the chip of `key` is removed (for
+   * example both bounds of a date range). `undefined` removes only `key`.
+   */
+  chipRemovalKeys?: (key: string) => string[] | undefined;
+  /** Extra controls rendered inside the "Filtros" column of the dropdown menu. */
+  filterMenuExtra?: ReactNode;
 };
 
 export function FilterBar({
@@ -81,6 +109,9 @@ export function FilterBar({
   currentView,
   onViewChange,
   className,
+  chipLabel,
+  chipRemovalKeys,
+  filterMenuExtra,
 }: FilterBarProps) {
   const [searchVal, setSearchVal] = useState(filters.q || "");
   const [isMenuOpen, setIsMenuOpen] = useState(false);
@@ -93,6 +124,7 @@ export function FilterBar({
   const [customFilterField, setCustomFilterField] = useState("");
   const [customFilterValue, setCustomFilterValue] = useState("");
   const [customGroupField, setCustomGroupField] = useState("");
+  const [activeGroupSubmenu, setActiveGroupSubmenu] = useState<string | null>(null);
   const [, startTransition] = useTransition();
   const searchTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const menuContainerRef = useRef<HTMLDivElement>(null);
@@ -224,13 +256,13 @@ export function FilterBar({
     if (onReset) {
       onReset();
     } else {
-      onFilterChange({ page: "1", pageSize: filters.pageSize || "25" });
+      onFilterChange({ page: "1", pageSize: filters.pageSize || "50" });
     }
   };
 
   const handleRemoveChip = (key: string) => {
     const next = { ...filters };
-    delete next[key];
+    for (const removed of chipRemovalKeys?.(key) ?? [key]) delete next[removed];
     if (key === "q") setSearchVal("");
     onFilterChange(next);
   };
@@ -256,12 +288,14 @@ export function FilterBar({
     onFilterChange(next);
   };
 
+  /** Selecting a level appends it as the innermost group; selecting it again removes it. */
   const handleGroupByToggle = (field: string) => {
     const next = { ...filters };
-    if (next.groupBy === field) {
-      delete next.groupBy;
+    const groupBy = toggleGroupByLevel(next.groupBy, field);
+    if (groupBy) {
+      next.groupBy = groupBy;
     } else {
-      next.groupBy = field;
+      delete next.groupBy;
     }
     onFilterChange(next);
   };
@@ -269,7 +303,7 @@ export function FilterBar({
   const handleApplyCustomGroup = (e: React.FormEvent) => {
     e.preventDefault();
     if (!customGroupField) return;
-    handleGroupByToggle(customGroupField);
+    if (!groupLevels.includes(customGroupField)) handleGroupByToggle(customGroupField);
     setCustomGroupField("");
   };
 
@@ -341,8 +375,15 @@ export function FilterBar({
     }
   };
 
+  const groupLevels = parseGroupByLevels(filters.groupBy);
+  const groupLevelIndex = (token: string) => groupLevels.indexOf(token);
+  const knownGroupTokens = new Set(
+    groupByOptions.flatMap((option) => (option.children ? option.children.map((child) => child.field) : [option.field])),
+  );
+
   const activeChips = Object.entries(filters).filter(
-    ([k, v]) => v && v !== "ALL" && k !== "page" && k !== "pageSize" && k !== "q",
+    ([k, v]) =>
+      v && v !== "ALL" && k !== "page" && k !== "pageSize" && k !== "q" && chipLabel?.(k, v) !== null,
   );
 
   return (
@@ -359,8 +400,35 @@ export function FilterBar({
           {activeChips.map(([key, val]) => {
             const facet = facets.find((f) => f.field === key);
             const isGroup = key === "groupBy";
-            const label = isGroup
-              ? `Agrupar: ${val}`
+            const customLabel = chipLabel?.(key, val);
+
+            // One chip per group level, in nesting order; removing one shifts the inner levels up.
+            if (isGroup && !customLabel) {
+              return groupLevels.map((token, index) => (
+                <span
+                  key={`groupBy:${token}`}
+                  className="inline-flex items-center gap-1 rounded-md bg-emerald-50 px-2 py-0.5 text-xs font-semibold text-emerald-800 shadow-xs ring-1 ring-emerald-200 animate-in fade-in zoom-in-95"
+                  title={`Nivel ${index + 1} de agrupación`}
+                >
+                  {index === 0 ? <Layers className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+                  <span>
+                    {index === 0 ? "Agrupar: " : ""}
+                    {groupByLevelLabel(token, groupByOptions, facets)}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => handleGroupByToggle(token)}
+                    className="rounded-sm p-0.5 hover:bg-black/10"
+                    title="Quitar nivel de agrupación"
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                </span>
+              ));
+            }
+
+            const label = customLabel
+              ? customLabel
               : facet
                 ? `${facet.label}: ${formatFacetValue(facet, val)}`
                 : `${key}: ${val}`;
@@ -515,6 +583,8 @@ export function FilterBar({
                   );
                 })}
 
+                {filterMenuExtra ? <div className="pt-2">{filterMenuExtra}</div> : null}
+
                 {/* Agregar filtro personalizado */}
                 <div className="pt-2">
                   <div className="flex items-center gap-1.5 py-1 text-[11px] font-semibold text-slate-500">
@@ -563,7 +633,74 @@ export function FilterBar({
                   <p className="text-[11px] text-slate-400">No hay opciones de agrupación</p>
                 ) : null}
                 {groupByOptions.map((opt) => {
-                  const isSelected = filters.groupBy === opt.field;
+                  if (opt.children) {
+                    const selectedChildren = opt.children.filter((child) => groupLevelIndex(child.field) >= 0);
+                    const isActive = selectedChildren.length > 0;
+                    const isExpanded = activeGroupSubmenu === opt.field;
+                    return (
+                      <div key={opt.field} className="rounded-lg">
+                        <button
+                          type="button"
+                          onClick={() => setActiveGroupSubmenu(isExpanded ? null : opt.field)}
+                          className={cn(
+                            "flex w-full items-center justify-between rounded-lg px-2.5 py-1.5 text-left font-medium transition hover:bg-slate-100",
+                            isActive ? "bg-emerald-50 text-emerald-900" : "text-slate-700",
+                          )}
+                        >
+                          <div className="flex items-center gap-2">
+                            <div
+                              className={cn(
+                                "flex h-3.5 w-3.5 items-center justify-center rounded border",
+                                isActive ? "border-emerald-600 bg-emerald-600 text-white" : "border-slate-300",
+                              )}
+                            >
+                              {isActive ? <Check className="h-2.5 w-2.5 stroke-[3]" /> : null}
+                            </div>
+                            <span>
+                              {opt.label}
+                              {isActive ? `: ${selectedChildren.map((child) => child.label).join(", ")}` : ""}
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-1">
+                            {selectedChildren.map((child) => (
+                              <GroupLevelBadge key={child.field} level={groupLevelIndex(child.field) + 1} />
+                            ))}
+                            <ChevronRight
+                              className={cn("h-3 w-3 text-slate-400 transition-transform", isExpanded && "rotate-90")}
+                            />
+                          </div>
+                        </button>
+
+                        {isExpanded ? (
+                          <div className="my-1 space-y-0.5 rounded-lg border border-slate-100 bg-slate-50/60 p-1.5 pl-6">
+                            {opt.children.map((child) => {
+                              const level = groupLevelIndex(child.field) + 1;
+                              const isSelected = level > 0;
+                              return (
+                                <button
+                                  key={child.field}
+                                  type="button"
+                                  onClick={() => handleGroupByToggle(child.field)}
+                                  className={cn(
+                                    "flex w-full items-center justify-between rounded px-2 py-1 text-left text-xs transition",
+                                    isSelected
+                                      ? "bg-emerald-600 font-semibold text-white"
+                                      : "text-slate-600 hover:bg-slate-200/70",
+                                  )}
+                                >
+                                  <span>{child.label}</span>
+                                  {isSelected ? <GroupLevelBadge level={level} inverted /> : null}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        ) : null}
+                      </div>
+                    );
+                  }
+
+                  const level = groupLevelIndex(opt.field) + 1;
+                  const isSelected = level > 0;
                   return (
                     <button
                       key={opt.field}
@@ -587,27 +724,30 @@ export function FilterBar({
                         </div>
                         <span>{opt.label}</span>
                       </div>
+                      {isSelected ? <GroupLevelBadge level={level} /> : null}
                     </button>
                   );
                 })}
 
-                {/* Custom Group Option if active and not in predefined list */}
-                {filters.groupBy && !groupByOptions.some((g) => g.field === filters.groupBy) ? (
-                  <button
-                    type="button"
-                    onClick={() => handleGroupByToggle(filters.groupBy!)}
-                    className="flex w-full items-center justify-between rounded-lg bg-emerald-50 px-2.5 py-1.5 text-left font-medium text-emerald-900 transition"
-                  >
-                    <div className="flex items-center gap-2">
-                      <div className="flex h-3.5 w-3.5 items-center justify-center rounded border border-emerald-600 bg-emerald-600 text-white">
-                        <Check className="h-2.5 w-2.5 stroke-[3]" />
+                {/* Custom group levels that are not in the predefined list */}
+                {groupLevels
+                  .filter((token) => !knownGroupTokens.has(token))
+                  .map((token) => (
+                    <button
+                      key={token}
+                      type="button"
+                      onClick={() => handleGroupByToggle(token)}
+                      className="flex w-full items-center justify-between rounded-lg bg-emerald-50 px-2.5 py-1.5 text-left font-medium text-emerald-900 transition"
+                    >
+                      <div className="flex items-center gap-2">
+                        <div className="flex h-3.5 w-3.5 items-center justify-center rounded border border-emerald-600 bg-emerald-600 text-white">
+                          <Check className="h-2.5 w-2.5 stroke-[3]" />
+                        </div>
+                        <span className="capitalize">{groupByLevelLabel(token, groupByOptions, facets)}</span>
                       </div>
-                      <span className="capitalize">
-                        {facets.find((f) => f.field === filters.groupBy)?.label || filters.groupBy}
-                      </span>
-                    </div>
-                  </button>
-                ) : null}
+                      <GroupLevelBadge level={groupLevelIndex(token) + 1} />
+                    </button>
+                  ))}
 
                 {/* Agregar grupo personalizado */}
                 <div className="pt-2">
@@ -622,7 +762,7 @@ export function FilterBar({
                     >
                       <option value="">Seleccionar campo...</option>
                       {facets
-                        .filter((f) => !groupByOptions.some((g) => g.field === f.field))
+                        .filter((f) => !knownGroupTokens.has(f.field) && !groupLevels.includes(f.field))
                         .map((f) => (
                           <option key={f.field} value={f.field}>
                             {f.label}
@@ -779,5 +919,20 @@ export function FilterBar({
         </div>
       ) : null}
     </div>
+  );
+}
+
+/** Nesting level of a selected group option (1 = outermost). */
+function GroupLevelBadge({ level, inverted = false }: { level: number; inverted?: boolean }) {
+  return (
+    <span
+      className={cn(
+        "inline-flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[10px] font-bold leading-none",
+        inverted ? "bg-white text-emerald-700" : "bg-emerald-600 text-white",
+      )}
+      title={`Nivel ${level}`}
+    >
+      {level}
+    </span>
   );
 }

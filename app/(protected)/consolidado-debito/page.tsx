@@ -1,7 +1,6 @@
-import { requireRole } from "@/lib/server-auth";
-import ConsolidadoDebitoClient from "./consolidado-debito-client";
+import { redirect } from "next/navigation";
 
-export default async function ConsolidadoDebitoPage() {
-  await requireRole(["ADMIN", "OPERADOR"]);
-  return <ConsolidadoDebitoClient />;
+/** The debit consolidation tool now lives inside the Importación page. */
+export default function ConsolidadoDebitoPage() {
+  redirect("/importacion");
 }

@@ -4,6 +4,8 @@ import { z } from "zod";
 import { requireApiSession } from "@/lib/api-session";
 import { prisma } from "@/lib/prisma";
 import { applyCardTransition } from "@/lib/card-transition";
+import { ListQueryValidationError } from "@/lib/list-query";
+import { compileCardDateRangeWhere } from "@/lib/list-query/card-date-range";
 
 /**
  * SDD contrato-tarjetas-pistoleo (spec: pending-contract-workqueue).
@@ -33,8 +35,20 @@ export async function GET(request: NextRequest) {
       ? [statusParam as CardStatus]
       : [...PENDING_STATUSES];
 
+  // Optional `date.<field>.from|to` card date ranges, AND-combined.
+  let dateClauses;
+  try {
+    dateClauses = compileCardDateRangeWhere(request.nextUrl.searchParams).clauses;
+  } catch (error) {
+    if (error instanceof ListQueryValidationError) {
+      return NextResponse.json({ error: error.message }, { status: 400 });
+    }
+    throw error;
+  }
+
   const cards = await prisma.card.findMany({
     where: {
+      ...(dateClauses.length ? { AND: dateClauses } : {}),
       hasContract: true,
       status: { in: statuses },
       ...(searchParam

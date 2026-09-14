@@ -1,18 +1,34 @@
 "use client";
 
-import React, { useEffect, useMemo, useState } from "react";
-import { ChevronDown, ChevronRight, PhoneCall } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { PhoneCall } from "lucide-react";
 import { PageHeader } from "@/components/ui/page-header";
 import { Panel } from "@/components/ui/panel";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { usePersistentState } from "@/lib/use-persistent-state";
+import { FilterBar, groupByLevelLabel } from "@/components/filters/filter-bar";
+import { NestedGroupList, useCollapsedGroups, type GroupSelection } from "@/components/grouping/nested-group-list";
+import { dateRangeFilterBarProps } from "@/components/filters/date-range-filter";
+import {
+  cardDateFilterOptions,
+  cardDateGroupOptions,
+  getCardDateGroup,
+  parseDateGroupToken,
+  formatCardDate,
+} from "@/lib/card-date-fields";
+import {
+  normalizeDateRangeFilters,
+  parseDateRangeParamKey,
+  readDateRanges,
+} from "@/lib/date-range-params";
 import {
   CARD_GROUP_BY_FIELD,
   bucketCountLabel,
   cardGroupBuckets,
-  groupRows,
-  singleBucket,
+  groupRowsNested,
+  parseGroupByLevels,
   toGroupNameMap,
+  type GroupNode,
 } from "@/lib/grouping";
 import { useCardGroupBucketTotals } from "@/lib/use-card-group-bucket-totals";
 import { useCardGroups } from "@/lib/use-card-groups";
@@ -21,7 +37,6 @@ import { CardGroupAssignModal } from "@/components/cards/card-group-assign-modal
 import { CardGroupFanoutNote } from "@/components/cards/card-group-fanout-note";
 import { CardSelectCheckbox } from "@/components/cards/card-select-checkbox";
 import { CardSelectionBar, type SelectedCardEntry } from "@/components/cards/card-selection-bar";
-import { FilterBar } from "@/components/filters/filter-bar";
 import { TableColumnSelector } from "@/components/ui/table-column-selector";
 import {
   useResizableColumns,
@@ -139,6 +154,30 @@ const DEFAULT_SLA_COLUMN_WIDTHS: Record<string, number> = {
   telefonos: 150,
 };
 
+const SLA_DATE_FILTER_FIELDS = cardDateFilterOptions([
+  "slaDueDate",
+  "dispatchDate",
+  "reassignedAt",
+  "createdAt",
+  "updatedAt",
+]);
+
+const SLA_GROUP_BY_OPTIONS = [
+  { field: "contactoEstado", label: "Gestión Contacto" },
+  { field: "productType", label: "Producto" },
+  { field: "messengerId", label: "Mensajero" },
+  { field: "provincia", label: "Provincia" },
+  { field: "zona", label: "Zona" },
+  { field: "status", label: "Status" },
+  { field: CARD_GROUP_BY_FIELD, label: "Grupo" },
+  ...cardDateGroupOptions(["slaDueDate", "dispatchDate", "fechaPreferenciaEntrega"]),
+];
+
+/** Only the date range params, for the exports that must honour the list filters. */
+function dateParamsOf(filters: Record<string, string>) {
+  return Object.fromEntries(Object.entries(filters).filter(([key, value]) => value && parseDateRangeParamKey(key)));
+}
+
 function dateLabel(value: string | null) {
   if (!value) return "-";
   const date = new Date(value);
@@ -147,6 +186,8 @@ function dateLabel(value: string | null) {
 }
 
 function getSlaGroupKey(row: Row, groupBy: string): { key: string; label: string } {
+  const dateGroup = parseDateGroupToken(groupBy);
+  if (dateGroup) return getCardDateGroup(row, dateGroup.key, dateGroup.granularity);
   switch (groupBy) {
     case "contactoEstado": {
       if (row.contactoEstado === "RETORNO_SOLICITADO") return { key: "RETORNO_SOLICITADO", label: "⚠ Retorno Solicitado" };
@@ -210,7 +251,7 @@ export default function SlaVencidasClient({ role }: SlaVencidasClientProps) {
     "sla-vencidas",
     DEFAULT_SLA_COLUMN_WIDTHS,
   );
-  const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
+  const collapsedGroups = useCollapsedGroups();
 
   // Stage B, Task B1: app-wide card selection and bulk group actions.
   const cardSelection = useCardSelection();
@@ -352,24 +393,35 @@ export default function SlaVencidasClient({ role }: SlaVencidasClientProps) {
     void loadData(filters);
   }, [filters]);
 
+  const groupLevels = useMemo(() => parseGroupByLevels(filters.groupBy), [filters.groupBy]);
   const groupNameById = useMemo(() => toGroupNameMap(cardGroups.groups), [cardGroups.groups]);
 
-  /** Grouping by "Grupo" is the only group-by where a row lands in several buckets. */
-  const isGroupByGrupo = filters.groupBy === CARD_GROUP_BY_FIELD;
+  /** "Grupo" is the only level where a row lands in several buckets (fan-out). */
+  const isGroupByGrupo = groupLevels.includes(CARD_GROUP_BY_FIELD);
 
-  /** True per-group totals; `null` while loading or when none can be computed. */
-  const bucketTotals = useCardGroupBucketTotals("sla-vencidas", filters, isGroupByGrupo);
+  /** Server totals only describe outermost buckets; inner levels keep client-side counts. */
+  const bucketTotals = useCardGroupBucketTotals("sla-vencidas", filters, groupLevels[0] === CARD_GROUP_BY_FIELD);
 
-  const groupedRows = useMemo(() => {
-    const groupBy = filters.groupBy;
-    if (!groupBy) return null;
-    return groupRows(
-      rows,
-      groupBy === CARD_GROUP_BY_FIELD
-        ? (row: Row) => cardGroupBuckets(row.groupIds, groupNameById)
-        : singleBucket((row: Row) => getSlaGroupKey(row, groupBy)),
-    );
-  }, [rows, filters.groupBy, groupNameById]);
+  const groupedRows = useMemo(
+    () =>
+      groupRowsNested(rows, groupLevels, (row: Row, token) =>
+        token === CARD_GROUP_BY_FIELD ? cardGroupBuckets(row.groupIds, groupNameById) : getSlaGroupKey(row, token),
+      ),
+    [rows, groupLevels, groupNameById],
+  );
+
+  const groupCountLabel = (count: number, group: GroupNode<Row>) =>
+    group.depth === 0 && group.token === CARD_GROUP_BY_FIELD
+      ? bucketCountLabel(count, bucketTotals?.[group.key] ?? null)
+      : `${count} ${count === 1 ? "tarjeta" : "tarjetas"}`;
+
+  const groupSelection: GroupSelection<Row> | undefined = canManageGroups
+    ? {
+        getRowId: (row) => row.id,
+        isSelected: cardSelection.isSelected,
+        onChange: (ids, checked) => (checked ? cardSelection.selectMany(ids) : cardSelection.deselectMany(ids)),
+      }
+    : undefined;
 
   // Selected card for OperativeContactWizard
   const selectedIndex = selectedCardId ? rows.findIndex((r) => r.id === selectedCardId) : -1;
@@ -444,7 +496,7 @@ export default function SlaVencidasClient({ role }: SlaVencidasClientProps) {
   }
 
   async function exportJpgZip() {
-    const params = new URLSearchParams();
+    const params = new URLSearchParams(dateParamsOf(filters));
     if (filters.messengerId && filters.messengerId !== "ALL") {
       params.set("messengerId", filters.messengerId);
     }
@@ -475,6 +527,7 @@ export default function SlaVencidasClient({ role }: SlaVencidasClientProps) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         messengerId: filters.messengerId || "ALL",
+        dateRanges: readDateRanges(filters),
         columns: exportColumns,
         format,
       }),
@@ -577,6 +630,11 @@ export default function SlaVencidasClient({ role }: SlaVencidasClientProps) {
           <span className="truncate block">{dateLabel(row.slaDueDate)}</span>
         </td>
       ) : null}
+      {exportColumns.includes("dispatchDate") ? (
+        <td className="px-3 py-2.5 text-slate-600 truncate">
+          <span className="truncate block">{formatCardDate(row, "dispatchDate")}</span>
+        </td>
+      ) : null}
       {exportColumns.includes("diasVencidos") ? (
         <td className="px-3 py-2.5 text-rose-700 font-semibold truncate">
           <span className="truncate block">{row.diasVencidos} día(s)</span>
@@ -606,7 +664,9 @@ export default function SlaVencidasClient({ role }: SlaVencidasClientProps) {
         resource="sla-vencidas"
         sectionKey="sla-vencidas"
         filters={filters}
-        onFilterChange={(next) => setFilters({ ...next, page: "1", pageSize: filters.pageSize || "100" })}
+        onFilterChange={(next) =>
+          setFilters({ ...normalizeDateRangeFilters(next), page: "1", pageSize: filters.pageSize || "100" })
+        }
         onReset={() => setFilters({ messengerId: "ALL", page: "1", pageSize: "100" })}
         searchPlaceholder="Buscar por TC, cédula, nombre, provincia o zona..."
         facets={[
@@ -646,15 +706,12 @@ export default function SlaVencidasClient({ role }: SlaVencidasClientProps) {
             ],
           },
         ]}
-        groupByOptions={[
-          { field: "contactoEstado", label: "Gestión Contacto" },
-          { field: "productType", label: "Producto" },
-          { field: "messengerId", label: "Mensajero" },
-          { field: "provincia", label: "Provincia" },
-          { field: "zona", label: "Zona" },
-          { field: "status", label: "Status" },
-          { field: CARD_GROUP_BY_FIELD, label: "Grupo" },
-        ]}
+        groupByOptions={SLA_GROUP_BY_OPTIONS}
+        {...dateRangeFilterBarProps({
+          fields: SLA_DATE_FILTER_FIELDS,
+          filters,
+          onChange: (next) => setFilters({ ...next, page: "1" }),
+        })}
       />
 
       <Panel>
@@ -703,9 +760,10 @@ export default function SlaVencidasClient({ role }: SlaVencidasClientProps) {
             <h2 className="font-display text-lg font-semibold text-slate-900">
               {loading ? "Cargando..." : `Listado (${rows.length})`}
             </h2>
-            {filters.groupBy ? (
+            {groupLevels.length ? (
               <span className="rounded-full bg-emerald-50 px-2.5 py-0.5 text-xs font-semibold text-emerald-700 ring-1 ring-emerald-200">
-                Agrupado por: {filters.groupBy}
+                Agrupado por:{" "}
+                {groupLevels.map((token) => groupByLevelLabel(token, SLA_GROUP_BY_OPTIONS)).join(" › ")}
               </span>
             ) : null}
             {isGroupByGrupo ? <CardGroupFanoutNote /> : null}
@@ -727,6 +785,7 @@ export default function SlaVencidasClient({ role }: SlaVencidasClientProps) {
               exportColumns.includes("tipoTarjeta") || exportColumns.includes("adicional"),
               exportColumns.includes("status"),
               exportColumns.includes("slaDueDate"),
+              exportColumns.includes("dispatchDate"),
               exportColumns.includes("diasVencidos"),
               exportColumns.includes("direccion"),
               exportColumns.includes("telefonos"),
@@ -816,6 +875,15 @@ export default function SlaVencidasClient({ role }: SlaVencidasClientProps) {
                         className="px-3"
                       />
                     ) : null}
+                    {exportColumns.includes("dispatchDate") ? (
+                      <ResizableHeader
+                        columnKey="dispatchDate"
+                        label="Despacho"
+                        width={columnWidths.dispatchDate}
+                        onResize={onColumnResize}
+                        className="px-3"
+                      />
+                    ) : null}
                     {exportColumns.includes("diasVencidos") ? (
                       <ResizableHeader
                         columnKey="diasVencidos"
@@ -847,44 +915,16 @@ export default function SlaVencidasClient({ role }: SlaVencidasClientProps) {
                 </thead>
                 <tbody>
                   {groupedRows ? (
-                    groupedRows.map((group) => {
-                      const isCollapsed = Boolean(collapsedGroups[group.groupKey]);
-                      return (
-                        <React.Fragment key={group.groupKey}>
-                          <tr
-                            onClick={() =>
-                              setCollapsedGroups((prev) => ({
-                                ...prev,
-                                [group.groupKey]: !prev[group.groupKey],
-                              }))
-                            }
-                            className="cursor-pointer bg-slate-100/90 font-semibold text-slate-900 transition hover:bg-slate-200/80 select-none border-y border-slate-200"
-                          >
-                            <td colSpan={visibleHeaderCount} className="py-2.5 px-3">
-                              <div className="flex items-center gap-2">
-                                {isCollapsed ? (
-                                  <ChevronRight className="h-4 w-4 text-slate-600" />
-                                ) : (
-                                  <ChevronDown className="h-4 w-4 text-slate-600" />
-                                )}
-                                <span className="text-xs uppercase tracking-wider text-slate-500 font-bold">
-                                  Grupo:
-                                </span>
-                                <span className="text-sm font-bold text-slate-900">
-                                  {group.groupLabel}
-                                </span>
-                                <span className="rounded-full bg-slate-200/90 px-2 py-0.5 text-xs font-semibold text-slate-700">
-                                  {bucketCountLabel(group.items.length, bucketTotals?.[group.groupKey] ?? null)}
-                                </span>
-                              </div>
-                            </td>
-                          </tr>
-                          {!isCollapsed
-                            ? group.items.map((row) => renderSlaRow(row))
-                            : null}
-                        </React.Fragment>
-                      );
-                    })
+                    <NestedGroupList
+                      groups={groupedRows}
+                      variant="table"
+                      colSpan={visibleHeaderCount}
+                      isCollapsed={collapsedGroups.isCollapsed}
+                      onToggle={collapsedGroups.toggle}
+                      selection={groupSelection}
+                      countLabel={groupCountLabel}
+                      renderRows={(groupRows) => groupRows.map((row) => renderSlaRow(row))}
+                    />
                   ) : (
                     rows.map((row) => renderSlaRow(row))
                   )}
@@ -915,10 +955,10 @@ export default function SlaVencidasClient({ role }: SlaVencidasClientProps) {
                   onChange={(e) => setFilters((prev) => ({ ...prev, pageSize: e.target.value, page: "1" }))}
                   className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs"
                 >
-                  <option value="25">25</option>
                   <option value="50">50</option>
                   <option value="100">100</option>
                   <option value="200">200</option>
+                  <option value="400">400</option>
                 </select>
               </label>
             </div>

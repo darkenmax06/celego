@@ -16,7 +16,7 @@ import {
   ITEM_NOT_FOUND,
 } from "@/lib/item-outcome-service";
 import { emitTransitionObservations, type TransitionObservation } from "@/lib/card-transition-observer";
-import { buildRouteReassignmentNote } from "@/lib/route-reassignment";
+import { buildRouteReassignmentNote, detachCardsFromActiveRoutes } from "@/lib/route-reassignment";
 
 const createSchema = z.object({
   fecha: z.string(),
@@ -241,30 +241,10 @@ export async function POST(request: Request) {
 
   try {
     const route = await prisma.$transaction(async (tx) => {
-      const priorItems = await tx.routeItem.findMany({
-        where: {
-          cardId: { in: selectedCards.map((card) => card.id) },
-          route: { status: { in: [RouteStatus.PENDIENTE, RouteStatus.EN_PROCESO] } },
-        },
-        select: {
-          id: true,
-          cardId: true,
-          routeId: true,
-          route: { select: { messenger: { select: { nombre: true } } } },
-        },
-      });
-
-      if (priorItems.length) {
-        await tx.routeItem.deleteMany({ where: { id: { in: priorItems.map((item) => item.id) } } });
-        await tx.route.updateMany({
-          where: {
-            id: { in: [...new Set(priorItems.map((item) => item.routeId))] },
-            status: { in: [RouteStatus.PENDIENTE, RouteStatus.EN_PROCESO] },
-            items: { none: {} },
-          },
-          data: { status: RouteStatus.CANCELADA },
-        });
-      }
+      const priorItems = await detachCardsFromActiveRoutes(
+        tx,
+        selectedCards.map((card) => card.id),
+      );
 
       const assigned = await tx.card.updateMany({
         where: {

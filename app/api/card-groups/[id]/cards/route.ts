@@ -44,6 +44,7 @@ const CARD_SELECT = {
   isRemote: true,
   status: true,
   customer: { select: { nombre: true, cedula: true } },
+  currentMessenger: { select: { id: true, nombre: true } },
 } as const;
 
 export async function GET(_request: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -87,6 +88,9 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
         nombre: card.customer?.nombre ?? "",
         cedula: card.customer?.cedula ?? "",
       },
+      currentMessenger: card.currentMessenger
+        ? { id: card.currentMessenger.id, nombre: card.currentMessenger.nombre }
+        : null,
     })),
     total,
     cap: CARD_GROUP_LOAD_CAP,
