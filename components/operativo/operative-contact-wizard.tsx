@@ -28,6 +28,7 @@ export type OperativeWizardCard = {
   remaining?: number | null;
   presinto?: string | null;
   fechaDespacho?: string | null;
+  slaDueDate?: string | null;
   tipoEmision?: string | null;
   tipoEntrega?: string | null;
   direcciones: string[];

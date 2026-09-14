@@ -104,7 +104,7 @@ export const RETURN_REASONS_DEFAULT = [
 export const MODULES = [
   "dashboard",
   "tarjetas",
-  "consolidado_debito",
+  "importacion",
   "modificacion_masiva",
   "status_digitales",
   "rastreo_masivo",

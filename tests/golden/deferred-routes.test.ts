@@ -86,7 +86,7 @@ describe("tarjetas GET (task 10.1 deferred)", () => {
     expect(firstCallArg(prisma.card.findMany).where).toEqual({ urgent: true, isRemote: true });
   });
 
-  it("paginates at 50 default / 200 max and keeps its urgentCases include", async () => {
+  it("paginates at 50 default / 400 max and keeps its urgentCases include", async () => {
     await getTarjetas(req("/api/tarjetas"));
     const args = firstCallArg(prisma.card.findMany);
     expect(args).toMatchObject({ skip: 0, take: 50 });
@@ -107,7 +107,7 @@ describe("tarjetas GET (task 10.1 deferred)", () => {
     prisma.card.findMany.mockResolvedValue([]);
     prisma.card.count.mockResolvedValue(0);
     await getTarjetas(req("/api/tarjetas?pageSize=999"));
-    expect(firstCallArg(prisma.card.findMany)).toMatchObject({ take: 200 });
+    expect(firstCallArg(prisma.card.findMany)).toMatchObject({ take: 400 });
   });
 
   it("replaces urgentCases with activeUrgentCase in the response envelope", async () => {

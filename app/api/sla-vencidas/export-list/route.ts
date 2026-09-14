@@ -5,7 +5,10 @@ import { requireApiSession } from "@/lib/api-session";
 import { prisma } from "@/lib/prisma";
 import { writeAuditEvent } from "@/lib/audit";
 import { exportRowsToCsv, exportRowsToPdf, exportRowsToXlsx } from "@/lib/reports/export";
-import { isUpcomingWithinWarning, serializeSlaCard, slaWhere, type SlaTab } from "../shared";
+import { dateRangesToParams } from "@/lib/date-range-params";
+import { ListQueryValidationError } from "@/lib/list-query";
+import { compileCardDateRangeWhere } from "@/lib/list-query/card-date-range";
+import { isUpcomingWithinWarning, serializeSlaCard, slaWhereWithDates, type SlaTab } from "../shared";
 
 const COLUMN_LABELS = {
   producto: "Producto", identificador: "Identificador", numeroTarjeta: "Numero tarjeta", numeroSolicitud: "Numero solicitud",
@@ -15,11 +18,18 @@ const COLUMN_LABELS = {
 } as const;
 type ColumnKey = keyof typeof COLUMN_LABELS;
 
+const dayParamSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+
 const payloadSchema = z.object({
   tab: z.enum(["UPCOMING", "OVERDUE"]).default("OVERDUE"),
   productType: z.nativeEnum(CardProductType).optional(),
   messengerId: z.string().optional().default("ALL"),
   provincia: z.string().optional(), zona: z.string().optional(), status: z.nativeEnum(CardStatus).optional(), q: z.string().optional(),
+  /** Active list date filters by field; fields are whitelisted by `CARD_DATE_RANGE_FIELDS`. */
+  dateRanges: z
+    .record(z.string(), z.object({ from: dayParamSchema.optional(), to: dayParamSchema.optional() }))
+    .optional()
+    .default({}),
   columns: z.array(z.enum(Object.keys(COLUMN_LABELS) as [ColumnKey, ...ColumnKey[]])).min(1).max(24),
   format: z.enum(["csv", "xlsx", "pdf"]),
 });
@@ -41,10 +51,19 @@ export async function POST(request: Request) {
     messengerId: input.messengerId !== "ALL" ? input.messengerId : undefined,
     provincia: input.provincia || undefined, zona: input.zona || undefined, status: input.status, q: input.q || undefined,
   };
+  let dateClauses;
+  try {
+    dateClauses = compileCardDateRangeWhere(new URLSearchParams(dateRangesToParams(input.dateRanges))).clauses;
+  } catch (error) {
+    if (error instanceof ListQueryValidationError) {
+      return NextResponse.json({ error: error.message }, { status: 400 });
+    }
+    throw error;
+  }
   const [config, cards] = await Promise.all([
     prisma.sLAConfig.findUnique({ where: { id: "default" }, select: { warningBusinessDays: true } }),
     prisma.card.findMany({
-      where: slaWhere(filters),
+      where: slaWhereWithDates(filters, dateClauses),
       select: {
         id: true, tc: true, requestNumber: true, productType: true, status: true, slaDueDate: true, dispatchDate: true,
         provincia: true, zona: true, urgent: true, isAdditional: true, additionalIndex: true,

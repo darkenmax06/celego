@@ -5,6 +5,9 @@ import { PageHeader } from "@/components/ui/page-header";
 import { Panel } from "@/components/ui/panel";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { ContratoPendienteWizard } from "@/components/cards/contrato-pendiente-wizard";
+import { DateRangeFilter } from "@/components/filters/date-range-filter";
+import { cardDateFilterOptions } from "@/lib/card-date-fields";
+import { dateRangesToParams, type DateRangeMap } from "@/lib/date-range-params";
 
 type PendingCard = {
   id: string;
@@ -25,17 +28,20 @@ const STATUS_OPTIONS: Array<{ value: string; label: string }> = [
   { value: "ENTREGA_SIN_CONTRATO", label: "Entrega sin contrato" },
 ];
 
+const PENDING_DATE_FILTER_FIELDS = cardDateFilterOptions(["dispatchDate", "slaDueDate", "createdAt", "updatedAt"]);
+
 export default function ContratosPendientesClient() {
   const [cards, setCards] = useState<PendingCard[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("");
+  const [dateRanges, setDateRanges] = useState<DateRangeMap>({});
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [selectedCard, setSelectedCard] = useState<PendingCard | null>(null);
 
   async function loadCards() {
     setLoading(true);
-    const params = new URLSearchParams();
+    const params = new URLSearchParams(dateRangesToParams(dateRanges));
     if (search.trim()) params.set("search", search.trim());
     if (status) params.set("status", status);
 
@@ -48,7 +54,7 @@ export default function ContratosPendientesClient() {
   useEffect(() => {
     loadCards();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [status]);
+  }, [status, dateRanges]);
 
   const filteredCards = useMemo(() => cards, [cards]);
 
@@ -99,6 +105,19 @@ export default function ContratosPendientesClient() {
                 </option>
               ))}
             </select>
+            <DateRangeFilter
+              fields={PENDING_DATE_FILTER_FIELDS}
+              value={dateRanges}
+              onChange={(field, range) =>
+                setDateRanges((prev) => {
+                  const next = { ...prev };
+                  if (range) next[field] = range;
+                  else delete next[field];
+                  return next;
+                })
+              }
+              className="w-full max-w-sm rounded-lg border border-slate-200 p-1"
+            />
           </div>
         ) : null}
       </Panel>

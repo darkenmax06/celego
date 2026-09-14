@@ -34,7 +34,7 @@ const NAV_ITEMS: Array<{
 }> = [
   { module: "dashboard", label: "Dashboard", href: "/dashboard", icon: ChartArea },
   { module: "tarjetas", label: "Tarjetas", href: "/tarjetas", icon: CreditCard },
-  { module: "consolidado_debito", label: "Consolidado d\u00e9bito", href: "/consolidado-debito", icon: Upload },
+  { module: "importacion", label: "Importaci\u00f3n", href: "/importacion", icon: Upload },
   { module: "modificacion_masiva", label: "Actualizacion masiva", href: "/modificacion-masiva", icon: ScanLine },
   { module: "status_digitales", label: "Entrega digital (imagenes)", href: "/status-digitales", icon: Images },
   { module: "rastreo_masivo", label: "Rastreo masivo", href: "/rastreo-masivo", icon: Search },

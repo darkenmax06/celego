@@ -52,7 +52,7 @@ export const LIST_ROUTE_CONTRACTS: readonly ListRouteContract[] = [
     listKey: "cards",
     envelopeKeys: ["cards", "pagination"],
     defaultPageSize: 50,
-    maxPageSize: 200,
+    maxPageSize: 400,
     allowUnpaginated: false,
     hoistsRawParams: false,
     migrated: true,

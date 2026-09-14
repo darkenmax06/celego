@@ -21,6 +21,18 @@ export type SlaFilters = {
   q?: string;
 };
 
+/**
+ * `slaWhere` plus the card date range constraints (`date.<field>.from|to`)
+ * compiled by `compileCardDateRangeWhere`, AND-combined.
+ */
+export function slaWhereWithDates(
+  filters: SlaFilters,
+  dateClauses: readonly Prisma.CardWhereInput[],
+): Prisma.CardWhereInput {
+  const base = slaWhere(filters);
+  return dateClauses.length ? { AND: [base, ...dateClauses] } : base;
+}
+
 export function slaWhere(filters: SlaFilters): Prisma.CardWhereInput {
   const today = new Date();
   today.setHours(0, 0, 0, 0);

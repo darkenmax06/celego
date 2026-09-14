@@ -76,6 +76,7 @@ describe("GET /api/card-groups/[id]/cards", () => {
     expect(body.truncated).toBe(false);
     expect(body.cards).toHaveLength(2);
     expect(Object.keys(body.cards[0]).sort()).toEqual([
+      "currentMessenger",
       "customer",
       "id",
       "isRemote",
@@ -94,6 +95,7 @@ describe("GET /api/card-groups/[id]/cards", () => {
       isRemote: true,
       status: true,
       customer: { select: { nombre: true, cedula: true } },
+      currentMessenger: { select: { id: true, nombre: true } },
     });
   });
 

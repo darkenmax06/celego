@@ -1,11 +1,20 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CardStatus } from "@prisma/client";
+import { PencilLine } from "lucide-react";
+import { CardExportWizardModal } from "@/components/cards/card-export-wizard-modal";
+import { CardSelectionBar, type SelectedCardEntry } from "@/components/cards/card-selection-bar";
 import {
   OperationalCardPicker,
   type OperationalCard,
 } from "@/components/cards/operational-card-picker";
+import {
+  BulkEditWizardModal,
+  buildBulkEditPayload,
+  type BulkEditMessenger,
+  type BulkEditValues,
+} from "@/components/modificacion-masiva/bulk-edit-wizard-modal";
 import { PageHeader } from "@/components/ui/page-header";
 import { Panel } from "@/components/ui/panel";
 import { StatusBadge } from "@/components/ui/status-badge";
@@ -24,17 +33,18 @@ type CardRow = {
   isRemote: boolean;
   status: string;
   customer: { nombre: string; cedula: string };
+  currentMessenger?: { id: string; nombre: string } | null;
 };
 
+/**
+ * Autosaved scanning session. Field choices now live in the edit wizard and
+ * are not persisted; older drafts may still carry the legacy `batch*` keys,
+ * which are simply ignored on restore.
+ */
 type MassUpdateDraft = {
   scanInput: string;
   scannedCards: CardRow[];
   selectedCardIds: string[];
-  batchStatus: string;
-  batchProvincia: string;
-  batchZona: string;
-  batchRemote: string;
-  batchReturnReason: string;
 };
 
 const statuses: CardStatus[] = [
@@ -111,73 +121,62 @@ export default function ModificacionMasivaClient() {
   const [scanInput, setScanInput] = useState("");
   const [scannedCards, setScannedCards] = useState<CardRow[]>([]);
   const [selectedCardIds, setSelectedCardIds] = useState<string[]>([]);
-  const [batchStatus, setBatchStatus] = useState<string>("UNCHANGED");
-  const [batchProvincia, setBatchProvincia] = useState("UNCHANGED");
-  const [batchZona, setBatchZona] = useState("UNCHANGED");
-  const [batchRemote, setBatchRemote] = useState("UNCHANGED");
-  const [batchReturnReason, setBatchReturnReason] = useState("");
   const [motivos, setMotivos] = useState<Motivo[]>([]);
   const [provincias, setProvincias] = useState<Provincia[]>([]);
+  const [messengers, setMessengers] = useState<BulkEditMessenger[]>([]);
   const [message, setMessage] = useState("");
+  const [editOpen, setEditOpen] = useState(false);
+  const [exportOpen, setExportOpen] = useState(false);
+  const scanInputRef = useRef<HTMLInputElement>(null);
+
+  const focusScanInput = useCallback(() => {
+    window.requestAnimationFrame(() => {
+      scanInputRef.current?.focus();
+    });
+  }, []);
   const [groupId, setGroupId] = useState("");
   const [groupLoading, setGroupLoading] = useState(false);
   const { groups } = useCardGroups();
 
   const draftPayload = useMemo<MassUpdateDraft>(
-    () => ({
-      scanInput,
-      scannedCards,
-      selectedCardIds,
-      batchStatus,
-      batchProvincia,
-      batchZona,
-      batchRemote,
-      batchReturnReason,
-    }),
-    [
-      batchProvincia,
-      batchRemote,
-      batchReturnReason,
-      batchStatus,
-      batchZona,
-      scanInput,
-      scannedCards,
-      selectedCardIds,
-    ],
+    () => ({ scanInput, scannedCards, selectedCardIds }),
+    [scanInput, scannedCards, selectedCardIds],
   );
   const workflowDraft = useWorkflowDraft<MassUpdateDraft>({
     module: "modificacion-masiva",
     payload: draftPayload,
     shouldSave: scannedCards.length > 0,
     onRestore: (draft) => {
-      setScanInput(draft.scanInput);
-      setScannedCards(draft.scannedCards);
-      setSelectedCardIds(draft.selectedCardIds);
-      setBatchStatus(draft.batchStatus);
-      setBatchProvincia(draft.batchProvincia);
-      setBatchZona(draft.batchZona);
-      setBatchRemote(draft.batchRemote);
-      setBatchReturnReason(draft.batchReturnReason);
+      setScanInput(draft.scanInput ?? "");
+      setScannedCards(draft.scannedCards ?? []);
+      setSelectedCardIds(draft.selectedCardIds ?? []);
+      // Drafts saved before the messenger column existed lack it; refresh it.
+      for (const card of draft.scannedCards ?? []) void loadCurrentMessenger(card.id);
     },
   });
 
-  function needsReturnReason(status: string) {
-    return status === CardStatus.RETORNADA || status === CardStatus.DEVUELTA_TIENDA;
-  }
-
   useEffect(() => {
     void (async () => {
-      const [motivosRes, provinciasRes] = await Promise.all([
+      const [motivosRes, provinciasRes, messengersRes] = await Promise.all([
         fetch("/api/config/motivos-retorno", { cache: "no-store" }),
         fetch("/api/config/provincias", { cache: "no-store" }),
+        fetch("/api/mensajeros?onlyActive=1", { cache: "no-store" }),
       ]);
-      const [motivosJson, provinciasJson] = await Promise.all([
-        motivosRes.json(),
-        provinciasRes.json(),
+      const [motivosJson, provinciasJson, messengersJson] = await Promise.all([
+        motivosRes.json().catch(() => ({})),
+        provinciasRes.json().catch(() => ({})),
+        messengersRes.json().catch(() => ({})),
       ]);
       setMotivos((motivosJson.motivos ?? []).filter((item: Motivo) => item.active));
       setProvincias(
         ((provinciasJson.provincias ?? []) as Provincia[]).filter((item) => item.active),
+      );
+      setMessengers(
+        ((messengersJson.messengers ?? []) as BulkEditMessenger[]).map((item) => ({
+          id: item.id,
+          nombre: item.nombre,
+          provinciaTrabajo: item.provinciaTrabajo ?? null,
+        })),
       );
     })();
   }, []);
@@ -187,6 +186,17 @@ export default function ModificacionMasivaClient() {
   }, [scannedCards]);
 
   const allSelected = scannedCards.length > 0 && selectedCardIds.length === scannedCards.length;
+  const selectedCards = useMemo(
+    () => scannedCards.filter((card) => selectedCardIds.includes(card.id)),
+    [scannedCards, selectedCardIds],
+  );
+  const cardsById = useMemo(() => {
+    const map: Record<string, SelectedCardEntry> = {};
+    for (const card of scannedCards) {
+      map[card.id] = { id: card.id, tc: card.tc, customerName: card.customer.nombre, cedula: card.customer.cedula };
+    }
+    return map;
+  }, [scannedCards]);
 
   function addSelectedCard(card: OperationalCard) {
     if (scannedCards.some((item) => item.id === card.id)) {
@@ -202,10 +212,31 @@ export default function ModificacionMasivaClient() {
       isRemote: Boolean(card.isRemote),
       status: card.status,
       customer: card.customer,
+      currentMessenger: null,
     };
     setScannedCards((prev) => [...prev, row]);
     setSelectedCardIds((prev) => [...prev, card.id]);
     setMessage("");
+    void loadCurrentMessenger(card.id);
+  }
+
+  /** The scanner lookup carries no messenger, so it is filled from the card detail. */
+  async function loadCurrentMessenger(cardId: string) {
+    try {
+      const res = await fetch(`/api/tarjetas/${cardId}`, { cache: "no-store" });
+      if (!res.ok) return;
+      const json = (await res.json()) as { card?: { currentMessenger?: { id: string; nombre: string } | null } };
+      const messenger = json.card?.currentMessenger;
+      setScannedCards((prev) =>
+        prev.map((item) =>
+          item.id === cardId
+            ? { ...item, currentMessenger: messenger ? { id: messenger.id, nombre: messenger.nombre } : null }
+            : item,
+        ),
+      );
+    } catch {
+      // Messenger stays unknown; the column shows "-".
+    }
   }
 
   /**
@@ -214,7 +245,7 @@ export default function ModificacionMasivaClient() {
    * APPENDS on purpose: the operator may already have a scanned working set,
    * and replacing it would discard work they cannot recover. The rows written
    * here are the same `CardRow` shape `addSelectedCard` produces, so selection,
-   * "Aplicar cambios" and the batch-status POST stay untouched.
+   * the edit wizard and the export stay untouched.
    */
   async function loadGroupIntoTable() {
     if (!groupId) {
@@ -261,67 +292,40 @@ export default function ModificacionMasivaClient() {
       );
     } finally {
       setGroupLoading(false);
+      focusScanInput();
     }
   }
 
-  async function applyBatchChanges() {
-    if (!scannedCards.length) {
-      setMessage("Primero pistolea tarjetas");
-      return;
-    }
-    if (!selectedCardIds.length) {
-      setMessage("Selecciona al menos una tarjeta");
-      return;
-    }
-    if (
-      batchStatus === "UNCHANGED" &&
-      batchProvincia === "UNCHANGED" &&
-      batchZona === "UNCHANGED" &&
-      batchRemote === "UNCHANGED"
-    ) {
-      setMessage("Selecciona estado, provincia, zona o remota para aplicar");
-      return;
-    }
+  const closeEditWizard = useCallback(() => {
+    setEditOpen(false);
+    focusScanInput();
+  }, [focusScanInput]);
 
-    const selectedCards = scannedCards.filter((card) => selectedCardIds.includes(card.id));
-    const payload: Record<string, unknown> = {
-      cardIds: selectedCards.map((card) => card.id),
-      note: "Cambio masivo por pistoleo",
-    };
-    const selectedStatus = batchStatus !== "UNCHANGED" ? batchStatus : null;
-    if (selectedStatus && needsReturnReason(selectedStatus) && !batchReturnReason.trim()) {
-      setMessage("Debes indicar motivo de devolucion para aplicar ese estado");
-      return;
-    }
-    if (batchStatus !== "UNCHANGED") payload.status = batchStatus;
-    if (batchProvincia !== "UNCHANGED") payload.provincia = batchProvincia;
-    if (batchZona !== "UNCHANGED") payload.zona = batchZona;
-    if (batchRemote !== "UNCHANGED") payload.isRemote = batchRemote === "YES";
-    if (selectedStatus && needsReturnReason(selectedStatus)) {
-      payload.returnReason = batchReturnReason.trim();
-    }
+  const closeExportWizard = useCallback(() => {
+    setExportOpen(false);
+    focusScanInput();
+  }, [focusScanInput]);
+
+  async function applyBulkEdit(values: BulkEditValues, affectedCardIds: string[]): Promise<string | null> {
+    if (!affectedCardIds.length) return "Ninguna tarjeta cambia con estos valores";
 
     const res = await fetch("/api/tarjetas/lote/estado", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
+      body: JSON.stringify(buildBulkEditPayload(affectedCardIds, values)),
     });
     const json = await res.json().catch(() => ({ error: "No se pudo aplicar cambios" }));
+    if (!res.ok) return json.error ?? "No se pudo aplicar cambios";
 
-    if (!res.ok) {
-      setMessage(json.error ?? "No se pudo aplicar cambios");
-      return;
-    }
-
-    setMessage(`Cambios aplicados en ${selectedCards.length} tarjetas`);
-    setScannedCards([]);
-    setSelectedCardIds([]);
-    setBatchStatus("UNCHANGED");
-    setBatchProvincia("UNCHANGED");
-    setBatchZona("UNCHANGED");
-    setBatchRemote("UNCHANGED");
-    setBatchReturnReason("");
-    await workflowDraft.clearDraft();
+    // Applied cards leave the session; unselected or unchanged ones stay scanned.
+    const applied = new Set(affectedCardIds);
+    const remaining = scannedCards.filter((card) => !applied.has(card.id));
+    setScannedCards(remaining);
+    setSelectedCardIds((prev) => prev.filter((id) => !applied.has(id)));
+    setMessage(`Cambios aplicados en ${affectedCardIds.length} tarjetas`);
+    if (!remaining.length) await workflowDraft.clearDraft();
+    closeEditWizard();
+    return null;
   }
 
   function toggleSelectCard(cardId: string, checked: boolean) {
@@ -346,7 +350,7 @@ export default function ModificacionMasivaClient() {
     <div>
       <PageHeader
         title="Actualizacion masiva"
-        subtitle="Pistolea tarjetas y aplica cambios de estado, provincia o zona en lote"
+        subtitle="Pistolea tarjetas, selecciónalas y edítalas en lote con revisión previa"
       />
       <WorkflowStatusBar
         status={workflowDraft.status}
@@ -362,11 +366,11 @@ export default function ModificacionMasivaClient() {
           onCardSelected={addSelectedCard}
           onMessage={setMessage}
           placeholder="Pistolear TC/Cedula y presionar Enter"
-          className="mb-3"
           autoFocus
+          inputRef={scanInputRef}
         />
 
-        <div className="mb-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
+        <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
           <div className="flex flex-wrap items-center gap-2">
             <select
               aria-label="Grupo"
@@ -395,118 +399,52 @@ export default function ModificacionMasivaClient() {
             cargan hasta 500 tarjetas por grupo.
           </p>
         </div>
-
-        <div className="mb-3 flex flex-wrap items-center gap-2">
-          <select
-            value={batchStatus}
-            onChange={(event) => {
-              const nextStatus = event.target.value;
-              setBatchStatus(nextStatus);
-              if (nextStatus !== CardStatus.RETORNADA && nextStatus !== CardStatus.DEVUELTA_TIENDA) {
-                setBatchReturnReason("");
-              }
-            }}
-            className="rounded-xl border border-slate-300 px-3 py-2"
-          >
-            <option value="UNCHANGED">Estado: sin cambio</option>
-            {statuses.map((item) => (
-              <option key={item} value={item}>
-                Estado: {item}
-              </option>
-            ))}
-          </select>
-          <select
-            value={batchProvincia}
-            onChange={(event) => {
-              const nextProvince = event.target.value;
-              setBatchProvincia(nextProvince);
-              if (nextProvince === "UNCHANGED") {
-                setBatchZona("UNCHANGED");
-                return;
-              }
-              const province = provincias.find((item) => item.nombre === nextProvince);
-              if (province) setBatchZona(province.zona);
-            }}
-            className="rounded-xl border border-slate-300 px-3 py-2"
-          >
-            <option value="UNCHANGED">Provincia: sin cambio</option>
-            {provincias.map((item) => (
-              <option key={item.id} value={item.nombre}>
-                Provincia: {item.nombre}
-              </option>
-            ))}
-          </select>
-          <select
-            value={batchZona}
-            onChange={(event) => setBatchZona(event.target.value)}
-            className="rounded-xl border border-slate-300 px-3 py-2"
-          >
-            <option value="UNCHANGED">Zona: sin cambio</option>
-            {zonas.map((item) => (
-              <option key={item} value={item}>
-                Zona: {item}
-              </option>
-              ))}
-          </select>
-          <select
-            value={batchRemote}
-            onChange={(event) => setBatchRemote(event.target.value)}
-            className="rounded-xl border border-slate-300 px-3 py-2"
-          >
-            <option value="UNCHANGED">Remota: sin cambio</option>
-            <option value="YES">Remota: si</option>
-            <option value="NO">Remota: no</option>
-          </select>
-          <select
-            value={batchReturnReason}
-            onChange={(event) => setBatchReturnReason(event.target.value)}
-            className="rounded-xl border border-slate-300 px-3 py-2"
-            disabled={!(batchStatus === CardStatus.RETORNADA || batchStatus === CardStatus.DEVUELTA_TIENDA)}
-          >
-            <option value="">Motivo de devolucion...</option>
-            {motivos.map((item) => (
-              <option key={item.id} value={item.nombre}>
-                {item.nombre}
-              </option>
-            ))}
-          </select>
-          <button
-            type="button"
-            onClick={() => void applyBatchChanges()}
-            className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white"
-          >
-            Aplicar cambios ({selectedCardIds.length})
-          </button>
-          <button
-            type="button"
-            onClick={toggleSelectAll}
-            className="rounded-xl border border-slate-300 px-4 py-2 text-sm"
-          >
-            {allSelected ? "Quitar seleccion total" : "Seleccionar todas"}
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              setScannedCards([]);
-              setSelectedCardIds([]);
-              void workflowDraft.clearDraft();
-            }}
-            className="rounded-xl border border-slate-300 px-4 py-2 text-sm"
-          >
-            Limpiar
-          </button>
-        </div>
-
-        {message ? <p className="text-sm text-emerald-700">{message}</p> : null}
+        {message ? <p className="mt-3 text-sm text-emerald-700">{message}</p> : null}
       </Panel>
 
-      <Panel className="mt-5" title="Tarjetas pistoleadas">
+      <Panel className="mt-5">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+          <h2 className="font-display text-lg font-semibold text-slate-900">
+            Tarjetas pistoleadas ({scannedCards.length})
+          </h2>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setEditOpen(true)}
+              disabled={!selectedCardIds.length}
+              className="inline-flex items-center gap-1.5 rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <PencilLine className="h-4 w-4" />
+              Editar seleccionadas ({selectedCardIds.length})
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setScannedCards([]);
+                setSelectedCardIds([]);
+                setMessage("");
+                void workflowDraft.clearDraft();
+                focusScanInput();
+              }}
+              disabled={!scannedCards.length}
+              className="rounded-xl border border-slate-300 px-4 py-2 text-sm disabled:opacity-50"
+            >
+              Limpiar
+            </button>
+          </div>
+        </div>
+
         <div className="overflow-x-auto">
           <table className="w-full text-left text-sm">
             <thead className="text-xs uppercase tracking-wide text-slate-500">
               <tr>
                 <th className="pb-2">
-                  <input type="checkbox" checked={allSelected} onChange={() => toggleSelectAll()} />
+                  <input
+                    type="checkbox"
+                    aria-label="Seleccionar todas las tarjetas pistoleadas"
+                    checked={allSelected}
+                    onChange={() => toggleSelectAll()}
+                  />
                 </th>
                 <th className="pb-2">TC</th>
                 <th className="pb-2">Cliente</th>
@@ -514,6 +452,7 @@ export default function ModificacionMasivaClient() {
                 <th className="pb-2">Provincia</th>
                 <th className="pb-2">Zona</th>
                 <th className="pb-2">Remota</th>
+                <th className="pb-2">Mensajero</th>
                 <th className="pb-2">Estado</th>
                 <th className="pb-2"></th>
               </tr>
@@ -524,6 +463,7 @@ export default function ModificacionMasivaClient() {
                   <td className="py-2">
                     <input
                       type="checkbox"
+                      aria-label={`Seleccionar tarjeta ${card.tc}`}
                       checked={selectedCardIds.includes(card.id)}
                       onChange={(event) => toggleSelectCard(card.id, event.target.checked)}
                     />
@@ -534,11 +474,13 @@ export default function ModificacionMasivaClient() {
                   <td className="py-2">{card.provincia}</td>
                   <td className="py-2">{card.zona}</td>
                   <td className="py-2">{card.isRemote ? "SI" : "NO"}</td>
+                  <td className="py-2">{card.currentMessenger?.nombre ?? "-"}</td>
                   <td className="py-2">
                     <StatusBadge value={card.status} />
                   </td>
                   <td className="py-2 text-right">
                     <button
+                      type="button"
                       onClick={() =>
                         setScannedCards((prev) => prev.filter((item) => item.id !== card.id))
                       }
@@ -551,7 +493,7 @@ export default function ModificacionMasivaClient() {
               ))}
               {!scannedCards.length ? (
                 <tr>
-                  <td colSpan={9} className="py-6 text-center text-sm text-slate-500">
+                  <td colSpan={10} className="py-6 text-center text-sm text-slate-500">
                     No hay tarjetas pistoleadas.
                   </td>
                 </tr>
@@ -560,6 +502,32 @@ export default function ModificacionMasivaClient() {
           </table>
         </div>
       </Panel>
+
+      <CardSelectionBar
+        count={selectedCardIds.length}
+        selectedIds={selectedCardIds}
+        cardsById={cardsById}
+        onClear={() => setSelectedCardIds([])}
+        onDeselect={(cardId) => toggleSelectCard(cardId, false)}
+        onExport={() => setExportOpen(true)}
+      />
+
+      {editOpen && selectedCards.length ? (
+        <BulkEditWizardModal
+          cards={selectedCards}
+          statuses={statuses}
+          zonas={zonas}
+          provinces={provincias.map((item) => ({ nombre: item.nombre, zona: item.zona }))}
+          returnReasons={motivos.map((item) => ({ value: item.nombre, label: item.nombre }))}
+          messengers={messengers}
+          onClose={closeEditWizard}
+          onApply={applyBulkEdit}
+        />
+      ) : null}
+
+      {exportOpen && selectedCardIds.length ? (
+        <CardExportWizardModal cardIds={selectedCardIds} onClose={closeExportWizard} onExported={setMessage} />
+      ) : null}
     </div>
   );
 }

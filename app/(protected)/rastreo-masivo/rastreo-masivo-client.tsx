@@ -1,9 +1,7 @@
 "use client";
 
-import React, { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
-  ChevronDown,
-  ChevronRight,
   Download,
   FileSpreadsheet,
   FileText,
@@ -18,7 +16,17 @@ import {
   Eye,
 } from "lucide-react";
 import { CardDetailModal } from "@/components/cards/card-detail-modal";
-import { FilterBar, ViewType } from "@/components/filters/filter-bar";
+import { FilterBar, groupByLevelLabel, ViewType } from "@/components/filters/filter-bar";
+import { NestedGroupList, useCollapsedGroups } from "@/components/grouping/nested-group-list";
+import { dateRangeFilterBarProps } from "@/components/filters/date-range-filter";
+import {
+  cardDateFilterOptions,
+  cardDateGroupOptions,
+  getCardDateGroup,
+  parseDateGroupToken,
+} from "@/lib/card-date-fields";
+import { groupRowsNested, parseGroupByLevels } from "@/lib/grouping";
+import { matchesDateRange, normalizeDateRangeFilters, readDateRanges } from "@/lib/date-range-params";
 import { TrackingExportModal } from "@/components/rastreo-masivo/tracking-export-modal";
 import { PageHeader } from "@/components/ui/page-header";
 import { Panel } from "@/components/ui/panel";
@@ -132,6 +140,24 @@ const DEFAULT_COLUMN_WIDTHS: Record<string, number> = {
   acciones: 100,
 };
 
+/** Results are filtered in memory, so only the dates each row carries are offered. */
+const TRACKING_DATE_FILTER_FIELDS = cardDateFilterOptions(["dispatchDate", "slaDueDate"]);
+
+const TRACKING_GROUP_BY_OPTIONS = [
+  { field: "status", label: "Estado" },
+  { field: "provincia", label: "Provincia" },
+  { field: "zona", label: "Zona" },
+  { field: "mensajero", label: "Mensajero" },
+  { field: "urgente", label: "Urgente" },
+  { field: "remota", label: "Remota" },
+  { field: "tipoTarjeta", label: "Tipo tarjeta" },
+  ...cardDateGroupOptions(["dispatchDate", "slaDueDate"]),
+];
+
+function trackingDateSource(row: Row) {
+  return { dispatchDate: row.fechaDespacho, slaDueDate: row.slaVence };
+}
+
 function dateLabel(value: string | null) {
   if (!value) return "-";
   const date = new Date(value);
@@ -140,6 +166,8 @@ function dateLabel(value: string | null) {
 }
 
 function getTrackingGroupKey(row: Row, groupBy: string): { key: string; label: string } {
+  const dateGroup = parseDateGroupToken(groupBy);
+  if (dateGroup) return getCardDateGroup(trackingDateSource(row), dateGroup.key, dateGroup.granularity);
   switch (groupBy) {
     case "status":
       return { key: row.status || "SIN_ESTADO", label: row.status || "Sin Estado" };
@@ -182,7 +210,7 @@ export default function RastreoMasivoClient() {
     "rastreo-masivo",
     DEFAULT_COLUMN_WIDTHS,
   );
-  const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
+  const collapsedGroups = useCollapsedGroups();
 
   // Filter bar state for results
   const [filters, setFilters] = useState<Record<string, string>>({});
@@ -250,7 +278,14 @@ export default function RastreoMasivoClient() {
 
   // Filter rows based on in-memory facets & search in FilterBar
   const filteredRows = useMemo(() => {
+    const dateRanges = Object.entries(readDateRanges(filters));
     return rows.filter((row) => {
+      // Date ranges (AND across fields, inclusive local days)
+      const dates = trackingDateSource(row);
+      for (const [field, range] of dateRanges) {
+        if (!matchesDateRange(dates[field as keyof typeof dates], range)) return false;
+      }
+
       // Free text search in results
       if (filters.q) {
         const qLower = filters.q.toLowerCase();
@@ -301,18 +336,11 @@ export default function RastreoMasivoClient() {
   }, [rows, filters]);
 
   // Group filtered rows if groupBy is active
-  const groupedRows = useMemo(() => {
-    if (!filters.groupBy) return null;
-    const groups: Record<string, { groupKey: string; groupLabel: string; items: Row[] }> = {};
-    for (const row of filteredRows) {
-      const { key, label } = getTrackingGroupKey(row, filters.groupBy);
-      if (!groups[key]) {
-        groups[key] = { groupKey: key, groupLabel: label, items: [] };
-      }
-      groups[key].items.push(row);
-    }
-    return Object.values(groups);
-  }, [filteredRows, filters.groupBy]);
+  const groupLevels = useMemo(() => parseGroupByLevels(filters.groupBy), [filters.groupBy]);
+  const groupedRows = useMemo(
+    () => groupRowsNested(filteredRows, groupLevels, getTrackingGroupKey),
+    [filteredRows, groupLevels],
+  );
 
   // Distinct facet values computed from actual rows
   const dynamicFacets = useMemo(() => {
@@ -642,22 +670,15 @@ export default function RastreoMasivoClient() {
           resource="rastreo-masivo"
           sectionKey="rastreo-masivo"
           filters={filters}
-          onFilterChange={setFilters}
+          onFilterChange={(next) => setFilters(normalizeDateRangeFilters(next))}
           onReset={() => setFilters({})}
           searchPlaceholder="Filtrar por TC, cliente, cédula o mensajero en resultados..."
           allowedViews={["list", "cards"]}
           currentView={viewMode}
           onViewChange={setViewMode}
           facets={dynamicFacets}
-          groupByOptions={[
-            { field: "status", label: "Estado" },
-            { field: "provincia", label: "Provincia" },
-            { field: "zona", label: "Zona" },
-            { field: "mensajero", label: "Mensajero" },
-            { field: "urgente", label: "Urgente" },
-            { field: "remota", label: "Remota" },
-            { field: "tipoTarjeta", label: "Tipo tarjeta" },
-          ]}
+          groupByOptions={TRACKING_GROUP_BY_OPTIONS}
+          {...dateRangeFilterBarProps({ fields: TRACKING_DATE_FILTER_FIELDS, filters, onChange: setFilters })}
         />
       ) : null}
 
@@ -668,9 +689,10 @@ export default function RastreoMasivoClient() {
             <h2 className="font-display text-lg font-semibold text-slate-900">
               Resultados {rows.length ? `(${filteredRows.length}${filteredRows.length !== rows.length ? ` de ${rows.length}` : ""})` : ""}
             </h2>
-            {filters.groupBy ? (
+            {groupLevels.length ? (
               <span className="rounded-full bg-emerald-50 px-2.5 py-0.5 text-xs font-semibold text-emerald-700 ring-1 ring-emerald-200">
-                Agrupado por: {filters.groupBy}
+                Agrupado por:{" "}
+                {groupLevels.map((token) => groupByLevelLabel(token, TRACKING_GROUP_BY_OPTIONS)).join(" › ")}
               </span>
             ) : null}
           </div>
@@ -697,43 +719,16 @@ export default function RastreoMasivoClient() {
           /* Cards View Mode */
           groupedRows ? (
             <div className="space-y-6">
-              {groupedRows.map((group) => {
-                const isCollapsed = Boolean(collapsedGroups[group.groupKey]);
-                return (
-                  <div key={group.groupKey} className="space-y-3">
-                    <div
-                      onClick={() =>
-                        setCollapsedGroups((prev) => ({
-                          ...prev,
-                          [group.groupKey]: !prev[group.groupKey],
-                        }))
-                      }
-                      className="flex cursor-pointer select-none items-center justify-between rounded-xl bg-slate-100/90 px-4 py-2.5 transition hover:bg-slate-200/80 border border-slate-200"
-                    >
-                      <div className="flex items-center gap-2">
-                        {isCollapsed ? (
-                          <ChevronRight className="h-4 w-4 text-slate-600" />
-                        ) : (
-                          <ChevronDown className="h-4 w-4 text-slate-600" />
-                        )}
-                        <span className="text-xs font-bold uppercase tracking-wider text-slate-500">
-                          Grupo:
-                        </span>
-                        <span className="text-sm font-bold text-slate-900">{group.groupLabel}</span>
-                        <span className="rounded-full bg-slate-200/90 px-2 py-0.5 text-xs font-semibold text-slate-700">
-                          {group.items.length} {group.items.length === 1 ? "resultado" : "resultados"}
-                        </span>
-                      </div>
-                    </div>
-
-                    {!isCollapsed ? (
-                      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-                        {group.items.map(renderCardItem)}
-                      </div>
-                    ) : null}
-                  </div>
-                );
-              })}
+              <NestedGroupList
+                groups={groupedRows}
+                variant="blocks"
+                isCollapsed={collapsedGroups.isCollapsed}
+                onToggle={collapsedGroups.toggle}
+                countLabel={(count) => `${count} ${count === 1 ? "resultado" : "resultados"}`}
+                renderRows={(groupRows) => (
+                  <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">{groupRows.map(renderCardItem)}</div>
+                )}
+              />
             </div>
           ) : (
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
@@ -761,37 +756,16 @@ export default function RastreoMasivoClient() {
               </thead>
               <tbody>
                 {groupedRows
-                  ? groupedRows.map((group) => {
-                      const isCollapsed = Boolean(collapsedGroups[group.groupKey]);
-                      return (
-                        <React.Fragment key={group.groupKey}>
-                          <tr
-                            onClick={() =>
-                              setCollapsedGroups((prev) => ({
-                                ...prev,
-                                [group.groupKey]: !prev[group.groupKey],
-                              }))
-                            }
-                            className="cursor-pointer bg-slate-100/90 font-semibold text-slate-800 hover:bg-slate-200/80 transition-colors select-none"
-                          >
-                            <td colSpan={visibleDefs.length + 1} className="px-4 py-2 text-xs">
-                              <div className="flex items-center gap-2">
-                                {isCollapsed ? (
-                                  <ChevronRight className="h-3.5 w-3.5" />
-                                ) : (
-                                  <ChevronDown className="h-3.5 w-3.5" />
-                                )}
-                                <span>{group.groupLabel}</span>
-                                <span className="rounded-full bg-slate-200 px-2 py-0.2 text-[11px] font-bold text-slate-600">
-                                  {group.items.length}
-                                </span>
-                              </div>
-                            </td>
-                          </tr>
-                          {!isCollapsed ? group.items.map(renderTableRow) : null}
-                        </React.Fragment>
-                      );
-                    })
+                  ? (
+                    <NestedGroupList
+                      groups={groupedRows}
+                      variant="table"
+                      colSpan={visibleDefs.length + 1}
+                      isCollapsed={collapsedGroups.isCollapsed}
+                      onToggle={collapsedGroups.toggle}
+                      renderRows={(groupRows) => groupRows.map(renderTableRow)}
+                    />
+                  )
                   : filteredRows.map(renderTableRow)}
               </tbody>
             </table>
