@@ -141,7 +141,7 @@ export function CardImportPanels() {
         const parsed = data.parsedRows ?? (created + updated + skipped);
         const totalRows = parsed + rejected;
         const msg = data.replay
-          ? `Data Diaria Crédito ya procesada anteriormente: ${created} creadas, ${updated} actualizadas.`
+          ? `Data Diaria Crédito ya procesada anteriormente: ${created} creadas, ${updated} actualizadas, ${skipped} omitidas, ${rejected} rechazadas.`
           : `Data Diaria Crédito importada: ${created} creadas, ${updated} actualizadas, ${skipped} omitidas, ${rejected} rechazadas (${totalRows} filas en el archivo).`;
         // Rejected rows are dropped silently unless the reasons are surfaced here.
         const reasons = summarizeRowErrors(data.errors);
