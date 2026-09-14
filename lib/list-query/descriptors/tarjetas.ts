@@ -57,5 +57,5 @@ export const tarjetasListQuery = defineListQuery<Prisma.CardWhereInput>({
     keys: {},
     fallbackOrderBy: [{ updatedAt: "desc" }],
   },
-  pagination: { defaultPageSize: 25, maxPageSize: 200 },
+  pagination: { defaultPageSize: 50, maxPageSize: 200 },
 });

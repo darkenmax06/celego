@@ -129,3 +129,67 @@ describe("GET /api/list-query/group-by", () => {
     expect(body.totalGroups).toBe(2);
   });
 });
+
+describe("GET /api/list-query/group-by?by=grupo (relation branch)", () => {
+  it("rejects the grupo branch for a resource that cannot answer it", async () => {
+    const res = await getGroupBy(req("/api/list-query/group-by?resource=rutas&by=grupo"));
+    expect(res).toBeDefined();
+    expect(res!.status).toBe(400);
+  });
+
+  it("counts memberships through the card predicate and adds the Sin grupo bucket", async () => {
+    prisma.cardGroupMember.groupBy.mockResolvedValue([
+      { groupId: "group-1", _count: { _all: 7 } },
+      { groupId: "group-2", _count: { _all: 12 } },
+    ]);
+    prisma.card.count.mockResolvedValue(4);
+
+    const res = await getGroupBy(
+      req("/api/list-query/group-by?resource=tarjetas&by=grupo&provincia=AZUA"),
+    );
+    expect(res).toBeDefined();
+    expect(res!.status).toBe(200);
+
+    const groupByArg = firstCallArg(prisma.cardGroupMember.groupBy);
+    expect(groupByArg.by).toEqual(["groupId"]);
+    expect((groupByArg.where as { card: Record<string, unknown> }).card).toMatchObject({
+      provincia: "AZUA",
+    });
+
+    const countArg = firstCallArg(prisma.card.count);
+    expect(countArg.where).toMatchObject({
+      AND: [{ provincia: "AZUA" }, { groupMemberships: { none: {} } }],
+    });
+
+    const body = await readJson(res!);
+    expect(body.by).toBe("grupo");
+    expect(body.groups).toEqual([
+      { key: "group-2", count: 12 },
+      { key: "group-1", count: 7 },
+      { key: "SIN_GRUPO", count: 4 },
+    ]);
+    expect(body.totalGroups).toBe(3);
+  });
+
+  it("applies the resource baseWhere so sla-vencidas totals cannot over-report", async () => {
+    prisma.cardGroupMember.groupBy.mockResolvedValue([]);
+    prisma.card.count.mockResolvedValue(0);
+
+    const res = await getGroupBy(req("/api/list-query/group-by?resource=sla-vencidas&by=grupo"));
+    expect(res).toBeDefined();
+    expect(res!.status).toBe(200);
+
+    const groupByArg = firstCallArg(prisma.cardGroupMember.groupBy);
+    const cardWhere = (groupByArg.where as { card: Record<string, unknown> }).card;
+    const serialized = JSON.stringify(cardWhere);
+    expect(serialized).toContain("slaDueDate");
+    expect(serialized).toContain("ENTREGADA");
+  });
+
+  it("rejects an unauthorized role on the grupo branch", async () => {
+    mockSessionRole = "MENSAJERO";
+    const res = await getGroupBy(req("/api/list-query/group-by?resource=sla-vencidas&by=grupo"));
+    expect(res).toBeDefined();
+    expect(res!.status).toBe(403);
+  });
+});

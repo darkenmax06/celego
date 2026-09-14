@@ -1,7 +1,10 @@
 import "@testing-library/jest-dom/vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { CardGroupAssignModal } from "@/components/cards/card-group-assign-modal";
+import {
+  CardGroupAssignModal,
+  OFF_FILTER_COUNT_UNAVAILABLE,
+} from "@/components/cards/card-group-assign-modal";
 
 /**
  * SDD card-groups — Work Unit F, Task 19. RED against the missing
@@ -94,6 +97,61 @@ describe("CardGroupAssignModal", () => {
       screen.getByText(/no se pudo calcular cuántas tarjetas seleccionadas/i),
     ).toBeInTheDocument();
     expect(screen.queryByText(/calculando/i)).not.toBeInTheDocument();
+  });
+
+  it("renders honest copy, and never a zero, when the view cannot determine the off-filter count", () => {
+    render(
+      <CardGroupAssignModal
+        cardIds={["card-1", "card-2", "card-3"]}
+        offFilterCount={OFF_FILTER_COUNT_UNAVAILABLE}
+        groups={groups}
+        onClose={vi.fn()}
+        onSuccess={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.getByText(/esta vista no puede determinar cu(a|á)ntas/i),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/podr(i|í)an quedar fuera de lo que ves aqu(i|í)/i)).toBeInTheDocument();
+    expect(screen.queryByText(/calculando/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/fuera del filtro actual/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/0 de las/)).not.toBeInTheDocument();
+  });
+
+  it("still lets the assignment proceed while the off-filter count is undeterminable", async () => {
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({ group: groups[0], added: 3, alreadyMember: 0, removed: 0 }),
+    });
+
+    render(
+      <CardGroupAssignModal
+        cardIds={["card-1", "card-2", "card-3"]}
+        offFilterCount={OFF_FILTER_COUNT_UNAVAILABLE}
+        groups={groups}
+        onClose={vi.fn()}
+        onSuccess={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Asignar" }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+  });
+
+  it("prefers the error message over the undeterminable state", () => {
+    render(
+      <CardGroupAssignModal
+        cardIds={["card-1"]}
+        offFilterCount={OFF_FILTER_COUNT_UNAVAILABLE}
+        offFilterError="No se pudo calcular el conteo."
+        groups={groups}
+        onClose={vi.fn()}
+        onSuccess={vi.fn()}
+      />,
+    );
+    expect(screen.getByText("No se pudo calcular el conteo.")).toBeInTheDocument();
+    expect(screen.queryByText(/esta vista no puede determinar/i)).not.toBeInTheDocument();
   });
 
   it("submits a PATCH to the selected existing group with addCardIds", async () => {

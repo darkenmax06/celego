@@ -86,10 +86,10 @@ describe("tarjetas GET (task 10.1 deferred)", () => {
     expect(firstCallArg(prisma.card.findMany).where).toEqual({ urgent: true, isRemote: true });
   });
 
-  it("paginates at 25 default / 200 max and keeps its urgentCases include", async () => {
+  it("paginates at 50 default / 200 max and keeps its urgentCases include", async () => {
     await getTarjetas(req("/api/tarjetas"));
     const args = firstCallArg(prisma.card.findMany);
-    expect(args).toMatchObject({ skip: 0, take: 25 });
+    expect(args).toMatchObject({ skip: 0, take: 50 });
     expect(args.orderBy).toEqual([{ updatedAt: "desc" }]);
     expect(args.include).toEqual({
       customer: true,
@@ -100,6 +100,7 @@ describe("tarjetas GET (task 10.1 deferred)", () => {
         take: 1,
         select: { id: true, level: true, nextNotificationAt: true, lastNotifiedAt: true },
       },
+      groupMemberships: { select: { groupId: true } },
     });
 
     vi.clearAllMocks();
@@ -111,8 +112,8 @@ describe("tarjetas GET (task 10.1 deferred)", () => {
 
   it("replaces urgentCases with activeUrgentCase in the response envelope", async () => {
     prisma.card.findMany.mockResolvedValue([
-      { id: "card-1", tc: "TC1", urgentCases: [{ id: "uc-1", level: 2 }] },
-      { id: "card-2", tc: "TC2", urgentCases: [] },
+      { id: "card-1", tc: "TC1", urgentCases: [{ id: "uc-1", level: 2 }], groupMemberships: [{ groupId: "g1" }] },
+      { id: "card-2", tc: "TC2", urgentCases: [], groupMemberships: [] },
     ]);
     prisma.card.count.mockResolvedValue(2);
 
@@ -122,7 +123,7 @@ describe("tarjetas GET (task 10.1 deferred)", () => {
     expect(cards[0].activeUrgentCase).toEqual({ id: "uc-1", level: 2 });
     expect(cards[1].activeUrgentCase).toBeNull();
     expect("urgentCases" in cards[0]).toBe(false);
-    expect(body.pagination).toEqual({ page: 1, pageSize: 25, total: 2, totalPages: 1 });
+    expect(body.pagination).toEqual({ page: 1, pageSize: 50, total: 2, totalPages: 1 });
   });
 });
 
@@ -184,10 +185,10 @@ describe("operativo/contacto GET activos (task 10.7 deferred)", () => {
     expect(prisma.card.findMany).not.toHaveBeenCalled();
     expect(Object.keys(body)).toEqual(["tab", "cards", "pagination"]);
     expect(body.cards).toEqual([]);
-    expect(body.pagination).toEqual({ page: 1, pageSize: 25, total: 0, totalPages: 1 });
+    expect(body.pagination).toEqual({ page: 1, pageSize: 50, total: 0, totalPages: 1 });
   });
 
-  it("omits the status conjunct for ALL and paginates at 25/100", async () => {
+  it("omits the status conjunct for ALL and paginates at 50/100", async () => {
     await getOperativoContacto(req("/api/operativo/contacto?status=ALL&provincia=ALL&pageSize=999"));
     const where = firstCallArg(prisma.card.findMany).where as { AND: unknown[] };
     expect(where.AND).toHaveLength(2); // closed-status exclusion + SLA window only

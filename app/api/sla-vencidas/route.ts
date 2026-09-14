@@ -90,6 +90,10 @@ export async function GET(request: NextRequest) {
             nombre: true,
           },
         },
+        // This route uses an explicit `select`, so group membership has to be
+        // named here. Bare ids only — clients resolve id -> name through
+        // `lib/use-card-groups.ts`. Same shape as `app/api/urgentes/route.ts`.
+        groupMemberships: { select: { groupId: true } },
       },
       orderBy,
       skip,
@@ -150,6 +154,7 @@ export async function GET(request: NextRequest) {
       traslado,
       comentarioContacto,
       metadata: card.metadata,
+      groupIds: card.groupMemberships.map((membership) => membership.groupId),
     };
   });
 

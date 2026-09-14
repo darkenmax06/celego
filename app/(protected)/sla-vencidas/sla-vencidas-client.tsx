@@ -6,7 +6,21 @@ import { PageHeader } from "@/components/ui/page-header";
 import { Panel } from "@/components/ui/panel";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { usePersistentState } from "@/lib/use-persistent-state";
+import {
+  CARD_GROUP_BY_FIELD,
+  bucketCountLabel,
+  cardGroupBuckets,
+  groupRows,
+  singleBucket,
+  toGroupNameMap,
+} from "@/lib/grouping";
+import { useCardGroupBucketTotals } from "@/lib/use-card-group-bucket-totals";
 import { useCardGroups } from "@/lib/use-card-groups";
+import { useCardSelection } from "@/lib/use-card-selection";
+import { CardGroupAssignModal } from "@/components/cards/card-group-assign-modal";
+import { CardGroupFanoutNote } from "@/components/cards/card-group-fanout-note";
+import { CardSelectCheckbox } from "@/components/cards/card-select-checkbox";
+import { CardSelectionBar, type SelectedCardEntry } from "@/components/cards/card-selection-bar";
 import { FilterBar } from "@/components/filters/filter-bar";
 import { TableColumnSelector } from "@/components/ui/table-column-selector";
 import {
@@ -52,6 +66,8 @@ type Row = {
   fechaPreferenciaEntrega?: string | null;
   comentarioContacto?: string | null;
   metadata?: unknown;
+  /** Ids of the CardGroups this card belongs to. Names resolve via useCardGroups. */
+  groupIds?: string[];
 };
 
 type PaginationMeta = {
@@ -163,18 +179,24 @@ function getSlaGroupKey(row: Row, groupBy: string): { key: string; label: string
   }
 }
 
-export default function SlaVencidasClient() {
+type SlaVencidasClientProps = {
+  /** Stage B, Task B1: gates the selection column and bulk bar to ADMIN/OPERADOR. */
+  role: string;
+};
+
+export default function SlaVencidasClient({ role }: SlaVencidasClientProps) {
+  const canManageGroups = role === "ADMIN" || role === "OPERADOR";
   const [filters, setFilters] = useState<Record<string, string>>({
     messengerId: "ALL",
     page: "1",
-    pageSize: "50",
+    pageSize: "100",
   });
   const cardGroups = useCardGroups();
   const [messengers, setMessengers] = useState<MessengerOption[]>([]);
   const [rows, setRows] = useState<Row[]>([]);
   const [pagination, setPagination] = useState<PaginationMeta>({
     page: 1,
-    pageSize: 50,
+    pageSize: 100,
     total: 0,
     totalPages: 1,
   });
@@ -190,6 +212,29 @@ export default function SlaVencidasClient() {
   );
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
 
+  // Stage B, Task B1: app-wide card selection and bulk group actions.
+  const cardSelection = useCardSelection();
+  const [assignModalMode, setAssignModalMode] = useState<"existing" | "new" | null>(null);
+  const [groupActionError, setGroupActionError] = useState<string | null>(null);
+  const [offFilterCount, setOffFilterCount] = useState<number | null>(null);
+  const [offFilterError, setOffFilterError] = useState<string | null>(null);
+
+  const activeGroupFilterIds = (filters.grupo ?? "").split(",").filter(Boolean);
+
+  /**
+   * Identity lookup for the selection review panel, built ONLY from the rows
+   * this screen loaded. An id missing here is selected but outside this view
+   * (another page, another filter, or another screen entirely - the selection
+   * is app-wide), and the bar renders it as a labelled minimal entry.
+   */
+  const cardsById = useMemo(() => {
+    const map: Record<string, SelectedCardEntry> = {};
+    for (const row of rows) {
+      map[row.id] = { id: row.id, tc: row.tc, customerName: row.nombre, cedula: row.cedula };
+    }
+    return map;
+  }, [rows]);
+
   // Wizard state for SLA Vencidas
   const [selectedCardId, setSelectedCardId] = useState<string | null>(null);
   const [provincesList, setProvinciasList] = useState<string[]>([]);
@@ -204,6 +249,69 @@ export default function SlaVencidasClient() {
       })
       .catch(() => {});
   }, []);
+
+  /**
+   * The off-filter count can only be answered by the database - the browser
+   * cannot know whether an unloaded card matches the active filter - so it is
+   * fetched from the resource-generic endpoint when the modal opens. `null`
+   * means "still loading" and is rendered as such, never as a fabricated 0.
+   */
+  useEffect(() => {
+    if (!assignModalMode) return;
+    let cancelled = false;
+    setOffFilterCount(null);
+    setOffFilterError(null);
+    (async () => {
+      try {
+        const response = await fetch("/api/list-query/off-filter-count", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            resource: "sla-vencidas",
+            cardIds: cardSelection.ids,
+            filters,
+          }),
+        });
+        if (!response.ok) throw new Error("off-filter-count request failed");
+        const body = (await response.json()) as { offFilterCount: number };
+        if (!cancelled) setOffFilterCount(body.offFilterCount);
+      } catch {
+        if (!cancelled) {
+          setOffFilterError(
+            "No se pudo calcular cuántas tarjetas seleccionadas están fuera del filtro actual.",
+          );
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [assignModalMode]);
+
+  async function afterGroupAction() {
+    setAssignModalMode(null);
+    cardSelection.clear();
+    await cardGroups.reload();
+    await loadData(filters);
+  }
+
+  async function handleRemoveFromGroup() {
+    const [groupId] = activeGroupFilterIds.filter((id) => id !== "SIN_GRUPO");
+    if (!groupId) return;
+    setGroupActionError(null);
+    const response = await fetch(`/api/card-groups/${groupId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ removeCardIds: cardSelection.ids }),
+    });
+    if (!response.ok) {
+      const body = (await response.json().catch(() => ({}))) as { error?: string };
+      setGroupActionError(body.error ?? "No se pudo quitar la selección del grupo");
+      return;
+    }
+    await afterGroupAction();
+  }
 
   async function loadData(currentFilters = filters) {
     setLoading(true);
@@ -244,18 +352,24 @@ export default function SlaVencidasClient() {
     void loadData(filters);
   }, [filters]);
 
+  const groupNameById = useMemo(() => toGroupNameMap(cardGroups.groups), [cardGroups.groups]);
+
+  /** Grouping by "Grupo" is the only group-by where a row lands in several buckets. */
+  const isGroupByGrupo = filters.groupBy === CARD_GROUP_BY_FIELD;
+
+  /** True per-group totals; `null` while loading or when none can be computed. */
+  const bucketTotals = useCardGroupBucketTotals("sla-vencidas", filters, isGroupByGrupo);
+
   const groupedRows = useMemo(() => {
-    if (!filters.groupBy) return null;
-    const groups: Record<string, { groupKey: string; groupLabel: string; items: Row[] }> = {};
-    for (const row of rows) {
-      const { key, label } = getSlaGroupKey(row, filters.groupBy);
-      if (!groups[key]) {
-        groups[key] = { groupKey: key, groupLabel: label, items: [] };
-      }
-      groups[key].items.push(row);
-    }
-    return Object.values(groups);
-  }, [rows, filters.groupBy]);
+    const groupBy = filters.groupBy;
+    if (!groupBy) return null;
+    return groupRows(
+      rows,
+      groupBy === CARD_GROUP_BY_FIELD
+        ? (row: Row) => cardGroupBuckets(row.groupIds, groupNameById)
+        : singleBucket((row: Row) => getSlaGroupKey(row, groupBy)),
+    );
+  }, [rows, filters.groupBy, groupNameById]);
 
   // Selected card for OperativeContactWizard
   const selectedIndex = selectedCardId ? rows.findIndex((r) => r.id === selectedCardId) : -1;
@@ -388,6 +502,15 @@ export default function SlaVencidasClient() {
       onClick={() => setSelectedCardId(row.id)}
       className="cursor-pointer border-t border-slate-100 align-top hover:bg-blue-50/50 transition-colors"
     >
+      {canManageGroups ? (
+        <td className="px-3 py-2.5">
+          <CardSelectCheckbox
+            checked={cardSelection.isSelected(row.id)}
+            onChange={() => cardSelection.toggle(row.id)}
+            label={`Seleccionar tarjeta ${row.tc}`}
+          />
+        </td>
+      ) : null}
       {exportColumns.includes("nombre") ? (
         <td className="px-3 py-2.5 font-semibold text-slate-900 truncate" title={row.nombre}>
           <div className="flex items-center gap-1.5 min-w-0">
@@ -483,8 +606,8 @@ export default function SlaVencidasClient() {
         resource="sla-vencidas"
         sectionKey="sla-vencidas"
         filters={filters}
-        onFilterChange={(next) => setFilters({ ...next, page: "1", pageSize: filters.pageSize || "50" })}
-        onReset={() => setFilters({ messengerId: "ALL", page: "1", pageSize: "50" })}
+        onFilterChange={(next) => setFilters({ ...next, page: "1", pageSize: filters.pageSize || "100" })}
+        onReset={() => setFilters({ messengerId: "ALL", page: "1", pageSize: "100" })}
         searchPlaceholder="Buscar por TC, cédula, nombre, provincia o zona..."
         facets={[
           {
@@ -530,6 +653,7 @@ export default function SlaVencidasClient() {
           { field: "provincia", label: "Provincia" },
           { field: "zona", label: "Zona" },
           { field: "status", label: "Status" },
+          { field: CARD_GROUP_BY_FIELD, label: "Grupo" },
         ]}
       />
 
@@ -584,6 +708,7 @@ export default function SlaVencidasClient() {
                 Agrupado por: {filters.groupBy}
               </span>
             ) : null}
+            {isGroupByGrupo ? <CardGroupFanoutNote /> : null}
           </div>
           <TableColumnSelector
             columns={EXPORT_COLUMNS}
@@ -605,12 +730,29 @@ export default function SlaVencidasClient() {
               exportColumns.includes("diasVencidos"),
               exportColumns.includes("direccion"),
               exportColumns.includes("telefonos"),
-            ].filter(Boolean).length;
+            ].filter(Boolean).length + (canManageGroups ? 1 : 0);
 
             return (
               <table className="w-full min-w-[1200px] text-left text-sm table-fixed">
                 <thead className="bg-slate-50/80 text-xs uppercase tracking-wide text-slate-600 border-b border-slate-200">
                   <tr>
+                    {canManageGroups ? (
+                      <th className="w-10 px-3">
+                        <CardSelectCheckbox
+                          checked={rows.length > 0 && rows.every((r) => cardSelection.isSelected(r.id))}
+                          onChange={(checked) => {
+                            if (checked) {
+                              cardSelection.selectMany(rows.map((r) => r.id));
+                            } else {
+                              for (const r of rows) {
+                                if (cardSelection.isSelected(r.id)) cardSelection.toggle(r.id);
+                              }
+                            }
+                          }}
+                          label="Seleccionar todas en esta página"
+                        />
+                      </th>
+                    ) : null}
                     {exportColumns.includes("nombre") ? (
                       <ResizableHeader
                         columnKey="nombre"
@@ -732,8 +874,7 @@ export default function SlaVencidasClient() {
                                   {group.groupLabel}
                                 </span>
                                 <span className="rounded-full bg-slate-200/90 px-2 py-0.5 text-xs font-semibold text-slate-700">
-                                  {group.items.length}{" "}
-                                  {group.items.length === 1 ? "tarjeta" : "tarjetas"}
+                                  {bucketCountLabel(group.items.length, bucketTotals?.[group.groupKey] ?? null)}
                                 </span>
                               </div>
                             </td>
@@ -770,7 +911,7 @@ export default function SlaVencidasClient() {
               <label className="flex items-center gap-1">
                 <span>Por página:</span>
                 <select
-                  value={filters.pageSize || "50"}
+                  value={filters.pageSize || "100"}
                   onChange={(e) => setFilters((prev) => ({ ...prev, pageSize: e.target.value, page: "1" }))}
                   className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs"
                 >
@@ -804,6 +945,35 @@ export default function SlaVencidasClient() {
         ) : null}
       </Panel>
 
+      {canManageGroups ? (
+        <CardSelectionBar
+          count={cardSelection.count}
+          selectedIds={cardSelection.ids}
+          cardsById={cardsById}
+          activeGroupFilterIds={activeGroupFilterIds}
+          onClear={cardSelection.clear}
+          onDeselect={cardSelection.toggle}
+          onCreateGroup={() => setAssignModalMode("new")}
+          onAssignExisting={() => setAssignModalMode("existing")}
+          onRemoveFromGroup={() => void handleRemoveFromGroup()}
+        />
+      ) : null}
+      {groupActionError ? (
+        <p className="text-xs font-semibold text-red-600">{groupActionError}</p>
+      ) : null}
+
+      {canManageGroups && assignModalMode ? (
+        <CardGroupAssignModal
+          cardIds={cardSelection.ids}
+          offFilterCount={offFilterCount}
+          offFilterError={offFilterError}
+          groups={cardGroups.groups}
+          initialMode={assignModalMode}
+          onClose={() => setAssignModalMode(null)}
+          onSuccess={() => void afterGroupAction()}
+        />
+      ) : null}
+
       {/* OPERATIVE WIZARD ON SLA VENCIDAS */}
       {selectedIndex >= 0 && currentWizardCard ? (
         <OperativeContactWizard
@@ -817,6 +987,12 @@ export default function SlaVencidasClient() {
             setSelectedCardId(rows[Math.min(selectedIndex + 1, rows.length - 1)]?.id ?? null)
           }
           onSave={saveContactFromWizard}
+          canManageGroups={canManageGroups}
+          cardGroups={cardGroups.groups}
+          onGroupsChanged={() => {
+            void cardGroups.reload();
+            void loadData(filters);
+          }}
         />
       ) : null}
     </div>
