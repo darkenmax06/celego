@@ -174,4 +174,38 @@ describe("groupRowsNested", () => {
     expect(tree[0].children[0].depth).toBe(1);
     expect(tree[0].children[0].path.startsWith(tree[0].path)).toBe(true);
   });
+
+  it("fans a row out into every bucket a multi-key level returns, at that level and below", () => {
+    type GroupedRow = { id: string; status: string; groups: string[] };
+    const grouped: GroupedRow[] = [
+      { id: "a", status: "EN_RUTA", groups: ["g1", "g2"] },
+      { id: "b", status: "ENTREGADA", groups: ["g1"] },
+      { id: "c", status: "EN_RUTA", groups: [] },
+    ];
+    const tree = groupRowsNested(grouped, ["grupo", "status"], (row, token) =>
+      token === "grupo"
+        ? row.groups.length
+          ? [...row.groups, row.groups[0]].map((key) => ({ key, label: key }))
+          : [{ key: "SIN_GRUPO", label: "Sin grupo" }]
+        : { key: row.status, label: row.status },
+    )!;
+    const shape = (nodes: GroupNode<GroupedRow>[]): unknown =>
+      nodes.map((node) => ({
+        key: node.key,
+        count: node.count,
+        ...(node.children.length ? { children: shape(node.children) } : { ids: node.rows.map((row) => row.id) }),
+      }));
+    expect(shape(tree)).toEqual([
+      {
+        key: "g1",
+        count: 2,
+        children: [
+          { key: "EN_RUTA", count: 1, ids: ["a"] },
+          { key: "ENTREGADA", count: 1, ids: ["b"] },
+        ],
+      },
+      { key: "g2", count: 1, children: [{ key: "EN_RUTA", count: 1, ids: ["a"] }] },
+      { key: "SIN_GRUPO", count: 1, children: [{ key: "EN_RUTA", count: 1, ids: ["c"] }] },
+    ]);
+  });
 });

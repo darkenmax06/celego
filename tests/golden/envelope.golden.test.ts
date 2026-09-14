@@ -56,7 +56,7 @@ describe("golden envelopes for the nine list routes", () => {
       lotes: "20/100",
       "config-usuarios": "20/100",
       actividad: "25/100",
-      "operativo-contacto": "25/100",
+      "operativo-contacto": "50/100",
       bizcochitos: "15/50",
     });
   });

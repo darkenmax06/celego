@@ -142,7 +142,7 @@ export const LIST_ROUTE_CONTRACTS: readonly ListRouteContract[] = [
     file: "app/api/operativo/contacto/route.ts",
     listKey: "cards",
     envelopeKeys: ["tab", "cards", "pagination"],
-    defaultPageSize: 25,
+    defaultPageSize: 50,
     maxPageSize: 100,
     allowUnpaginated: false,
     hoistsRawParams: false,

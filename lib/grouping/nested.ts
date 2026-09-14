@@ -1,10 +1,15 @@
 import { compareDateGroupKeys, parseDateGroupToken } from "@/lib/card-date-fields";
+import { groupRows, type GroupBucketKey } from "./group-rows";
 
 /**
  * Nested client-side grouping for list views. The `groupBy` filter holds an
  * ordered, comma-separated list of level tokens (first = outermost level),
  * e.g. `status,fecha:dispatchDate:month`. A single legacy token is simply a
  * one-level list, so saved favorites keep working.
+ *
+ * Each level is bucketed with the shared `groupRows` reducer, so a level whose
+ * key function returns several buckets (e.g. "Grupo") fans a row out into every
+ * one of them, at that level and all levels below it.
  */
 
 export const GROUP_BY_SEPARATOR = ",";
@@ -33,7 +38,7 @@ export function toggleGroupByLevel(value: string | undefined, token: string): st
   );
 }
 
-export type GroupKey = { key: string; label: string };
+export type GroupKey = GroupBucketKey;
 
 export type GroupNode<T> = {
   /** Bucket key at this level. */
@@ -45,7 +50,7 @@ export type GroupNode<T> = {
   depth: number;
   /** Unique across the whole tree (includes every ancestor); use it for collapse state and React keys. */
   path: string;
-  /** Number of rows under this node, across all nested levels. */
+  /** Number of distinct rows under this node, across all nested levels. */
   count: number;
   /** Every row under this node, in input order. */
   rows: T[];
@@ -66,40 +71,34 @@ export function defaultGroupComparator(token: string): GroupKeyComparator | unde
 /**
  * Buckets `rows` level by level in `levels` order. Returns `null` when there
  * is no level (the view renders flat). `getKey` maps a row to its bucket for
- * one level token.
+ * one level token, or to several buckets to fan the row out at that level.
  */
 export function groupRowsNested<T>(
   rows: readonly T[],
   levels: readonly string[],
-  getKey: (row: T, token: string) => GroupKey,
+  getKey: (row: T, token: string) => GroupKey | readonly GroupKey[],
   compare: (token: string) => GroupKeyComparator | undefined = defaultGroupComparator,
 ): GroupNode<T>[] | null {
   if (!levels.length) return null;
 
   function build(items: readonly T[], depth: number, parentPath: string): GroupNode<T>[] {
     const token = levels[depth];
-    const buckets = new Map<string, GroupNode<T>>();
-    for (const row of items) {
-      const { key, label } = getKey(row, token);
-      let node = buckets.get(key);
-      if (!node) {
-        const segment = `${token}=${key}`;
-        node = {
-          key,
-          label,
-          token,
-          depth,
-          path: parentPath ? `${parentPath}${PATH_SEPARATOR}${segment}` : segment,
-          count: 0,
-          rows: [],
-          children: [],
-        };
-        buckets.set(key, node);
-      }
-      node.rows.push(row);
-      node.count += 1;
-    }
-    const nodes = [...buckets.values()];
+    const nodes: GroupNode<T>[] = groupRows(items, (row) => {
+      const resolved = getKey(row, token);
+      return Array.isArray(resolved) ? resolved : [resolved as GroupKey];
+    }).map((bucket) => {
+      const segment = `${token}=${bucket.groupKey}`;
+      return {
+        key: bucket.groupKey,
+        label: bucket.groupLabel,
+        token,
+        depth,
+        path: parentPath ? `${parentPath}${PATH_SEPARATOR}${segment}` : segment,
+        count: bucket.items.length,
+        rows: bucket.items,
+        children: [],
+      };
+    });
     const comparator = compare(token);
     if (comparator) nodes.sort(comparator);
     if (depth + 1 < levels.length) {

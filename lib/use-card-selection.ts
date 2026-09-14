@@ -6,7 +6,7 @@ import { usePersistentState } from "@/lib/use-persistent-state";
 /**
  * SDD card-groups — Work Unit E, Task 12.
  *
- * A bulk-selection set of card ids for `/tarjetas`, held ABOVE the list query
+ * A bulk-selection set of card ids, held ABOVE the list query
  * so it survives pagination and filter changes (product decision 1). Backed
  * by `usePersistentState<string[]>` — the SAME mechanism `selectedCardId`
  * (`tarjetas-client.tsx:272`) already uses — so it also survives a remount.
@@ -26,7 +26,14 @@ export type UseCardSelection = {
   clear(): void;
 };
 
-const STORAGE_KEY = "tarjetas:card-selection";
+/**
+ * Neutral, resource-less key. The selection is app-wide by product decision:
+ * ONE shared set across `/tarjetas`, `/sla-vencidas` and `/operativo`, not one
+ * per screen. The key was `tarjetas:card-selection` before Stage B, so any
+ * selection already stored in a browser is dropped on upgrade — accepted,
+ * since a selection is transient working state, not a saved document.
+ */
+const STORAGE_KEY = "cards:selection";
 
 export function useCardSelection(): UseCardSelection {
   const [ids, setIds] = usePersistentState<string[]>(STORAGE_KEY, []);

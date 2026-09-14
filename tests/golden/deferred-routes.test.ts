@@ -100,6 +100,7 @@ describe("tarjetas GET (task 10.1 deferred)", () => {
         take: 1,
         select: { id: true, level: true, nextNotificationAt: true, lastNotifiedAt: true },
       },
+      groupMemberships: { select: { groupId: true } },
     });
 
     vi.clearAllMocks();
@@ -111,8 +112,8 @@ describe("tarjetas GET (task 10.1 deferred)", () => {
 
   it("replaces urgentCases with activeUrgentCase in the response envelope", async () => {
     prisma.card.findMany.mockResolvedValue([
-      { id: "card-1", tc: "TC1", urgentCases: [{ id: "uc-1", level: 2 }] },
-      { id: "card-2", tc: "TC2", urgentCases: [] },
+      { id: "card-1", tc: "TC1", urgentCases: [{ id: "uc-1", level: 2 }], groupMemberships: [{ groupId: "g1" }] },
+      { id: "card-2", tc: "TC2", urgentCases: [], groupMemberships: [] },
     ]);
     prisma.card.count.mockResolvedValue(2);
 
@@ -184,10 +185,10 @@ describe("operativo/contacto GET activos (task 10.7 deferred)", () => {
     expect(prisma.card.findMany).not.toHaveBeenCalled();
     expect(Object.keys(body)).toEqual(["tab", "cards", "pagination"]);
     expect(body.cards).toEqual([]);
-    expect(body.pagination).toEqual({ page: 1, pageSize: 25, total: 0, totalPages: 1 });
+    expect(body.pagination).toEqual({ page: 1, pageSize: 50, total: 0, totalPages: 1 });
   });
 
-  it("omits the status conjunct for ALL and paginates at 25/100", async () => {
+  it("omits the status conjunct for ALL and paginates at 50/100", async () => {
     await getOperativoContacto(req("/api/operativo/contacto?status=ALL&provincia=ALL&pageSize=999"));
     const where = firstCallArg(prisma.card.findMany).where as { AND: unknown[] };
     expect(where.AND).toHaveLength(2); // closed-status exclusion + SLA window only

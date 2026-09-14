@@ -19,6 +19,7 @@ import { PageHeader } from "@/components/ui/page-header";
 import { Panel } from "@/components/ui/panel";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { WorkflowStatusBar } from "@/components/ui/workflow-status-bar";
+import { useCardGroups } from "@/lib/use-card-groups";
 import { useWorkflowDraft } from "@/lib/use-workflow-draft";
 
 type Motivo = { id: string; nombre: string; active: boolean };
@@ -65,6 +66,57 @@ const statuses: CardStatus[] = [
 ];
 const zonas = ["Metro", "Este", "Norte", "Sur"];
 
+/** Shape returned by `GET /api/card-groups/[id]/cards` (Stage D). */
+type GroupCardsResponse = {
+  cards: CardRow[];
+  total: number;
+  cap: number;
+  truncated: boolean;
+};
+
+/**
+ * Builds the operator-facing outcome of a group load.
+ *
+ * It always names what happened to every card the server answered with: how
+ * many landed in the table, how many were already there, and — when the group
+ * is bigger than the cap — how many were deliberately left out. Truncation is
+ * never silent.
+ */
+function buildGroupLoadMessage(options: {
+  groupName: string;
+  added: number;
+  already: number;
+  loaded: number;
+  total: number;
+  truncated: boolean;
+}): string {
+  const { groupName, added, already, loaded, total, truncated } = options;
+  const parts: string[] = [];
+
+  if (added === 0) {
+    parts.push(
+      `Ninguna tarjeta nueva: las ${already} tarjetas del grupo "${groupName}" ya estaban en la tabla.`,
+    );
+  } else {
+    parts.push(
+      added === 1
+        ? `Se agrego 1 tarjeta del grupo "${groupName}".`
+        : `Se agregaron ${added} tarjetas del grupo "${groupName}".`,
+    );
+    if (already > 0) {
+      parts.push(already === 1 ? "1 ya estaba en la tabla." : `${already} ya estaban en la tabla.`);
+    }
+  }
+
+  if (truncated) {
+    parts.push(
+      `El grupo tiene ${total} tarjetas y solo se cargaron las primeras ${loaded}. Las ${total - loaded} restantes no se cargaron.`,
+    );
+  }
+
+  return parts.join(" ");
+}
+
 export default function ModificacionMasivaClient() {
   const [scanInput, setScanInput] = useState("");
   const [scannedCards, setScannedCards] = useState<CardRow[]>([]);
@@ -82,6 +134,9 @@ export default function ModificacionMasivaClient() {
       scanInputRef.current?.focus();
     });
   }, []);
+  const [groupId, setGroupId] = useState("");
+  const [groupLoading, setGroupLoading] = useState(false);
+  const { groups } = useCardGroups();
 
   const draftPayload = useMemo<MassUpdateDraft>(
     () => ({ scanInput, scannedCards, selectedCardIds }),
@@ -184,6 +239,63 @@ export default function ModificacionMasivaClient() {
     }
   }
 
+  /**
+   * Loads every card of the chosen group into the scan table.
+   *
+   * APPENDS on purpose: the operator may already have a scanned working set,
+   * and replacing it would discard work they cannot recover. The rows written
+   * here are the same `CardRow` shape `addSelectedCard` produces, so selection,
+   * the edit wizard and the export stay untouched.
+   */
+  async function loadGroupIntoTable() {
+    if (!groupId) {
+      setMessage("Selecciona un grupo para cargar");
+      return;
+    }
+
+    const groupName = groups.find((group) => group.id === groupId)?.name ?? "";
+    setGroupLoading(true);
+    try {
+      const res = await fetch(`/api/card-groups/${groupId}/cards`, { cache: "no-store" });
+      const json = (await res.json().catch(() => null)) as
+        | (GroupCardsResponse & { error?: string })
+        | null;
+
+      if (!res.ok || !json) {
+        setMessage(json?.error ?? "No se pudo cargar el grupo");
+        return;
+      }
+
+      const incoming = json.cards ?? [];
+      if (!incoming.length) {
+        setMessage(`El grupo "${groupName}" no tiene tarjetas.`);
+        return;
+      }
+
+      const existingIds = new Set(scannedCards.map((card) => card.id));
+      const fresh = incoming.filter((card) => !existingIds.has(card.id));
+
+      if (fresh.length) {
+        setScannedCards((prev) => [...prev, ...fresh]);
+        setSelectedCardIds((prev) => [...prev, ...fresh.map((card) => card.id)]);
+      }
+
+      setMessage(
+        buildGroupLoadMessage({
+          groupName,
+          added: fresh.length,
+          already: incoming.length - fresh.length,
+          loaded: incoming.length,
+          total: json.total,
+          truncated: Boolean(json.truncated),
+        }),
+      );
+    } finally {
+      setGroupLoading(false);
+      focusScanInput();
+    }
+  }
+
   const closeEditWizard = useCallback(() => {
     setEditOpen(false);
     focusScanInput();
@@ -257,6 +369,36 @@ export default function ModificacionMasivaClient() {
           autoFocus
           inputRef={scanInputRef}
         />
+
+        <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <select
+              aria-label="Grupo"
+              value={groupId}
+              onChange={(event) => setGroupId(event.target.value)}
+              className="rounded-xl border border-slate-300 px-3 py-2"
+            >
+              <option value="">Grupo: selecciona uno</option>
+              {groups.map((group) => (
+                <option key={group.id} value={group.id}>
+                  {group.name} ({group._count.members})
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              onClick={() => void loadGroupIntoTable()}
+              disabled={groupLoading}
+              className="rounded-xl border border-slate-300 px-4 py-2 text-sm disabled:opacity-50"
+            >
+              Agregar grupo a la tabla
+            </button>
+          </div>
+          <p className="mt-2 text-xs text-slate-500">
+            Las tarjetas del grupo se agregan a las ya pistoleadas; no reemplazan la tabla. Se
+            cargan hasta 500 tarjetas por grupo.
+          </p>
+        </div>
         {message ? <p className="mt-3 text-sm text-emerald-700">{message}</p> : null}
       </Panel>
 

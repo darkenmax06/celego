@@ -5,6 +5,7 @@ import { useSearchParams } from "next/navigation";
 import { CardDetailModal } from "@/components/cards/card-detail-modal";
 import { CardExportWizardModal } from "@/components/cards/card-export-wizard-modal";
 import { CardGroupAssignModal } from "@/components/cards/card-group-assign-modal";
+import { CardGroupFanoutNote } from "@/components/cards/card-group-fanout-note";
 import { CardSelectCheckbox } from "@/components/cards/card-select-checkbox";
 import { CardSelectionBar, type SelectedCardEntry } from "@/components/cards/card-selection-bar";
 import { dateRangeFilterBarProps } from "@/components/filters/date-range-filter";
@@ -29,7 +30,16 @@ import {
   LEGACY_DATE_TO_PARAM,
   normalizeDateRangeFilters,
 } from "@/lib/date-range-params";
-import { groupRowsNested, parseGroupByLevels } from "@/lib/grouping";
+import {
+  CARD_GROUP_BY_FIELD,
+  bucketCountLabel,
+  cardGroupBuckets,
+  groupRowsNested,
+  parseGroupByLevels,
+  toGroupNameMap,
+  type GroupNode,
+} from "@/lib/grouping";
+import { useCardGroupBucketTotals } from "@/lib/use-card-group-bucket-totals";
 import { useCardGroups } from "@/lib/use-card-groups";
 import { useCardSelection } from "@/lib/use-card-selection";
 import { usePersistentState } from "@/lib/use-persistent-state";
@@ -72,6 +82,8 @@ type CardRow = {
   fechaPreferenciaEntrega?: string | null;
   comentarioContacto?: string | null;
   metadata?: unknown;
+  /** Ids of the CardGroups this card belongs to. Names resolve via useCardGroups. */
+  groupIds?: string[];
 };
 
 type PaginationMeta = { page: number; pageSize: number; total: number; totalPages: number };
@@ -290,6 +302,7 @@ const TARJETA_GROUP_BY_OPTIONS = [
   { field: "status", label: "Estado" },
   { field: "provincia", label: "Provincia" },
   { field: "zona", label: "Zona" },
+  { field: CARD_GROUP_BY_FIELD, label: "Grupo" },
   ...CARD_DATE_GROUP_OPTIONS,
 ];
 
@@ -445,8 +458,31 @@ export default function TarjetasClient({ role }: TarjetasClientProps) {
   }, [filters]);
 
   const groupLevels = useMemo(() => parseGroupByLevels(filters.groupBy), [filters.groupBy]);
+  const groupNameById = useMemo(() => toGroupNameMap(cardGroups.groups), [cardGroups.groups]);
+
+  /** "Grupo" is the only level where a card lands in several buckets (fan-out). */
+  const isGroupByGrupo = groupLevels.includes(CARD_GROUP_BY_FIELD);
+
+  /**
+   * True per-group totals from the server. They only describe outermost buckets:
+   * an inner "Grupo" level is scoped to its parent bucket, which the server
+   * total does not know about, so inner levels keep client-side counts.
+   */
+  const bucketTotals = useCardGroupBucketTotals("tarjetas", filters, groupLevels[0] === CARD_GROUP_BY_FIELD);
+
   // Date buckets read best chronologically; other levels keep first-seen order.
-  const groupedCards = useMemo(() => groupRowsNested(cards, groupLevels, getCardGroupKey), [cards, groupLevels]);
+  const groupedCards = useMemo(
+    () =>
+      groupRowsNested(cards, groupLevels, (card: CardRow, token) =>
+        token === CARD_GROUP_BY_FIELD ? cardGroupBuckets(card.groupIds, groupNameById) : getCardGroupKey(card, token),
+      ),
+    [cards, groupLevels, groupNameById],
+  );
+
+  const groupCountLabel = (count: number, group: GroupNode<CardRow>) =>
+    group.depth === 0 && group.token === CARD_GROUP_BY_FIELD
+      ? bucketCountLabel(count, bucketTotals?.[group.key] ?? null)
+      : `${count} ${count === 1 ? "tarjeta" : "tarjetas"}`;
 
   async function onSaveUrgency(payload: UrgencyPayload): Promise<string | null> {
     const res = await fetch("/api/operativo/urgencias", {
@@ -737,6 +773,7 @@ export default function TarjetasClient({ role }: TarjetasClientProps) {
                 {groupLevels.map((token) => groupByLevelLabel(token, TARJETA_GROUP_BY_OPTIONS)).join(" › ")}
               </span>
             ) : null}
+            {isGroupByGrupo ? <CardGroupFanoutNote /> : null}
           </div>
           {viewMode === "list" ? (
             <TableColumnSelector
@@ -757,7 +794,7 @@ export default function TarjetasClient({ role }: TarjetasClientProps) {
                 isCollapsed={collapsedGroups.isCollapsed}
                 onToggle={collapsedGroups.toggle}
                 selection={groupSelection}
-                countLabel={(count) => `${count} ${count === 1 ? "tarjeta" : "tarjetas"}`}
+                countLabel={groupCountLabel}
                 renderRows={(rows) => (
                   <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
                     {rows.map((card) => (
@@ -1083,7 +1120,7 @@ export default function TarjetasClient({ role }: TarjetasClientProps) {
                     isCollapsed={collapsedGroups.isCollapsed}
                     onToggle={collapsedGroups.toggle}
                     selection={groupSelection}
-                    countLabel={(count) => `${count} ${count === 1 ? "tarjeta" : "tarjetas"}`}
+                    countLabel={groupCountLabel}
                     renderRows={(rows) => rows.map((card) => renderCardRow(card))}
                   />
                 ) : (

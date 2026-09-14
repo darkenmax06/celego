@@ -24,8 +24,8 @@ type NestedGroupListProps<T> = {
   onToggle: (path: string) => void;
   /** Renders the rows of an innermost group (`<tr>`s for `table`). */
   renderRows: (rows: T[], group: GroupNode<T>) => ReactNode;
-  /** Count badge text, e.g. `3 tarjetas`. Defaults to the bare number. */
-  countLabel?: (count: number) => string;
+  /** Count badge text, e.g. `3 tarjetas`. Defaults to the bare number. Receives the node, e.g. to show a server total. */
+  countLabel?: (count: number, group: GroupNode<T>) => string;
   /** Column span of the header row (`table` only). */
   colSpan?: number;
   /** Enables a checkbox on every group header that selects all rows of its subtree. */
@@ -73,7 +73,7 @@ function GroupHeaderContent<T>({
 }: {
   group: GroupNode<T>;
   collapsed: boolean;
-  countLabel?: (count: number) => string;
+  countLabel?: (count: number, group: GroupNode<T>) => string;
   selection?: GroupSelection<T>;
 }) {
   const Chevron = collapsed ? ChevronRight : ChevronDown;
@@ -88,7 +88,7 @@ function GroupHeaderContent<T>({
         {group.label}
       </span>
       <span className="rounded-full bg-slate-200/90 px-2 py-0.5 text-xs font-semibold text-slate-700">
-        {countLabel ? countLabel(group.count) : group.count}
+        {countLabel ? countLabel(group.count, group) : group.count}
       </span>
     </div>
   );
