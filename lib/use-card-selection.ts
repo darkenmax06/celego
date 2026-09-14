@@ -22,6 +22,7 @@ export type UseCardSelection = {
   isSelected(cardId: string): boolean;
   toggle(cardId: string): void;
   selectMany(cardIds: string[]): void;
+  deselectMany(cardIds: string[]): void;
   clear(): void;
 };
 
@@ -54,7 +55,15 @@ export function useCardSelection(): UseCardSelection {
     [setIds],
   );
 
+  const deselectMany = useCallback(
+    (cardIds: string[]) => {
+      const removed = new Set(cardIds);
+      setIds((current) => current.filter((id) => !removed.has(id)));
+    },
+    [setIds],
+  );
+
   const clear = useCallback(() => setIds([]), [setIds]);
 
-  return { ids, idSet, count: ids.length, isSelected, toggle, selectMany, clear };
+  return { ids, idSet, count: ids.length, isSelected, toggle, selectMany, deselectMany, clear };
 }
