@@ -6,7 +6,7 @@ import { CARD_DATE_RANGE_FILTER } from "../card-date-range";
 
 /**
  * Mirrors `app/api/tarjetas/route.ts` GET.
- * Page size 25 default / 200 max; current ordering `updatedAt desc`.
+ * Page size 50 default / 400 max; current ordering `updatedAt desc`.
  *
  * Task 10.10 reconciliation — narrowed where it was provably wider:
  * - `urgent` is `truthyOnly`: the route only ever wrote `where.urgent = true`
@@ -62,5 +62,5 @@ export const tarjetasListQuery = defineListQuery<Prisma.CardWhereInput>({
     keys: {},
     fallbackOrderBy: [{ updatedAt: "desc" }],
   },
-  pagination: { defaultPageSize: 25, maxPageSize: 200 },
+  pagination: { defaultPageSize: 50, maxPageSize: 400 },
 });

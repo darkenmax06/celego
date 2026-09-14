@@ -49,7 +49,7 @@ describe("golden envelopes for the nine list routes", () => {
         ]),
       ),
     ).toEqual({
-      tarjetas: "25/200",
+      tarjetas: "50/400",
       rutas: "20/100",
       mensajeros: "25/100",
       redacciones: "20/100",
