@@ -52,6 +52,7 @@ type OperativoCardInput = {
     contactado: boolean;
     telefonosUsados: string | null;
   }>;
+  groupMemberships: Array<{ groupId: string }>;
 };
 
 type ActiveUrgentCaseSnapshot = {
@@ -284,6 +285,9 @@ function mapCardToOperativeRow(
     motivoRetorno: typeof operativo.motivoRetorno === "string" ? operativo.motivoRetorno : null,
     traslado: asRecord(operativo.traslado),
     hasAttempt: card.contacts.length > 0 || Boolean(operativo.updatedAt) || Boolean(operativo.comentarioContacto),
+    // Every tab maps its cards through here, so the three include blocks all
+    // surface group membership under the same field name.
+    groupIds: card.groupMemberships.map((membership) => membership.groupId),
     readOnly: false,
   };
 }
@@ -399,6 +403,11 @@ export async function GET(request: NextRequest) {
             take: 1,
             select: { comentario: true, contactado: true, telefonosUsados: true },
           },
+          // Bare group ids only, on ALL THREE tab branches. Clients resolve
+          // id -> name through `lib/use-card-groups.ts`. Same shape as
+          // `app/api/urgentes/route.ts`. Missing it on one branch silently
+          // breaks grouping on that tab only.
+          groupMemberships: { select: { groupId: true } },
         },
         orderBy: [{ urgent: "desc" }, { slaDueDate: "asc" }, { updatedAt: "desc" }],
         skip: hasInMemoryFilter ? 0 : (page - 1) * pageSize,
@@ -495,6 +504,11 @@ export async function GET(request: NextRequest) {
           take: 5,
           select: { comentario: true, contactado: true, telefonosUsados: true },
         },
+        // Bare group ids only, on ALL THREE tab branches. Clients resolve
+        // id -> name through `lib/use-card-groups.ts`. Same shape as
+        // `app/api/urgentes/route.ts`. Missing it on one branch silently
+        // breaks grouping on that tab only.
+        groupMemberships: { select: { groupId: true } },
       },
       orderBy: [{ updatedAt: "desc" }],
       take: 1000,
@@ -598,6 +612,11 @@ export async function GET(request: NextRequest) {
           take: 1,
           select: { comentario: true, contactado: true, telefonosUsados: true },
         },
+        // Bare group ids only, on ALL THREE tab branches. Clients resolve
+        // id -> name through `lib/use-card-groups.ts`. Same shape as
+        // `app/api/urgentes/route.ts`. Missing it on one branch silently
+        // breaks grouping on that tab only.
+        groupMemberships: { select: { groupId: true } },
       },
       orderBy: [{ updatedAt: "desc" }],
       take: 500,
@@ -705,6 +724,10 @@ export async function GET(request: NextRequest) {
     solicitudRetorno: false,
     motivoRetorno: null,
     traslado: {},
+    // An unresolved urgent case has no `Card`, so it can belong to no group.
+    // Kept explicit so both halves of the merged `urgentes` list share one row
+    // shape.
+    groupIds: [] as string[],
     readOnly: true,
   }));
 

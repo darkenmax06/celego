@@ -143,7 +143,25 @@ describe("CardSelectionBar", () => {
       );
       fireEvent.click(screen.getByRole("button", { name: "3 seleccionadas" }));
       expect(screen.getByText("off-page-card")).toBeInTheDocument();
-      expect(screen.getByText(/fuera de esta página/i)).toBeInTheDocument();
+      expect(screen.getByText(/fuera de esta vista/i)).toBeInTheDocument();
+    });
+
+    it("lists a card selected on another screen and absent from this screen's dataset", () => {
+      // The selection is app-wide (one shared key), so /sla-vencidas can hold a
+      // selection made on /tarjetas whose cards it will never load. Dropping
+      // those entries is exactly the blindness this panel exists to prevent.
+      render(
+        <CardSelectionBar
+          {...baseProps}
+          count={2}
+          selectedIds={["selected-on-tarjetas", "card-1"]}
+          cardsById={{ "card-1": cardsById["card-1"] }}
+          activeGroupFilterIds={[]}
+        />,
+      );
+      fireEvent.click(screen.getByRole("button", { name: "2 seleccionadas" }));
+      expect(screen.getByText("selected-on-tarjetas")).toBeInTheDocument();
+      expect(screen.getAllByRole("listitem")).toHaveLength(2);
     });
 
     it("deselects a single card from the review panel without clearing the rest", () => {

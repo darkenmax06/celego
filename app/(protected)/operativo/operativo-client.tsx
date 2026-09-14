@@ -4,7 +4,23 @@ import { useEffect, useMemo, useState } from "react";
 import { PageHeader } from "@/components/ui/page-header";
 import { Panel } from "@/components/ui/panel";
 import { usePersistentState } from "@/lib/use-persistent-state";
+import {
+  CARD_GROUP_BY_FIELD,
+  bucketCountLabel,
+  cardGroupBuckets,
+  groupRows,
+  singleBucket,
+  toGroupNameMap,
+} from "@/lib/grouping";
 import { useCardGroups } from "@/lib/use-card-groups";
+import { useCardSelection } from "@/lib/use-card-selection";
+import {
+  CardGroupAssignModal,
+  OFF_FILTER_COUNT_UNAVAILABLE,
+} from "@/components/cards/card-group-assign-modal";
+import { CardGroupFanoutNote } from "@/components/cards/card-group-fanout-note";
+import { CardSelectCheckbox } from "@/components/cards/card-select-checkbox";
+import { CardSelectionBar, type SelectedCardEntry } from "@/components/cards/card-selection-bar";
 import { OperativeContactWizard, type PhoneState, type OperativeWizardCard } from "@/components/operativo/operative-contact-wizard";
 import { SLAExtensionRequestsTable } from "@/components/operativo/sla-extension-requests-table";
 import { FilterBar, ViewType } from "@/components/filters/filter-bar";
@@ -145,12 +161,28 @@ function getOperativeGroupKey(card: OperativeWizardCard, groupBy: string): { key
   }
 }
 
-export default function OperativoClient() {
+type OperativoClientProps = {
+  /** Stage B, Task B2: gates the selection checkboxes and bulk bar to ADMIN/OPERADOR. */
+  role: string;
+};
+
+/**
+ * Page sizes offered by the paginator.
+ *
+ * Capped at 100 because `lib/list-query/descriptors/operativo-contacto.ts`
+ * declares `maxPageSize: 100` and `compile()` clamps anything larger WITHOUT
+ * telling the caller. Offering 200 would show the operator "200 per page"
+ * while the server quietly returned 100.
+ */
+const PAGE_SIZE_OPTIONS = [25, 50, 100] as const;
+
+export default function OperativoClient({ role }: OperativoClientProps) {
+  const canManageGroups = role === "ADMIN" || role === "OPERADOR";
   const [cards, setCards] = useState<OperativeWizardCard[]>([]);
   const [tab, setTab] = usePersistentState<OperativeTab>("operativo:tab", "activos");
   const [filters, setFilters] = useState<Record<string, string>>(() => ({
     page: "1",
-    pageSize: "25",
+    pageSize: "50",
     days: "3",
   }));
   const cardGroups = useCardGroups();
@@ -164,13 +196,40 @@ export default function OperativoClient() {
   const [showReport, setShowReport] = usePersistentState("operativo:report-modal", false);
   const [pagination, setPagination] = useState<PaginationMeta>({
     page: 1,
-    pageSize: 25,
+    pageSize: 50,
     total: 0,
     totalPages: 1,
   });
   const [message, setMessage] = useState("");
   const [provinciasList, setProvinciasList] = useState<string[]>([]);
   const [urgentNotifications, setUrgentNotifications] = useState<UrgentNotification[]>([]);
+
+  // Stage B, Task B2: app-wide card selection and bulk group actions.
+  const cardSelection = useCardSelection();
+  const [assignModalMode, setAssignModalMode] = useState<"existing" | "new" | null>(null);
+  const [groupActionError, setGroupActionError] = useState<string | null>(null);
+
+  const activeGroupFilterIds = (filters.grupo ?? "").split(",").filter(Boolean);
+
+  /**
+   * Identity lookup for the selection review panel, built only from what this
+   * screen loaded. Keyed by `cardId` (the database id the group endpoints
+   * write), NOT by `card.id` - the `urgentes` tab synthesizes `urgent-<id>`
+   * rows whose `cardId` is null and which are therefore never selectable.
+   */
+  const cardsById = useMemo(() => {
+    const map: Record<string, SelectedCardEntry> = {};
+    for (const card of cards) {
+      if (!card.cardId) continue;
+      map[card.cardId] = {
+        id: card.cardId,
+        tc: card.tc,
+        customerName: card.nombre,
+        cedula: card.cedula,
+      };
+    }
+    return map;
+  }, [cards]);
 
   // Load registered provinces
   useEffect(() => {
@@ -203,7 +262,7 @@ export default function OperativoClient() {
     const params = new URLSearchParams();
     params.set("tab", tab);
     params.set("page", currentFilters.page || "1");
-    params.set("pageSize", currentFilters.pageSize || "25");
+    params.set("pageSize", currentFilters.pageSize || "50");
     if (currentFilters.days) params.set("days", currentFilters.days);
 
     Object.entries(currentFilters).forEach(([k, v]) => {
@@ -253,18 +312,27 @@ export default function OperativoClient() {
     };
   }, []);
 
+  const groupNameById = useMemo(() => toGroupNameMap(cardGroups.groups), [cardGroups.groups]);
+
+  /** Grouping by "Grupo" is the only group-by where a row lands in several buckets. */
+  const isGroupByGrupo = filters.groupBy === CARD_GROUP_BY_FIELD;
+
+  /**
+   * No server totals here on purpose: `app/api/operativo/contacto/route.ts`
+   * hand-builds its `where` across three tab branches and filters rows in
+   * memory, so no honest per-group total exists for this screen. The bucket
+   * headers therefore state only what this page shows, and the note says so.
+   */
   const groupedCards = useMemo(() => {
-    if (!filters.groupBy) return null;
-    const groups: Record<string, { groupKey: string; groupLabel: string; items: OperativeWizardCard[] }> = {};
-    for (const card of cards) {
-      const { key, label } = getOperativeGroupKey(card, filters.groupBy);
-      if (!groups[key]) {
-        groups[key] = { groupKey: key, groupLabel: label, items: [] };
-      }
-      groups[key].items.push(card);
-    }
-    return Object.values(groups);
-  }, [cards, filters.groupBy]);
+    const groupBy = filters.groupBy;
+    if (!groupBy) return null;
+    return groupRows(
+      cards,
+      groupBy === CARD_GROUP_BY_FIELD
+        ? (card: OperativeWizardCard) => cardGroupBuckets(card.groupIds, groupNameById)
+        : singleBucket((card: OperativeWizardCard) => getOperativeGroupKey(card, groupBy)),
+    );
+  }, [cards, filters.groupBy, groupNameById]);
 
   const selectedIndex = selectedCardId ? cards.findIndex((card) => card.id === selectedCardId) : -1;
   const current = selectedIndex >= 0 ? cards[selectedIndex] : undefined;
@@ -302,6 +370,30 @@ export default function OperativoClient() {
     // Refresh cards and keep state
     await loadCards(current.id, filters);
     return null;
+  }
+
+  async function afterGroupAction() {
+    setAssignModalMode(null);
+    cardSelection.clear();
+    await cardGroups.reload();
+    await loadCards(undefined, filters);
+  }
+
+  async function handleRemoveFromGroup() {
+    const [groupId] = activeGroupFilterIds.filter((id) => id !== "SIN_GRUPO");
+    if (!groupId) return;
+    setGroupActionError(null);
+    const response = await fetch(`/api/card-groups/${groupId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ removeCardIds: cardSelection.ids }),
+    });
+    if (!response.ok) {
+      const body = (await response.json().catch(() => ({}))) as { error?: string };
+      setGroupActionError(body.error ?? "No se pudo quitar la selección del grupo");
+      return;
+    }
+    await afterGroupAction();
   }
 
   async function exportContacts(format: ExportFormat, provinciaFilter?: string) {
@@ -365,9 +457,18 @@ export default function OperativoClient() {
         >
           <div className="space-y-2">
             <div className="flex items-start justify-between gap-2 flex-wrap">
-              <span className="font-mono text-xs font-bold text-blue-700 bg-blue-50 px-2 py-0.5 rounded border border-blue-200">
-                {card.tc}
-              </span>
+              <div className="flex items-center gap-2">
+                {canManageGroups && card.cardId ? (
+                  <CardSelectCheckbox
+                    checked={cardSelection.isSelected(card.cardId)}
+                    onChange={() => cardSelection.toggle(card.cardId as string)}
+                    label={`Seleccionar tarjeta ${card.tc}`}
+                  />
+                ) : null}
+                <span className="font-mono text-xs font-bold text-blue-700 bg-blue-50 px-2 py-0.5 rounded border border-blue-200">
+                  {card.tc}
+                </span>
+              </div>
               <span className={`rounded-lg border px-2 py-0.5 text-[11px] font-bold ${statusClasses(card.status)}`}>
                 {statusLabel(card.status)}
               </span>
@@ -456,6 +557,13 @@ export default function OperativoClient() {
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="flex-1 space-y-1">
             <div className="flex flex-wrap items-center gap-2">
+              {canManageGroups && card.cardId ? (
+                <CardSelectCheckbox
+                  checked={cardSelection.isSelected(card.cardId)}
+                  onChange={() => cardSelection.toggle(card.cardId as string)}
+                  label={`Seleccionar tarjeta ${card.tc}`}
+                />
+              ) : null}
               <span className="font-display text-base font-bold text-slate-900 group-hover:text-blue-700">
                 {card.nombre}
               </span>
@@ -661,8 +769,8 @@ export default function OperativoClient() {
           resource="operativo"
           sectionKey="operativo"
           filters={filters}
-          onFilterChange={(next) => setFilters({ ...next, page: "1", pageSize: filters.pageSize || "25" })}
-          onReset={() => setFilters({ page: "1", pageSize: "25", days: "3" })}
+          onFilterChange={(next) => setFilters({ ...next, page: "1", pageSize: filters.pageSize || "50" })}
+          onReset={() => setFilters({ page: "1", pageSize: "50", days: "3" })}
           searchPlaceholder="Buscar por TC, cédula, nombre o referencia..."
           allowedViews={["list", "cards"]}
           currentView={viewMode}
@@ -748,6 +856,7 @@ export default function OperativoClient() {
             { field: "canalContacto", label: "Canal de Contacto" },
             { field: "mensajero", label: "Mensajero" },
             { field: "gestion", label: "Estado de Gestión" },
+            { field: CARD_GROUP_BY_FIELD, label: "Grupo" },
           ]}
         />
       ) : null}
@@ -804,6 +913,7 @@ export default function OperativoClient() {
           {groupedCards ? (
             /* GROUPED ACCORDION VIEW */
             <div className="space-y-4">
+              {isGroupByGrupo ? <CardGroupFanoutNote pageScopedCounts /> : null}
               {groupedCards.map((group) => {
                 const isCollapsed = Boolean(collapsedGroups[group.groupKey]);
                 return (
@@ -828,7 +938,7 @@ export default function OperativoClient() {
                         </span>
                         <span className="text-sm font-bold text-slate-900">{group.groupLabel}</span>
                         <span className="rounded-full bg-slate-200/90 px-2 py-0.5 text-xs font-semibold text-slate-700">
-                          {group.items.length} {group.items.length === 1 ? "tarjeta" : "tarjetas"}
+                          {bucketCountLabel(group.items.length, null)}
                         </span>
                       </div>
                     </div>
@@ -877,10 +987,34 @@ export default function OperativoClient() {
 
           {/* PAGINATOR */}
           <div className="mt-4 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-200 px-4 py-2.5 text-xs text-slate-600 bg-white">
-            <span>
-              Página <strong>{pagination.page}</strong> de <strong>{pagination.totalPages}</strong> ·{" "}
-              <strong>{pagination.total}</strong> registros
-            </span>
+            <div className="flex flex-wrap items-center gap-2">
+              <span>
+                Página <strong>{pagination.page}</strong> de <strong>{pagination.totalPages}</strong> ·{" "}
+                <strong>{pagination.total}</strong> registros
+              </span>
+              <span className="text-slate-300">|</span>
+              <label className="flex items-center gap-1">
+                <span>Por página:</span>
+                <select
+                  aria-label="Tarjetas por página"
+                  value={filters.pageSize || "50"}
+                  onChange={(event) =>
+                    setFilters((prev) => ({
+                      ...prev,
+                      pageSize: event.target.value,
+                      page: "1",
+                    }))
+                  }
+                  className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs"
+                >
+                  {PAGE_SIZE_OPTIONS.map((size) => (
+                    <option key={size} value={String(size)}>
+                      {size}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
             <div className="flex gap-2">
               <button
                 type="button"
@@ -903,6 +1037,39 @@ export default function OperativoClient() {
         </Panel>
       )}
 
+      {canManageGroups ? (
+        <CardSelectionBar
+          count={cardSelection.count}
+          selectedIds={cardSelection.ids}
+          cardsById={cardsById}
+          activeGroupFilterIds={activeGroupFilterIds}
+          onClear={cardSelection.clear}
+          onDeselect={cardSelection.toggle}
+          onCreateGroup={() => setAssignModalMode("new")}
+          onAssignExisting={() => setAssignModalMode("existing")}
+          onRemoveFromGroup={() => void handleRemoveFromGroup()}
+        />
+      ) : null}
+      {groupActionError ? (
+        <p className="text-xs font-semibold text-red-600">{groupActionError}</p>
+      ) : null}
+
+      {canManageGroups && assignModalMode ? (
+        <CardGroupAssignModal
+          cardIds={cardSelection.ids}
+          /* This screen cannot compute an off-filter count: the route
+             hand-builds `where` across three tab branches and filters rows in
+             memory before slicing, so no single `prisma.card.count` answers
+             it. Saying so is the only honest option - 0 would read as a
+             measured zero, null would never stop loading. */
+          offFilterCount={OFF_FILTER_COUNT_UNAVAILABLE}
+          groups={cardGroups.groups}
+          initialMode={assignModalMode}
+          onClose={() => setAssignModalMode(null)}
+          onSuccess={() => void afterGroupAction()}
+        />
+      ) : null}
+
       {message ? <p className="text-sm font-semibold text-emerald-700">{message}</p> : null}
 
       {/* 3-COLUMN FULL-SCREEN WIZARD MODAL */}
@@ -918,6 +1085,12 @@ export default function OperativoClient() {
             setSelectedCardId(cards[Math.min(selectedIndex + 1, cards.length - 1)]?.id ?? null)
           }
           onSave={saveContact}
+          canManageGroups={canManageGroups}
+          cardGroups={cardGroups.groups}
+          onGroupsChanged={() => {
+            void cardGroups.reload();
+            void loadCards(current.id, filters);
+          }}
         />
       ) : null}
 

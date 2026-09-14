@@ -2,7 +2,13 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { requireApiSession } from "@/lib/api-session";
 import { prisma } from "@/lib/prisma";
-import { compileTarjetasWhere, ListQueryValidationError } from "@/lib/list-query/tarjetas-where";
+import {
+  buildOffFilterMatchWhere,
+  compileOffFilterWhere,
+  getOffFilterCountSecurity,
+  ListQueryValidationError,
+  OFF_FILTER_COUNT_MAX_IDS,
+} from "@/lib/list-query/off-filter-count";
 
 /**
  * SDD card-groups remediation — FIX 2.
@@ -13,30 +19,31 @@ import { compileTarjetasWhere, ListQueryValidationError } from "@/lib/list-query
  * reports every selection as off-filter as soon as the operator pages
  * without touching any filter. Only the database can answer this correctly.
  *
- * Reuses `compileTarjetasWhere` — the same `lib/list-query` compiled `where`
- * `GET /api/tarjetas` uses — so filter semantics cannot drift from the list.
- * Roles match `GET /api/tarjetas` (every role that can read the list may ask
- * this question). Caps `cardIds` at 500, mirroring the bulk endpoints.
+ * Kept as the `/tarjetas`-bound entry point its client already calls, but the
+ * predicate and the id cap now come from `lib/list-query/off-filter-count` —
+ * the same module `POST /api/list-query/off-filter-count` uses. There is
+ * exactly ONE place that decides the predicate, so this route and the generic
+ * one cannot drift apart.
  */
+const RESOURCE = "tarjetas" as const;
+
 const bodySchema = z.object({
-  cardIds: z.array(z.string().min(1)).min(1).max(500),
+  cardIds: z.array(z.string().min(1)).min(1).max(OFF_FILTER_COUNT_MAX_IDS),
   filters: z.record(z.string(), z.string()).default({}),
 });
 
 export async function POST(request: Request) {
-  const auth = await requireApiSession(["ADMIN", "OPERADOR", "FACTURACION", "MENSAJERO"]);
+  const auth = await requireApiSession([...getOffFilterCountSecurity(RESOURCE).allowedRoles]);
   if ("error" in auth) return auth.error;
 
-  const parsed = bodySchema.safeParse(await request.json());
+  const parsed = bodySchema.safeParse(await request.json().catch(() => null));
   if (!parsed.success) {
     return NextResponse.json({ error: "Payload invalido" }, { status: 400 });
   }
 
-  const params = new URLSearchParams(parsed.data.filters);
-
   let where;
   try {
-    ({ where } = compileTarjetasWhere(params));
+    where = compileOffFilterWhere(RESOURCE, new URLSearchParams(parsed.data.filters));
   } catch (error) {
     if (error instanceof ListQueryValidationError) {
       return NextResponse.json({ error: error.message }, { status: 400 });
@@ -46,7 +53,7 @@ export async function POST(request: Request) {
 
   const { cardIds } = parsed.data;
   const matching = await prisma.card.count({
-    where: { AND: [where, { id: { in: cardIds } }] },
+    where: buildOffFilterMatchWhere(where, cardIds),
   });
 
   return NextResponse.json({ offFilterCount: cardIds.length - matching });

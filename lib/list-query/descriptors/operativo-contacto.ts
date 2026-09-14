@@ -49,5 +49,5 @@ export const operativoContactoListQuery = defineListQuery<Prisma.CardWhereInput>
     keys: {},
     fallbackOrderBy: [{ urgent: "desc" }, { slaDueDate: "asc" }, { updatedAt: "desc" }],
   },
-  pagination: { defaultPageSize: 25, maxPageSize: 100 },
+  pagination: { defaultPageSize: 50, maxPageSize: 100 },
 });
