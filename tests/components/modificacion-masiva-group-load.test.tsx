@@ -11,7 +11,7 @@ import type { OperationalCard } from "@/components/cards/operational-card-picker
  * scan a known group card by card.
  *
  * The invariants under test: loaded rows are shape-identical to scanned ones
- * (so the existing `selectedCardIds` / `Aplicar cambios` / batch-status POST
+ * (so the existing `selectedCardIds` / bulk edit wizard / batch-status POST
  * path keeps working untouched), a card already in the table is never added
  * twice and is reported as already present, and an over-cap group states the
  * real total rather than silently truncating.
@@ -117,7 +117,7 @@ describe("/modificacion-masiva — load a group into the scan table", () => {
 
     await waitFor(() => expect(screen.getByText("4000000000000001")).toBeInTheDocument());
     expect(screen.getByText("4000000000000002")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Aplicar cambios (2)" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Editar seleccionadas (2)" })).toBeInTheDocument();
     expect(
       await screen.findByText(/Se agregaron 2 tarjetas del grupo "Grupo A"/i),
     ).toBeInTheDocument();
@@ -146,7 +146,7 @@ describe("/modificacion-masiva — load a group into the scan table", () => {
       await screen.findByText(/Se agrego 1 tarjeta del grupo "Grupo A"\. 1 ya estaba en la tabla\./i),
     ).toBeInTheDocument();
     expect(screen.getAllByText("4000000000000001")).toHaveLength(1);
-    expect(screen.getByRole("button", { name: "Aplicar cambios (2)" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Editar seleccionadas (2)" })).toBeInTheDocument();
   });
 
   it("states the real total when the group exceeds the cap instead of truncating silently", async () => {
@@ -190,10 +190,13 @@ describe("/modificacion-masiva — load a group into the scan table", () => {
     await loadGroup();
     await waitFor(() => expect(screen.getByText("4000000000000002")).toBeInTheDocument());
 
-    fireEvent.change(screen.getByDisplayValue("Estado: sin cambio"), {
+    fireEvent.click(screen.getByRole("button", { name: "Editar seleccionadas (2)" }));
+    // The first "keep current value" select of the wizard is Estado.
+    fireEvent.change(screen.getAllByDisplayValue("Mantener valor actual")[0], {
       target: { value: "ENTREGADA" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Aplicar cambios (2)" }));
+    fireEvent.click(screen.getByRole("button", { name: "Revisar cambios" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Confirmar y aplicar (2)" }));
 
     await waitFor(() => expect(batchCalls).toHaveLength(1));
     expect(batchCalls[0]).toMatchObject({

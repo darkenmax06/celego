@@ -42,6 +42,15 @@ export async function POST(request: Request) {
   if (nextZone && !ZONAS.includes(nextZone as (typeof ZONAS)[number])) {
     return NextResponse.json({ error: "Zona fuera del catalogo permitido" }, { status: 400 });
   }
+  if (parsed.data.messengerId) {
+    const messenger = await prisma.messenger.findUnique({
+      where: { id: parsed.data.messengerId },
+      select: { activo: true },
+    });
+    if (!messenger?.activo) {
+      return NextResponse.json({ error: "Mensajero inexistente o inactivo" }, { status: 400 });
+    }
+  }
   if (
     status === undefined &&
     parsed.data.provincia === undefined &&

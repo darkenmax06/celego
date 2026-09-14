@@ -6,9 +6,11 @@ import type {
   ListQueryDescriptor,
   ListQueryDescriptorInput,
   ListQueryParams,
+  SelectableDateRangeFilter,
   SortDirection,
 } from "./types";
 import { buildRelationSomeClause } from "./relation-some";
+import { dateRangeParamKey, parseDateRangeParamKey } from "../date-range-params";
 
 /** The established "no constraint" sentinel for enum filters across this codebase. */
 export const ALL_SENTINEL = "ALL";
@@ -111,6 +113,73 @@ function clampInt(raw: string | null, fallback: number, min: number, max: number
   return Math.min(max, Math.max(min, Math.trunc(value)));
 }
 
+function isWhitelistedDateField(fields: Readonly<Record<string, FieldPath>>, token: string) {
+  // Own-property check keeps prototype keys such as "constructor" off the whitelist.
+  return Object.prototype.hasOwnProperty.call(fields, token);
+}
+
+/**
+ * Compiles a `selectableDateRange` filter into one clause per active field.
+ *
+ * Exported for routes that build their `where` by hand (`operativo/contacto`,
+ * `contratos-pendientes`, the SLA exports) so they share the exact param
+ * scheme, whitelist and day boundaries of the descriptor-driven routes.
+ * Throws `ListQueryValidationError` for a non-whitelisted field.
+ */
+export function compileSelectableDateRange<TWhere>(
+  filter: SelectableDateRangeFilter<TWhere>,
+  params: ListQueryParams,
+): { clauses: Record<string, unknown>[]; impossible: boolean } {
+  const boundaries = filter.boundaries ?? "localDay";
+  const fields = filter.fields as Readonly<Record<string, FieldPath>>;
+  const reject = (param: string, token: string): never => {
+    throw new ListQueryValidationError(
+      "INVALID_ENUM_VALUE",
+      param,
+      `Valor no permitido para ${param}: ${token}`,
+    );
+  };
+
+  // Unknown `date.<field>.*` params are rejected, not silently ignored, so a
+  // typo never looks like "no constraint". Empty values count as absent.
+  if (params.keys) {
+    for (const key of params.keys()) {
+      const parsed = parseDateRangeParamKey(key);
+      if (!parsed || !params.get(key)?.trim()) continue;
+      if (!isWhitelistedDateField(fields, parsed.field)) reject(key, parsed.field);
+    }
+  }
+
+  const raw = new Map<string, { from?: string; to?: string }>();
+  for (const token of Object.keys(fields)) {
+    const from = params.get(dateRangeParamKey(token, "from"))?.trim() || undefined;
+    const to = params.get(dateRangeParamKey(token, "to"))?.trim() || undefined;
+    if (from || to) raw.set(token, { from, to });
+  }
+
+  if (filter.legacy) {
+    const from = params.get(filter.legacy.fromParam)?.trim() || undefined;
+    const to = params.get(filter.legacy.toParam)?.trim() || undefined;
+    if (from || to) {
+      const token = params.get(filter.legacy.fieldParam)?.trim() || filter.legacy.defaultField;
+      if (!isWhitelistedDateField(fields, token)) reject(filter.legacy.fieldParam, token);
+      const current = raw.get(token) ?? {};
+      raw.set(token, { from: current.from ?? from, to: current.to ?? to });
+    }
+  }
+
+  const clauses: Record<string, unknown>[] = [];
+  let impossible = false;
+  for (const [token, range] of raw) {
+    const gte = range.from ? parseDayBoundary(range.from, "start", boundaries) : null;
+    const lte = range.to ? parseDayBoundary(range.to, "end", boundaries) : null;
+    if (!gte && !lte) continue;
+    if (gte && lte && gte.getTime() > lte.getTime()) impossible = true;
+    clauses.push(nest(fields[token], { ...(gte ? { gte } : {}), ...(lte ? { lte } : {}) }));
+  }
+  return { clauses, impossible };
+}
+
 /**
  * Compiles request parameters into Prisma `where` / `orderBy` / `skip` / `take`.
  *
@@ -135,6 +204,8 @@ export function compile<TWhere>(
   // `noneToken`, so it must emit its own `OR` and therefore needs the
   // composed `AND` shape even when the route passed no andPrefix/andSuffix.
   let usesCombinator = false;
+  // Root keys written by `selectableDateRange` clauses; see the composition step.
+  const dateRootKeys: string[] = [];
 
   // --- free-text search over the whitelisted paths only -------------------
   const q = params.get(descriptor.searchParam)?.trim();
@@ -167,6 +238,16 @@ export function compile<TWhere>(
       if (!gte && !lte) continue;
       if (gte && lte && gte.getTime() > lte.getTime()) impossible = true;
       addClause(nest(filter.field, { ...(gte ? { gte } : {}), ...(lte ? { lte } : {}) }));
+      continue;
+    }
+
+    if (filter.kind === "selectableDateRange") {
+      const compiled = compileSelectableDateRange(filter, params);
+      if (compiled.impossible) impossible = true;
+      for (const clause of compiled.clauses) {
+        addClause(clause);
+        dateRootKeys.push(...Object.keys(clause));
+      }
       continue;
     }
 
@@ -277,7 +358,13 @@ export function compile<TWhere>(
 
   const andPrefix = options.andPrefix ?? [];
   const andSuffix = options.andSuffix ?? [];
-  const compose = andPrefix.length > 0 || andSuffix.length > 0 || usesCombinator;
+  // A date clause sharing its root key with another clause (for example the
+  // legacy `from`/`to` on dispatchDate plus `date.dispatchDate.*`) would be
+  // overwritten in the flat `where`, so that case also needs the `AND` shape.
+  const dateKeyCollides = dateRootKeys.some(
+    (key) => filterClauses.filter((clause) => key in clause).length > 1,
+  );
+  const compose = andPrefix.length > 0 || andSuffix.length > 0 || usesCombinator || dateKeyCollides;
 
   let where: Record<string, unknown>;
   if (compose) {

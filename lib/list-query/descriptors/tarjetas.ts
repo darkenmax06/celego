@@ -2,10 +2,11 @@ import { CardProductType, CardStatus, DispatchOrigin, type Prisma } from "@prism
 import { toCardStatus } from "../../card-status";
 import { defineListQuery } from "../compile";
 import { CARD_GROUP_FILTER } from "../card-group-where";
+import { CARD_DATE_RANGE_FILTER } from "../card-date-range";
 
 /**
  * Mirrors `app/api/tarjetas/route.ts` GET.
- * Page size 25 default / 200 max; current ordering `updatedAt desc`.
+ * Page size 50 default / 400 max; current ordering `updatedAt desc`.
  *
  * Task 10.10 reconciliation — narrowed where it was provably wider:
  * - `urgent` is `truthyOnly`: the route only ever wrote `where.urgent = true`
@@ -51,11 +52,15 @@ export const tarjetasListQuery = defineListQuery<Prisma.CardWhereInput>({
     { kind: "boolean", param: "urgent", field: "urgent", truthyOnly: true },
     { kind: "boolean", param: "remote", field: "isRemote" },
     { kind: "dateRange", field: "dispatchDate", fromParam: "from", toParam: "to", boundaries: "instant" },
+    // UI date filters: `date.<field>.from|to`, several fields AND-combined,
+    // `localDay` so `to` includes its own day. Kept apart from the legacy
+    // `from`/`to` above so existing links keep their exact historical semantics.
+    CARD_DATE_RANGE_FILTER,
     CARD_GROUP_FILTER,
   ],
   sort: {
     keys: {},
     fallbackOrderBy: [{ updatedAt: "desc" }],
   },
-  pagination: { defaultPageSize: 50, maxPageSize: 200 },
+  pagination: { defaultPageSize: 50, maxPageSize: 400 },
 });

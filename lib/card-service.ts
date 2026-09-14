@@ -13,6 +13,7 @@ import { canCreateDispatch, DispatchConflictError, nextTcGuardState } from "@/li
 import { resolveZone } from "@/lib/zone-map";
 import { normalizeText } from "@/lib/utils";
 import { recalculateAdditionalCardsForGroups } from "@/lib/card-additional";
+import { applyMessengerReassignment } from "@/lib/route-reassignment";
 import {
   buildDailyImportCardLookup,
   resolveOperationalCardLookup,
@@ -265,6 +266,21 @@ export async function batchUpdateCards(
               : changes.messengerId,
         },
         alwaysLog: shouldUpdateStatus,
+      });
+    }
+
+    // A messenger change follows route-reassignment semantics: the cards leave
+    // other messengers' active routes and the move is audited, atomically with
+    // the field updates above.
+    if (changes.messengerId !== undefined) {
+      await applyMessengerReassignment(tx, {
+        cards: cards.map((card) => ({
+          id: card.id,
+          status: changes.status ?? card.status,
+          currentMessengerId: card.currentMessengerId,
+        })),
+        nextMessengerId: changes.messengerId,
+        byUserId,
       });
     }
   });
