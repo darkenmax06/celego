@@ -10,7 +10,7 @@ is_true() {
 
 if is_true "${RUN_DB_PUSH:-true}"; then
   echo "==> Aplicando schema Prisma"
-  npx prisma db push --skip-generate
+  npx prisma db push --accept-data-loss --skip-generate
 fi
 
 if is_true "${RUN_DB_BOOTSTRAP:-true}"; then

@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { PageHeader } from "@/components/ui/page-header";
 import { Panel } from "@/components/ui/panel";
 import { usePersistentState } from "@/lib/use-persistent-state";
+import { useCardGroups } from "@/lib/use-card-groups";
 import { OperativeContactWizard, type PhoneState, type OperativeWizardCard } from "@/components/operativo/operative-contact-wizard";
 import { SLAExtensionRequestsTable } from "@/components/operativo/sla-extension-requests-table";
 import { FilterBar, ViewType } from "@/components/filters/filter-bar";
@@ -152,6 +153,7 @@ export default function OperativoClient() {
     pageSize: "25",
     days: "3",
   }));
+  const cardGroups = useCardGroups();
   const [viewMode, setViewMode] = useState<ViewType>("list");
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
   const [loading, setLoading] = useState(false);
@@ -708,6 +710,15 @@ export default function OperativoClient() {
                 { label: "No Contactadas (Intentos)", value: "no-contactadas" },
                 { label: "Traslado (Cambio Prov.)", value: "traslados" },
                 { label: "Retorno Solicitado", value: "retorno" },
+              ],
+            },
+            {
+              field: "grupo",
+              label: "Grupo",
+              multi: true,
+              options: [
+                ...cardGroups.groups.map((group) => ({ label: group.name, value: group.id })),
+                { label: "Sin grupo", value: "SIN_GRUPO" },
               ],
             },
             {

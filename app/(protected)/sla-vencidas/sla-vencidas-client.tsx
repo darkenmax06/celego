@@ -6,6 +6,7 @@ import { PageHeader } from "@/components/ui/page-header";
 import { Panel } from "@/components/ui/panel";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { usePersistentState } from "@/lib/use-persistent-state";
+import { useCardGroups } from "@/lib/use-card-groups";
 import { FilterBar } from "@/components/filters/filter-bar";
 import { TableColumnSelector } from "@/components/ui/table-column-selector";
 import {
@@ -168,6 +169,7 @@ export default function SlaVencidasClient() {
     page: "1",
     pageSize: "50",
   });
+  const cardGroups = useCardGroups();
   const [messengers, setMessengers] = useState<MessengerOption[]>([]);
   const [rows, setRows] = useState<Row[]>([]);
   const [pagination, setPagination] = useState<PaginationMeta>({
@@ -511,6 +513,15 @@ export default function SlaVencidasClient() {
           { field: "provincia", label: "Provincia" },
           { field: "zona", label: "Zona" },
           { field: "status", label: "Status" },
+          {
+            field: "grupo",
+            label: "Grupo",
+            multi: true,
+            options: [
+              ...cardGroups.groups.map((group) => ({ label: group.name, value: group.id })),
+              { label: "Sin grupo", value: "SIN_GRUPO" },
+            ],
+          },
         ]}
         groupByOptions={[
           { field: "contactoEstado", label: "Gestión Contacto" },

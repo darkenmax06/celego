@@ -8,6 +8,7 @@ import { resolveZone } from "@/lib/zone-map";
 import { normalizeText } from "@/lib/utils";
 import { buildListEnvelope, compile } from "@/lib/list-query";
 import { operativoContactoListQuery } from "@/lib/list-query/descriptors/operativo-contacto";
+import { compileCardGroupWhere } from "@/lib/list-query/card-group-where";
 import { SLA_CLOSED_STATUSES } from "@/lib/list-query/descriptors/sla-vencidas";
 import {
   clampUrgencyLevel,
@@ -316,6 +317,10 @@ export async function GET(request: NextRequest) {
   const daysRaw = Number(request.nextUrl.searchParams.get("days") ?? 3);
   const days = Number.isFinite(daysRaw) ? Math.min(10, Math.max(1, Math.trunc(daysRaw))) : 3;
   const { page, pageSize } = compile(operativoContactoListQuery, request.nextUrl.searchParams);
+  // This route builds its `where` by hand in three tab branches, so the group
+  // clause is compiled ONCE here and reused. Do not inline it per branch: the
+  // whole point of the shared helper is that the tabs cannot disagree.
+  const groupWhere = compileCardGroupWhere(request.nextUrl.searchParams);
 
   const provinciaList = provincia && provincia !== "ALL"
     ? provincia.split(",").map((p) => p.trim()).filter(Boolean)
@@ -372,6 +377,9 @@ export async function GET(request: NextRequest) {
     }
     if (urgentParam === "1") {
       andClauses.push({ urgent: true });
+    }
+    if (groupWhere) {
+      andClauses.push(groupWhere);
     }
     andClauses.push({ OR: [{ slaDueDate: null }, { slaDueDate: { lte: maxDueDate } }] });
 
@@ -473,6 +481,7 @@ export async function GET(request: NextRequest) {
               ],
             }
           : {},
+        groupWhere ?? {},
       ],
     };
 
@@ -574,6 +583,7 @@ export async function GET(request: NextRequest) {
             } as Prisma.CardWhereInput,
           ]
         : []),
+      ...(groupWhere ? [groupWhere] : []),
     ],
   };
 

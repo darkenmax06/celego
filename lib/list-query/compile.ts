@@ -8,6 +8,7 @@ import type {
   ListQueryParams,
   SortDirection,
 } from "./types";
+import { buildRelationSomeClause } from "./relation-some";
 
 /** The established "no constraint" sentinel for enum filters across this codebase. */
 export const ALL_SENTINEL = "ALL";
@@ -130,6 +131,10 @@ export function compile<TWhere>(
   const filterClauses: Record<string, unknown>[] = [];
   const addClause = (clause: Record<string, unknown>) => filterClauses.push(clause);
   let impossible = false;
+  // Set only by a `relationSome` filter that mixes real ids with its
+  // `noneToken`, so it must emit its own `OR` and therefore needs the
+  // composed `AND` shape even when the route passed no andPrefix/andSuffix.
+  let usesCombinator = false;
 
   // --- free-text search over the whitelisted paths only -------------------
   const q = params.get(descriptor.searchParam)?.trim();
@@ -236,6 +241,17 @@ export function compile<TWhere>(
       continue;
     }
 
+    if (filter.kind === "relationSome") {
+      if ((filter.sentinel ?? true) && value === ALL_SENTINEL) continue;
+      // Shared with `card-group-where.ts`, which serves the hand-built `where`
+      // of `app/api/operativo/contacto`. See `relation-some.ts`.
+      const built = buildRelationSomeClause(filter, value);
+      if (!built) continue;
+      addClause(built.clause);
+      if (built.usesCombinator) usesCombinator = true;
+      continue;
+    }
+
     if (filter.kind === "boolean") {
       const [truthy, falsy] =
         (filter.encoding ?? "binary") === "literal" ? ["true", "false"] : ["1", "0"];
@@ -261,7 +277,7 @@ export function compile<TWhere>(
 
   const andPrefix = options.andPrefix ?? [];
   const andSuffix = options.andSuffix ?? [];
-  const compose = andPrefix.length > 0 || andSuffix.length > 0;
+  const compose = andPrefix.length > 0 || andSuffix.length > 0 || usesCombinator;
 
   let where: Record<string, unknown>;
   if (compose) {
