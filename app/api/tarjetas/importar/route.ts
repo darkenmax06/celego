@@ -17,7 +17,10 @@ export async function POST(request: Request) {
   const buffer = Buffer.from(await file.arrayBuffer());
   const sha256 = createHash("sha256").update(buffer).digest("hex");
   const existing = await prisma.cardImportBatch.findUnique({ where: { sha256 } });
-  if (existing?.status === "COMPLETED") {
+  // A completed batch only blocks re-import while its cards still exist; deleting a card nulls its import row link.
+  const hasLiveCards = existing?.status === "COMPLETED"
+    && await prisma.cardImportRow.count({ where: { batchId: existing.id, cardId: { not: null } } }) > 0;
+  if (existing && hasLiveCards) {
     return NextResponse.json({ replay: true, batch: existing, created: existing.createdCount, updated: existing.updatedCount, skipped: existing.skippedCount, rejected: existing.rejectedCount });
   }
 

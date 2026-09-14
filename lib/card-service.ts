@@ -366,6 +366,9 @@ export async function persistNormalizedCardImport(input: {
     const updated = 0;
     let skipped = 0;
 
+    // Re-processing a batch whose cards were removed replaces its previous row outcomes.
+    await tx.cardImportRow.deleteMany({ where: { batchId: input.batchId } });
+
     if (input.rejectedRows.length) {
       await tx.cardImportRow.createMany({
         data: input.rejectedRows.map((row) => ({
@@ -405,8 +408,18 @@ export async function persistNormalizedCardImport(input: {
       // Upsert first to serialize all creations for this TC, including the first one.
       await tx.cardTcGuard.upsert({ where: { tc: item.tc }, update: {}, create: { tc: item.tc } });
       const guard = await tx.cardTcGuard.findUniqueOrThrow({ where: { tc: item.tc } });
+      // Guard ids have no FK, so a hard-deleted card leaves a dangling reference that must not block re-import.
+      const liveGuardIds = new Set((await tx.card.findMany({
+        where: { id: { in: [guard.activeCardId, guard.deliveredCardId].filter((id): id is string => Boolean(id)) } },
+        select: { id: true },
+      })).map((row) => row.id));
+      const activeCardId = guard.activeCardId && liveGuardIds.has(guard.activeCardId) ? guard.activeCardId : null;
+      const deliveredCardId = guard.deliveredCardId && liveGuardIds.has(guard.deliveredCardId) ? guard.deliveredCardId : null;
+      if (activeCardId !== guard.activeCardId || deliveredCardId !== guard.deliveredCardId) {
+        await tx.cardTcGuard.update({ where: { tc: item.tc }, data: { activeCardId, deliveredCardId } });
+      }
       try {
-        canCreateDispatch({ tc: item.tc, activeCardId: guard?.activeCardId ?? null, deliveredCardId: guard?.deliveredCardId ?? null });
+        canCreateDispatch({ tc: item.tc, activeCardId, deliveredCardId });
       } catch (error) {
         if (error instanceof DispatchConflictError) throw new CardImportConflictError(error.code);
         throw error;
