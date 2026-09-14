@@ -104,6 +104,36 @@ export type DateRangeFilter<TWhere = unknown> = {
 };
 
 /**
+ * Independent date ranges on any number of whitelisted columns, AND-combined.
+ *
+ * Param scheme (see `lib/date-range-params.ts`), one pair per field token:
+ *
+ *   date.<field>.from = yyyy-MM-dd
+ *   date.<field>.to   = yyyy-MM-dd
+ *
+ * `<field>` must be an own key of `fields`; a `date.<unknown>.from|to` param
+ * carrying a value is rejected like an enum value (400 in the routes). Bounds
+ * follow `DateRangeFilter` semantics, and the default `"localDay"` makes `to`
+ * INCLUSIVE of its own day.
+ *
+ * `legacy` keeps the earlier single-field form working (`dateField` +
+ * `dateFrom` + `dateTo`): it is mapped onto `date.<dateField>.*`, falling back
+ * to `defaultField` when `dateField` is absent. An explicit per-field bound
+ * wins over the legacy one for the same field.
+ */
+export type SelectableDateRangeFilter<TWhere = unknown> = {
+  readonly kind: "selectableDateRange";
+  readonly fields: Readonly<Record<string, WhereFieldPath<TWhere>>>;
+  readonly legacy?: {
+    readonly fieldParam: string;
+    readonly fromParam: string;
+    readonly toParam: string;
+    readonly defaultField: string;
+  };
+  readonly boundaries?: "utcDay" | "localDay" | "instant";
+};
+
+/**
  * A single `date` param expanded to the half-open range `[start, start + 1 day)`.
  *
  * This is NOT a convenience over `dateRange`: rutas, lotes and redacciones only
@@ -173,6 +203,7 @@ export type ListFilter<TWhere = unknown> =
   | StringFilter<TWhere>
   | StringListFilter<TWhere>
   | DateRangeFilter<TWhere>
+  | SelectableDateRangeFilter<TWhere>
   | SingleDayFilter<TWhere>
   | RelationSomeFilter<TWhere>;
 
@@ -291,4 +322,9 @@ export type CompileOptions<TWhere> = {
 export type ListQueryParams = {
   get(name: string): string | null;
   has(name: string): boolean;
+  /**
+   * Optional key enumeration (`URLSearchParams` provides it). Needed only to
+   * reject `date.<field>.*` params whose field is not whitelisted.
+   */
+  keys?(): Iterable<string>;
 };

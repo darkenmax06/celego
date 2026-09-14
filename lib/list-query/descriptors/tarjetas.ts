@@ -2,6 +2,7 @@ import { CardProductType, CardStatus, DispatchOrigin, type Prisma } from "@prism
 import { toCardStatus } from "../../card-status";
 import { defineListQuery } from "../compile";
 import { CARD_GROUP_FILTER } from "../card-group-where";
+import { CARD_DATE_RANGE_FILTER } from "../card-date-range";
 
 /**
  * Mirrors `app/api/tarjetas/route.ts` GET.
@@ -51,6 +52,10 @@ export const tarjetasListQuery = defineListQuery<Prisma.CardWhereInput>({
     { kind: "boolean", param: "urgent", field: "urgent", truthyOnly: true },
     { kind: "boolean", param: "remote", field: "isRemote" },
     { kind: "dateRange", field: "dispatchDate", fromParam: "from", toParam: "to", boundaries: "instant" },
+    // UI date filters: `date.<field>.from|to`, several fields AND-combined,
+    // `localDay` so `to` includes its own day. Kept apart from the legacy
+    // `from`/`to` above so existing links keep their exact historical semantics.
+    CARD_DATE_RANGE_FILTER,
     CARD_GROUP_FILTER,
   ],
   sort: {

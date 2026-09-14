@@ -1,6 +1,7 @@
 import { CardStatus, type Prisma } from "@prisma/client";
 import { defineListQuery } from "../compile";
 import { CARD_GROUP_FILTER } from "../card-group-where";
+import { CARD_DATE_RANGE_FILTER } from "../card-date-range";
 
 /**
  * Closed statuses that are excluded from SLA vencidas (both credit and debit).
@@ -48,6 +49,7 @@ export const slaVencidasListQuery = defineListQuery<Prisma.CardWhereInput>({
       values: ["CREDITO", "DEBITO"],
       onInvalid: "drop",
     },
+    CARD_DATE_RANGE_FILTER,
     CARD_GROUP_FILTER,
   ],
   sort: {

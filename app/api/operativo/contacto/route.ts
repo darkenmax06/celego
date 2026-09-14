@@ -6,7 +6,8 @@ import { prisma } from "@/lib/prisma";
 import { addBusinessDaysStrict, remainingBusinessDays } from "@/lib/sla";
 import { resolveZone } from "@/lib/zone-map";
 import { normalizeText } from "@/lib/utils";
-import { buildListEnvelope, compile } from "@/lib/list-query";
+import { buildListEnvelope, compile, ListQueryValidationError } from "@/lib/list-query";
+import { compileCardDateRangeWhere } from "@/lib/list-query/card-date-range";
 import { operativoContactoListQuery } from "@/lib/list-query/descriptors/operativo-contacto";
 import { compileCardGroupWhere } from "@/lib/list-query/card-group-where";
 import { SLA_CLOSED_STATUSES } from "@/lib/list-query/descriptors/sla-vencidas";
@@ -265,6 +266,7 @@ function mapCardToOperativeRow(
     remaining: card.slaDueDate ? remainingBusinessDays(new Date(), card.slaDueDate) : null,
     presinto,
     fechaDespacho: card.dispatchDate?.toISOString() ?? null,
+    slaDueDate: card.slaDueDate?.toISOString() ?? null,
     tipoEmision: card.emissionType,
     tipoEntrega: card.deliveryType,
     direcciones: splitTextChunks(card.customer.direccionRaw),
@@ -321,6 +323,17 @@ export async function GET(request: NextRequest) {
   // clause is compiled ONCE here and reused. Do not inline it per branch: the
   // whole point of the shared helper is that the tabs cannot disagree.
   const groupWhere = compileCardGroupWhere(request.nextUrl.searchParams);
+  // Same idea for the `date.<field>.from|to` card date ranges: compiled once,
+  // AND-combined into every tab branch.
+  let dateClauses: Prisma.CardWhereInput[];
+  try {
+    dateClauses = compileCardDateRangeWhere(request.nextUrl.searchParams).clauses;
+  } catch (error) {
+    if (error instanceof ListQueryValidationError) {
+      return NextResponse.json({ error: error.message }, { status: 400 });
+    }
+    throw error;
+  }
 
   const provinciaList = provincia && provincia !== "ALL"
     ? provincia.split(",").map((p) => p.trim()).filter(Boolean)
@@ -381,6 +394,7 @@ export async function GET(request: NextRequest) {
     if (groupWhere) {
       andClauses.push(groupWhere);
     }
+    andClauses.push(...dateClauses);
     andClauses.push({ OR: [{ slaDueDate: null }, { slaDueDate: { lte: maxDueDate } }] });
 
     const where: Prisma.CardWhereInput = { AND: andClauses };
@@ -482,6 +496,7 @@ export async function GET(request: NextRequest) {
             }
           : {},
         groupWhere ?? {},
+        ...dateClauses,
       ],
     };
 
@@ -584,6 +599,7 @@ export async function GET(request: NextRequest) {
           ]
         : []),
       ...(groupWhere ? [groupWhere] : []),
+      ...dateClauses,
     ],
   };
 
@@ -602,7 +618,8 @@ export async function GET(request: NextRequest) {
       orderBy: [{ updatedAt: "desc" }],
       take: 500,
     }),
-    prisma.urgentCase.findMany({
+    // Unlinked urgent cases carry no card dates, so a date filter excludes them.
+    dateClauses.length ? Promise.resolve([]) : prisma.urgentCase.findMany({
       where: {
         cardId: null,
         resolvedAt: null,
@@ -684,6 +701,7 @@ export async function GET(request: NextRequest) {
     remaining: null,
     presinto: null,
     fechaDespacho: null,
+    slaDueDate: null,
     tipoEmision: null,
     tipoEntrega: null,
     direcciones: splitTextChunks(item.direccion),
