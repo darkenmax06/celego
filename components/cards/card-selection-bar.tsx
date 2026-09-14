@@ -14,10 +14,12 @@ import { Layers, Plus, UserMinus, X } from "lucide-react";
  * The count itself is now a toggle button that opens a review panel listing
  * every selected id. A selection can include cards that are not on the
  * currently loaded page (spec: "Selection persists across pagination and
- * filter changes"), so the caller supplies `cardsById` — a lookup built only
- * from the loaded page — and any `selectedIds` entry missing from it renders
- * as a clearly-labelled minimal entry (the raw id) instead of being silently
- * dropped from the list. Each row can deselect itself individually via
+ * filter changes"), and — since Stage B made the selection app-wide across
+ * `/tarjetas`, `/sla-vencidas` and `/operativo` — can even include cards that
+ * the current screen's dataset does not contain at all. So the caller supplies
+ * `cardsById` — a lookup built only from what this screen loaded — and any
+ * `selectedIds` entry missing from it renders as a clearly-labelled minimal
+ * entry (the raw id) instead of being silently dropped from the list. Each row can deselect itself individually via
  * `onDeselect`; "Limpiar selección" remains for the all-at-once case.
  *
  * "Quitar del grupo" is visible only when the current `grupo` filter holds
@@ -95,7 +97,7 @@ export function CardSelectionBar({
                     ) : (
                       <div className="min-w-0">
                         <p className="truncate font-mono text-xs text-slate-600">{id}</p>
-                        <p className="text-[11px] italic text-amber-700">Fuera de esta página</p>
+                        <p className="text-[11px] italic text-amber-700">Fuera de esta vista</p>
                       </div>
                     )}
                     <button

@@ -4,6 +4,7 @@ import { ChangeEvent, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { CardDetailModal } from "@/components/cards/card-detail-modal";
 import { CardGroupAssignModal } from "@/components/cards/card-group-assign-modal";
+import { CardGroupFanoutNote } from "@/components/cards/card-group-fanout-note";
 import { CardSelectCheckbox } from "@/components/cards/card-select-checkbox";
 import { CardSelectionBar, type SelectedCardEntry } from "@/components/cards/card-selection-bar";
 import { FilterBar, ViewType } from "@/components/filters/filter-bar";
@@ -11,6 +12,15 @@ import { PageHeader } from "@/components/ui/page-header";
 import { Panel } from "@/components/ui/panel";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { notificationFailureMessage, notifyInBrowser } from "@/lib/browser-notifications";
+import {
+  CARD_GROUP_BY_FIELD,
+  bucketCountLabel,
+  cardGroupBuckets,
+  groupRows,
+  singleBucket,
+  toGroupNameMap,
+} from "@/lib/grouping";
+import { useCardGroupBucketTotals } from "@/lib/use-card-group-bucket-totals";
 import { useCardGroups } from "@/lib/use-card-groups";
 import { useCardSelection } from "@/lib/use-card-selection";
 import { usePersistentState } from "@/lib/use-persistent-state";
@@ -47,6 +57,8 @@ type CardRow = {
   fechaPreferenciaEntrega?: string | null;
   comentarioContacto?: string | null;
   metadata?: unknown;
+  /** Ids of the CardGroups this card belongs to. Names resolve via useCardGroups. */
+  groupIds?: string[];
 };
 
 type PaginationMeta = { page: number; pageSize: number; total: number; totalPages: number };
@@ -255,7 +267,7 @@ export default function TarjetasClient({ role }: TarjetasClientProps) {
   const searchParams = useSearchParams();
   const [cards, setCards] = useState<CardRow[]>([]);
   const [filters, setFilters] = useState<Record<string, string>>(() => {
-    const initial: Record<string, string> = { page: "1", pageSize: "25" };
+    const initial: Record<string, string> = { page: "1", pageSize: "50" };
     for (const key of URL_FILTER_KEYS) {
       const value = searchParams.get(key);
       if (value) initial[key] = value;
@@ -287,7 +299,7 @@ export default function TarjetasClient({ role }: TarjetasClientProps) {
   const [urgencyTarget, setUrgencyTarget] = useState<CardRow | null>(null);
   const [pagination, setPagination] = useState<PaginationMeta>({
     page: 1,
-    pageSize: 25,
+    pageSize: 50,
     total: 0,
     totalPages: 1,
   });
@@ -393,18 +405,24 @@ export default function TarjetasClient({ role }: TarjetasClientProps) {
     void fetchCards(filters);
   }, [filters]);
 
+  const groupNameById = useMemo(() => toGroupNameMap(cardGroups.groups), [cardGroups.groups]);
+
+  /** Grouping by "Grupo" is the only group-by where a row lands in several buckets. */
+  const isGroupByGrupo = filters.groupBy === CARD_GROUP_BY_FIELD;
+
+  /** True per-group totals; `null` while loading or when none can be computed. */
+  const bucketTotals = useCardGroupBucketTotals("tarjetas", filters, isGroupByGrupo);
+
   const groupedCards = useMemo(() => {
-    if (!filters.groupBy) return null;
-    const groups: Record<string, { groupKey: string; groupLabel: string; items: CardRow[] }> = {};
-    for (const card of cards) {
-      const { key, label } = getCardGroupKey(card, filters.groupBy);
-      if (!groups[key]) {
-        groups[key] = { groupKey: key, groupLabel: label, items: [] };
-      }
-      groups[key].items.push(card);
-    }
-    return Object.values(groups);
-  }, [cards, filters.groupBy]);
+    const groupBy = filters.groupBy;
+    if (!groupBy) return null;
+    return groupRows(
+      cards,
+      groupBy === CARD_GROUP_BY_FIELD
+        ? (card: CardRow) => cardGroupBuckets(card.groupIds, groupNameById)
+        : singleBucket((card: CardRow) => getCardGroupKey(card, groupBy)),
+    );
+  }, [cards, filters.groupBy, groupNameById]);
 
   async function pullImmediateUrgentNotifications() {
     const res = await fetch("/api/operativo/urgencias", { cache: "no-store" });
@@ -779,8 +797,8 @@ export default function TarjetasClient({ role }: TarjetasClientProps) {
         resource="tarjetas"
         sectionKey="tarjetas"
         filters={filters}
-        onFilterChange={(next) => setFilters({ ...next, page: "1", pageSize: filters.pageSize || "25" })}
-        onReset={() => setFilters({ page: "1", pageSize: "25" })}
+        onFilterChange={(next) => setFilters({ ...next, page: "1", pageSize: filters.pageSize || "50" })}
+        onReset={() => setFilters({ page: "1", pageSize: "50" })}
         searchPlaceholder="Buscar por TC, cédula, nombre o referencia..."
         allowedViews={["list", "cards"]}
         currentView={viewMode}
@@ -793,6 +811,7 @@ export default function TarjetasClient({ role }: TarjetasClientProps) {
           { field: "status", label: "Estado" },
           { field: "provincia", label: "Provincia" },
           { field: "zona", label: "Zona" },
+          { field: CARD_GROUP_BY_FIELD, label: "Grupo" },
         ]}
       />
 
@@ -918,6 +937,7 @@ export default function TarjetasClient({ role }: TarjetasClientProps) {
                 Agrupado por: {filters.groupBy}
               </span>
             ) : null}
+            {isGroupByGrupo ? <CardGroupFanoutNote /> : null}
           </div>
           {viewMode === "list" ? (
             <TableColumnSelector
@@ -956,8 +976,7 @@ export default function TarjetasClient({ role }: TarjetasClientProps) {
                         </span>
                         <span className="text-sm font-bold text-slate-900">{group.groupLabel}</span>
                         <span className="rounded-full bg-slate-200/90 px-2 py-0.5 text-xs font-semibold text-slate-700">
-                          {group.items.length}{" "}
-                          {group.items.length === 1 ? "tarjeta" : "tarjetas"}
+                          {bucketCountLabel(group.items.length, bucketTotals?.[group.groupKey] ?? null)}
                         </span>
                       </div>
                     </div>
@@ -1296,8 +1315,7 @@ export default function TarjetasClient({ role }: TarjetasClientProps) {
                                 {group.groupLabel}
                               </span>
                               <span className="rounded-full bg-slate-200/90 px-2 py-0.5 text-xs font-semibold text-slate-700">
-                                {group.items.length}{" "}
-                                {group.items.length === 1 ? "tarjeta" : "tarjetas"}
+                                {bucketCountLabel(group.items.length, bucketTotals?.[group.groupKey] ?? null)}
                               </span>
                             </div>
                           </td>
@@ -1335,7 +1353,7 @@ export default function TarjetasClient({ role }: TarjetasClientProps) {
               <label className="flex items-center gap-1">
                 <span>Por página:</span>
                 <select
-                  value={filters.pageSize || "25"}
+                  value={filters.pageSize || "50"}
                   onChange={(e) => setFilters((prev) => ({ ...prev, pageSize: e.target.value, page: "1" }))}
                   className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs"
                 >

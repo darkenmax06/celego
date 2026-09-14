@@ -59,6 +59,6 @@ export const slaVencidasListQuery = defineListQuery<Prisma.CardWhereInput>({
     },
     fallbackOrderBy: [{ slaDueDate: "asc" }, { updatedAt: "desc" }],
   },
-  pagination: { defaultPageSize: 50, maxPageSize: 500 },
+  pagination: { defaultPageSize: 100, maxPageSize: 500 },
   allowUnpaginated: true,
 });

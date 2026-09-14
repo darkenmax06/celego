@@ -806,13 +806,13 @@ exports[`golden envelopes for the nine list routes > operativo-contacto paginati
   "rows": [
     {
       "page": 1,
-      "pageSize": 25,
+      "pageSize": 50,
       "query": "(no params)",
       "unpaginated": true,
     },
     {
       "page": 1,
-      "pageSize": 25,
+      "pageSize": 50,
       "query": "?page=1",
       "unpaginated": false,
     },
@@ -842,7 +842,7 @@ exports[`golden envelopes for the nine list routes > operativo-contacto paginati
     },
     {
       "page": 1,
-      "pageSize": 25,
+      "pageSize": 50,
       "query": "?page=abc&pageSize=abc",
       "unpaginated": false,
     },
@@ -1382,13 +1382,13 @@ exports[`golden envelopes for the nine list routes > tarjetas pagination resolut
   "rows": [
     {
       "page": 1,
-      "pageSize": 25,
+      "pageSize": 50,
       "query": "(no params)",
       "unpaginated": true,
     },
     {
       "page": 1,
-      "pageSize": 25,
+      "pageSize": 50,
       "query": "?page=1",
       "unpaginated": false,
     },
@@ -1418,7 +1418,7 @@ exports[`golden envelopes for the nine list routes > tarjetas pagination resolut
     },
     {
       "page": 1,
-      "pageSize": 25,
+      "pageSize": 50,
       "query": "?page=abc&pageSize=abc",
       "unpaginated": false,
     },

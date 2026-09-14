@@ -65,7 +65,7 @@ describe("useCardSelection", () => {
     await waitFor(() => expect(first.result.current.count).toBe(0));
     act(() => first.result.current.selectMany(["card-1", "card-2"]));
     await waitFor(() => {
-      expect(window.localStorage.getItem("celego:workspace:v1:tarjetas:card-selection")).not.toBeNull();
+      expect(window.localStorage.getItem("celego:workspace:v1:cards:selection")).not.toBeNull();
     });
     first.unmount();
 
