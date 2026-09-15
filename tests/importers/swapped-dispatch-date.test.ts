@@ -8,11 +8,19 @@ describe("detectSwappedDispatchDate", () => {
   const importedSept14 = new Date("2026-09-14T15:00:00Z");
 
   it("recovers a September dispatch stored as a past month", () => {
-    expect(iso(detectSwappedDispatchDate(utcNoon(2026, 3, 9), importedSept14))).toBe("2026-09-03");
+    expect(iso(detectSwappedDispatchDate(utcNoon(2026, 3, 9), new Date("2026-09-04T15:00:00Z")))).toBe("2026-09-03");
   });
 
   it("recovers a dispatch stored in a future month", () => {
     expect(iso(detectSwappedDispatchDate(utcNoon(2026, 12, 9), importedSept14))).toBe("2026-09-12");
+  });
+
+  it("recovers a swap that lands only one month before the import", () => {
+    expect(iso(detectSwappedDispatchDate(utcNoon(2026, 8, 9), new Date("2026-09-08T15:00:00Z")))).toBe("2026-09-08");
+  });
+
+  it("leaves a card imported a few days after dispatch untouched", () => {
+    expect(detectSwappedDispatchDate(utcNoon(2026, 9, 10), new Date("2026-09-14T15:00:00Z"))).toBeNull();
   });
 
   it("leaves a correctly dated card untouched and is idempotent", () => {
