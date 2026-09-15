@@ -7,7 +7,22 @@ export type ImportError = {
 };
 
 export function readWorkbook(buffer: Buffer) {
-  return XLSX.read(buffer, { type: "buffer", cellDates: false });
+  return XLSX.read(buffer, { type: "buffer", cellDates: false, cellNF: true });
+}
+
+/**
+ * Real Excel date cells are rendered with the file's locale format (e.g. "9/14/26",
+ * month-first), which day-first parsers read with day and month swapped. Their
+ * formatted text is replaced with an unambiguous ISO date before rows are read.
+ */
+function normalizeDateCells(sheet: XLSX.WorkSheet) {
+  for (const [address, cell] of Object.entries(sheet)) {
+    if (address.startsWith("!") || cell?.t !== "n" || typeof cell.v !== "number") continue;
+    if (typeof cell.z !== "string" || !XLSX.SSF.is_date(cell.z)) continue;
+    const parts = XLSX.SSF.parse_date_code(cell.v);
+    if (!parts) continue;
+    cell.w = `${parts.y}-${String(parts.m).padStart(2, "0")}-${String(parts.d).padStart(2, "0")}`;
+  }
 }
 
 export function getSheetRows(workbook: XLSX.WorkBook, sheetName?: string) {
@@ -19,6 +34,8 @@ export function getSheetRows(workbook: XLSX.WorkBook, sheetName?: string) {
   if (!target) {
     throw new Error("No se encontro una hoja valida en el archivo");
   }
+
+  normalizeDateCells(target);
 
   const options: XLSX.Sheet2JSONOpts & { UTC?: boolean } = {
     header: 1,
