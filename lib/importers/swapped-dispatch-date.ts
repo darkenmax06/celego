@@ -1,7 +1,11 @@
 const DAY_MS = 86_400_000;
 
-/** How far before the import a dispatch date may plausibly be. */
-export const DISPATCH_LOOKBACK_DAYS = 31;
+/**
+ * How far before the import a dispatch date may plausibly be. Daily files are
+ * imported within 0-4 days of dispatch; a wider window let a swap one month back
+ * (September 8th stored as August 9th) pass as plausible.
+ */
+export const DISPATCH_LOOKBACK_DAYS = 7;
 
 function inImportWindow(date: Date, importedAt: Date) {
   const time = date.getTime();
