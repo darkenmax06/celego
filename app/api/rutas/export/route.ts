@@ -16,7 +16,7 @@ function formatDate(value: Date | string | null | undefined) {
   if (!value) return "-";
   const date = value instanceof Date ? value : new Date(value);
   if (Number.isNaN(date.getTime())) return "-";
-  return date.toLocaleDateString("es-DO");
+  return date.toLocaleDateString("es-DO", { timeZone: "UTC" });
 }
 
 function fileHeaders(filename: string, contentType: string) {
