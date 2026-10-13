@@ -262,6 +262,7 @@ model Card {
   slaExtensionDays      Int                        @default(0)
   returnReason          String?
   currentMessengerId    String?
+  deliveryCredit        MessengerDeliveryCredit?
   currentMessenger      Messenger?                 @relation("CurrentMessengerCards", fields: [currentMessengerId], references: [id], onDelete: SetNull)
   lastAssignedMessengerId String?
   lastAssignedMessenger Messenger?                 @relation("LastAssignedMessengerCards", fields: [lastAssignedMessengerId], references: [id], onDelete: SetNull)
@@ -429,6 +430,11 @@ model Messenger {
   reassignmentsFrom CardDeliveryReassignment[] @relation("ReassignmentFromMessenger")
   reassignmentsTo   CardDeliveryReassignment[] @relation("ReassignmentToMessenger")
   reports           MessengerReport[]
+  loans             Loan[]
+  payments          MessengerPayment[]
+  deliveryCredits   MessengerDeliveryCredit[]
+  payrollPeriods    PayrollPeriod[]
+  payrollLocks      PayrollPeriodLock[]
   mobileDevices     MobileDevice[]
   mobilePackages    MobileRoutePackage[]
   secureEvidences   SecureEvidence[]
@@ -519,6 +525,12 @@ model MessengerDailyRecord {
   fecha            DateTime
   entregasNormales Int       @default(0)
   entregasRemotas  Int       @default(0)
+  /// Counted automatically from delivered cards (MessengerDeliveryCredit). entregasNormales/Remotas = auto + ajuste.
+  autoNormales     Int       @default(0)
+  autoRemotas      Int       @default(0)
+  /// Manual correction on top of the automatic count, kept so a recount never erases it.
+  ajusteNormales   Int       @default(0)
+  ajusteRemotas    Int       @default(0)
   recogidasBanco   Int       @default(0)
   mandados         Int       @default(0)
   totalCents       Int       @default(0)
@@ -1118,4 +1130,134 @@ model SLAExtensionRequest {
 
   @@index([status, createdAt])
   @@index([cardId])
+}
+
+enum PayrollLockStatus {
+  ABIERTO
+  BLOQUEADO
+}
+
+enum LoanMode {
+  IGUALES
+  PERSONALIZADAS
+}
+
+enum LoanStatus {
+  ACTIVO
+  PAGADO
+  CANCELADO
+}
+
+enum LoanInstallmentStatus {
+  PENDIENTE
+  APLICADA
+  OMITIDA
+}
+
+/// Cut period. messengerId null = general period; otherwise it overrides the general one for that messenger.
+model PayrollPeriod {
+  id          String               @id @default(cuid())
+  label       String
+  fromDate    DateTime
+  toDate      DateTime
+  messengerId String?
+  messenger   Messenger?           @relation(fields: [messengerId], references: [id], onDelete: Cascade)
+  createdById String?
+  createdAt   DateTime             @default(now())
+  locks       PayrollPeriodLock[]
+  payments    MessengerPayment[]
+
+  @@index([messengerId, fromDate])
+  @@index([fromDate, toDate])
+}
+
+/// Lock state of a period for one messenger. No row means ABIERTO.
+model PayrollPeriodLock {
+  id           String            @id @default(cuid())
+  periodId     String
+  period       PayrollPeriod     @relation(fields: [periodId], references: [id], onDelete: Cascade)
+  messengerId  String
+  messenger    Messenger         @relation(fields: [messengerId], references: [id], onDelete: Cascade)
+  status       PayrollLockStatus @default(BLOQUEADO)
+  lockedAt     DateTime?
+  lockedById   String?
+  unlockedAt   DateTime?
+  unlockedById String?
+
+  @@unique([periodId, messengerId])
+}
+
+/// One delivered card credited to a messenger on a day. The source of truth for the automatic count.
+model MessengerDeliveryCredit {
+  id          String               @id @default(cuid())
+  cardId      String               @unique
+  card        Card                 @relation(fields: [cardId], references: [id], onDelete: Cascade)
+  messengerId String
+  messenger   Messenger            @relation(fields: [messengerId], references: [id], onDelete: Cascade)
+  day         DateTime
+  serviceType MessengerServiceType
+  updatedAt   DateTime             @updatedAt
+
+  @@index([messengerId, day])
+}
+
+/// A day whose count changed while its period was locked; applied when the period is unlocked.
+model PayrollPendingChange {
+  id          String   @id @default(cuid())
+  messengerId String
+  day         DateTime
+  createdAt   DateTime @default(now())
+
+  @@unique([messengerId, day])
+}
+
+model MessengerPayment {
+  id              String            @id @default(cuid())
+  messengerId     String
+  messenger       Messenger         @relation(fields: [messengerId], references: [id], onDelete: Cascade)
+  periodId        String
+  period          PayrollPeriod     @relation(fields: [periodId], references: [id], onDelete: Cascade)
+  /// Frozen when the period is locked; recomputed live while it is open.
+  grossCents      Int               @default(0)
+  deductionCents  Int               @default(0)
+  netCents        Int               @default(0)
+  lockedAt        DateTime?
+  createdAt       DateTime          @default(now())
+  installments    LoanInstallment[]
+
+  @@unique([messengerId, periodId])
+}
+
+model Loan {
+  id               String            @id @default(cuid())
+  messengerId      String
+  messenger        Messenger         @relation(fields: [messengerId], references: [id], onDelete: Cascade)
+  principalCents   Int
+  installmentCount Int
+  mode             LoanMode          @default(IGUALES)
+  status           LoanStatus        @default(ACTIVO)
+  note             String?
+  createdById      String?
+  createdAt        DateTime          @default(now())
+  installments     LoanInstallment[]
+
+  @@index([messengerId, status])
+}
+
+model LoanInstallment {
+  id           String                @id @default(cuid())
+  loanId       String
+  loan         Loan                  @relation(fields: [loanId], references: [id], onDelete: Cascade)
+  number       Int
+  plannedCents Int
+  /// Amount actually deducted; defaults to the plan and can be raised, lowered or zeroed.
+  appliedCents Int?
+  status       LoanInstallmentStatus @default(PENDIENTE)
+  /// Payment this installment is attached to (draft while PENDIENTE, final once APLICADA).
+  paymentId    String?
+  payment      MessengerPayment?     @relation(fields: [paymentId], references: [id], onDelete: SetNull)
+  appliedAt    DateTime?
+
+  @@unique([loanId, number])
+  @@index([paymentId])
 }
