@@ -9,7 +9,8 @@ const rows = [
 describe("messenger report image", () => {
   it("shows the day twice when it was cut, flagging the second line", () => {
     const svg = buildMessengerReportSvg({ messengerName: "Ana", from: "07/10/2026", to: "13/10/2026", rows });
-    expect(svg.match(/13\/10\/2026/g)).toHaveLength(2);
+    // Only the table cells: the subtitle also mentions the cut date.
+    expect(svg.match(/>13\/10\/2026<\/text>/g)).toHaveLength(2);
     expect(svg).toContain("restantes tras el corte");
   });
 
