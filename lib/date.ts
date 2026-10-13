@@ -99,3 +99,15 @@ export function parseExcelSerialDate(value: string | number | null | undefined) 
 
   return parseExcelSerialNumber(value);
 }
+
+/**
+ * Route days and lot send/return dates are saved as `new Date("yyyy-mm-dd")`,
+ * i.e. midnight UTC. Formatting them in the viewer's timezone shows the previous
+ * day anywhere behind UTC (Dominican Republic is UTC-4), so render them in UTC.
+ */
+export function formatDateOnly(value: Date | string | null | undefined) {
+  if (!value) return "-";
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return "-";
+  return date.toLocaleDateString("es-DO", { timeZone: "UTC" });
+}

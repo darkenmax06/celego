@@ -84,9 +84,61 @@ export function parseDate(value: Cell): Date | null {
   const date = new Date(raw);
   return Number.isNaN(date.getTime()) ? null : date;
 }
+const PLACEHOLDER_PHONE = /^(\d)\1+$/;
+const PLACEHOLDER_ADDRESS = /^(N\/?A|NINGUNO|NINGUNA|NO APLICA|S\/N|[.\-_*\s]*|0+1?)$/i;
+
+function phoneCandidates(value: Cell) {
+  const found: string[] = [];
+  for (const chunk of text(value).split(/[/,;|\r\n]+/)) {
+    if (!chunk.trim()) continue;
+    const digits = onlyDigits(chunk);
+    // "8496204860 8AMA 5PM" or two numbers in one cell: judge each token on its own.
+    if (/[a-z]/i.test(chunk) || digits.length > 15) {
+      for (const token of chunk.split(/\s+/)) {
+        if (/[a-z]/i.test(token)) continue;
+        const tokenDigits = onlyDigits(token);
+        if (tokenDigits.length >= 7 && tokenDigits.length <= 15) found.push(tokenDigits);
+      }
+    } else if (digits.length >= 7) {
+      found.push(digits);
+    }
+  }
+  return found;
+}
+/** Every phone cell contributes; placeholders such as 9999999999 or 0000000001 are dropped. */
 function phoneList(values: Cell[]) {
-  const phones = values.map((value) => onlyDigits(text(value))).filter((value) => /^\d{7,15}$/.test(value) && !/^0+$/.test(value) && value !== "0000000001");
+  const phones = values
+    .flatMap(phoneCandidates)
+    .filter((value) => !PLACEHOLDER_PHONE.test(value) && value !== "0000000001");
   return phones.length ? [...new Set(phones)].join(" | ") : null;
+}
+/** Joins every address/reference cell in sheet order without repeating the same text. */
+function addressText(values: Cell[]) {
+  const seen = new Set<string>();
+  const parts: string[] = [];
+  for (const value of values) {
+    const part = text(value).replace(/\s+/g, " ");
+    if (!part || PLACEHOLDER_ADDRESS.test(part)) continue;
+    const key = part.normalize("NFD").replace(/[̀-ͯ]/g, "").toUpperCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    parts.push(part);
+  }
+  return parts.length ? parts.join(" | ") : null;
+}
+/** Sheet columns whose header matches, first occurrence of each header only. */
+function columnsMatching(headers: string[], pattern: RegExp) {
+  const seen = new Set<string>();
+  const columns: number[] = [];
+  headers.forEach((name, index) => {
+    if (!pattern.test(name) || seen.has(name)) return;
+    seen.add(name);
+    columns.push(index);
+  });
+  return columns;
+}
+function shown(value: string) {
+  return value ? `"${value.length > 40 ? `${value.slice(0, 40)}...` : value}"` : "vacio";
 }
 function findHeader(rows: Rows, predicate: (headers: string[]) => boolean) {
   return rows.findIndex((row) => predicate(row.map(header)));
@@ -124,11 +176,15 @@ export function parseNormalizedCardRows(rows: Rows) {
   const headers = rows[detected.headerRowIndex].map(header);
   const errors: NormalizedImportError[] = [];
   const output: NormalizedCardImportRow[] = [];
-  const sourceKeys = new Set<string>();
+  const ignored: Array<{ row: number; message: string }> = [];
+  const sourceKeys = new Map<string, number>();
   const aliases = detected.origin === "CENTRO_ACOPIO"
-    ? { tc: ["TC"], terminal: ["TERMINAL"], nombre: ["NOMBRE DEL CLIENTE"], cedula: ["CEDULA"], direccion: ["SECTOR"], telefono: ["NUMEROS DE CONTACTO"], additionalPhone: ["NUMEROS ADC"], quantity: ["CANTIDAD"], date: ["FECHA DE CARGA"], provincia: [], zona: [], remote: [], delivery: [], emission: [], supplier: [], contract: [], reference: [], tcc: ["TCC"] }
-    : { tc: ["NO. TC", "NUMERO TC", "NO TC", "TC", "TC SANEADA"], terminal: [], nombre: ["NOMBRES", "NOMBRE", "NOMBRE CLIENTE"], cedula: ["CEDULA"], direccion: ["DIRECCION", "DIRECCION DE ENTREGA", "CALLE Y NO", "DIRECCION 1"], telefono: ["TELEFONO(S)", "TELEFONO", "NUMERO", "TELEFONO 1", "TEL 1"], additionalPhone: [], quantity: [], date: ["FECHA", "FECHA DESP.", "FECHA DESPACHO"], provincia: ["PROVINCIA", "ENVIADO A"], zona: ["ZONA"], remote: ["ZONA REMOTA", "REMOTA"], delivery: ["TIPO DE ENTREGA", "TIPO ENTREGA"], emission: ["TIPO DE EMISION", "TIPO EMISION"], supplier: ["SUPLIDOR"], contract: ["CONTRATO"], reference: ["REFERENCIA", "CODIGO", "CLAVE"], tcc: [] };
+    ? { tc: ["TC"], terminal: ["TERMINAL"], nombre: ["NOMBRE DEL CLIENTE"], cedula: ["CEDULA"], quantity: ["CANTIDAD"], date: ["FECHA DE CARGA"], provincia: [], zona: [], remote: [], delivery: [], emission: [], supplier: [], contract: [], reference: [], tcc: ["TCC"] }
+    : { tc: ["NO. TC", "NUMERO TC", "NO TC", "TC", "TC SANEADA"], terminal: [], nombre: ["NOMBRES", "NOMBRE", "NOMBRE CLIENTE"], cedula: ["CEDULA"], quantity: [], date: ["FECHA", "FECHA DESP.", "FECHA DESPACHO"], provincia: ["PROVINCIA", "ENVIADO A"], zona: ["ZONA"], remote: ["ZONA REMOTA", "REMOTA"], delivery: ["TIPO DE ENTREGA", "TIPO ENTREGA"], emission: ["TIPO DE EMISION", "TIPO EMISION"], supplier: ["SUPLIDOR"], contract: ["CONTRATO"], reference: ["REFERENCIA", "CODIGO", "CLAVE"], tcc: [] };
   const indexes = indexMap(headers, aliases);
+  const centro = detected.origin === "CENTRO_ACOPIO";
+  const addressColumns = columnsMatching(headers, centro ? /^SECTOR$/ : /^(CALLE Y NO|DIRECCION|DIRECCION DE ENTREGA|DIRECCION \d+|REFERENCIA \d+)$/);
+  const phoneColumns = columnsMatching(headers, centro ? /^(NUMEROS DE CONTACTO|NUMEROS ADC)$/ : /^(TELEFONO\(S\)|TELEFONO|NUMERO|TELEFONO \d+|TEL \d+)$/);
   for (let offset = detected.headerRowIndex + 1; offset < rows.length; offset += 1) {
     const row = rows[offset];
     if (!hasDetailShape(row)) continue;
@@ -136,30 +192,44 @@ export function parseNormalizedCardRows(rows: Rows) {
     const rawCedula = cell(row, indexes.cedula);
     const name = cell(row, indexes.nombre);
     const quantityRaw = cell(row, indexes.quantity);
-    const dispatchDate = parseDate(indexes.date >= 0 ? row[indexes.date] : null);
+    const rawDate = indexes.date >= 0 ? row[indexes.date] : null;
+    const dispatchDate = parseDate(rawDate);
     if (!rawTc && !rawCedula && !name) continue;
-    if (/subtotal|total/i.test(name) || (detected.origin === "CENTRO_ACOPIO" && !rawTc && quantityRaw)) continue;
-    if (
-      detected.origin === "CENTRO_ACOPIO" &&
-      isDecorativeCentroFooter(rawTc, rawCedula, name, quantityRaw, dispatchDate)
-    ) continue;
-    const tc = validIdentifier(rawTc, 15, 19);
-    const cedula = validIdentifier(rawCedula, 9, 13);
-    const direccionRaw = cell(row, indexes.direccion);
-    const quantity = detected.origin === "CENTRO_ACOPIO" ? Number(quantityRaw) : 1;
-    const failures = [!tc && "TC invalido", !cedula && "cedula invalida", !name && "nombre requerido", !dispatchDate && "fecha requerida", !(Number.isInteger(quantity) && quantity > 0) && "cantidad invalida"].filter(Boolean) as string[];
-    if (failures.length) { errors.push({ row: offset + 1, code: "INVALID_ROW", message: failures.join(", ") }); continue; }
-    const sourceTerminal = indexes.terminal >= 0 ? cell(row, indexes.terminal) || null : null;
-    const sourceRecordKey = buildSourceRecordKey({ origin: detected.origin, tc: tc!, cedula: cedula!, dispatchDate: dispatchDate! });
-    if (sourceKeys.has(sourceRecordKey)) {
-      errors.push({ row: offset + 1, code: "DUPLICATE_SOURCE_RECORD", message: "Fila duplicada para la misma procedencia, TC, cedula y fecha" });
+    if (/subtotal|total/i.test(name) || (centro && !rawTc && quantityRaw)) {
+      ignored.push({ row: offset + 1, message: `Fila de totales ignorada (${shown(name)}): no es una tarjeta` });
       continue;
     }
-    sourceKeys.add(sourceRecordKey);
-    const location = detected.origin === "CENTRO_ACOPIO"
+    if (centro && isDecorativeCentroFooter(rawTc, rawCedula, name, quantityRaw, dispatchDate)) {
+      ignored.push({ row: offset + 1, message: `Fila decorativa ignorada (${shown(name)}): no identifica una tarjeta` });
+      continue;
+    }
+    const tc = validIdentifier(rawTc, 15, 19);
+    const cedula = validIdentifier(rawCedula, 9, 13);
+    const quantity = centro ? Number(quantityRaw) : 1;
+    const failures = [
+      !tc && `TC invalido: ${shown(rawTc)} (debe tener entre 15 y 19 digitos y no ser solo ceros)`,
+      !cedula && `cedula invalida: ${shown(rawCedula)} (debe tener entre 9 y 13 digitos y no ser solo ceros)`,
+      !name && "nombre vacio (el cliente es obligatorio)",
+      !dispatchDate && `fecha invalida: ${shown(text(rawDate))} (use dd/mm/aaaa o aaaa-mm-dd)`,
+      !(Number.isInteger(quantity) && quantity > 0) && `cantidad invalida: ${shown(quantityRaw)} (debe ser un entero mayor que 0)`,
+    ].filter(Boolean) as string[];
+    if (failures.length) {
+      const who = name ? ` [cliente ${shown(name)}]` : "";
+      errors.push({ row: offset + 1, code: "INVALID_ROW", message: `${failures.join("; ")}${who}` });
+      continue;
+    }
+    const sourceTerminal = indexes.terminal >= 0 ? cell(row, indexes.terminal) || null : null;
+    const sourceRecordKey = buildSourceRecordKey({ origin: detected.origin, tc: tc!, cedula: cedula!, dispatchDate: dispatchDate! });
+    const firstRow = sourceKeys.get(sourceRecordKey);
+    if (firstRow !== undefined) {
+      errors.push({ row: offset + 1, code: "DUPLICATE_SOURCE_RECORD", message: `Fila duplicada: la TC ${tc}, la cedula ${cedula} y la fecha ya aparecen en la fila ${firstRow}; se conserva la primera` });
+      continue;
+    }
+    sourceKeys.set(sourceRecordKey, offset + 1);
+    const location = centro
       ? centroAcopioLocation
       : { provincia: cell(row, indexes.provincia) || null, zona: cell(row, indexes.zona) || null };
-    output.push({ origin: detected.origin, tc: tc!, cedula: cedula!, nombre: name, direccionRaw: direccionRaw || null, telefonosRaw: phoneList([indexes.telefono >= 0 ? row[indexes.telefono] : null, indexes.additionalPhone >= 0 ? row[indexes.additionalPhone] : null]), ...location, isRemote: indexes.remote >= 0 ? /^(SI|S|TRUE|1|X)$/i.test(cell(row, indexes.remote)) : null, dispatchDate: dispatchDate!, quantity, sourceTerminal, deliveryType: cell(row, indexes.delivery) || null, emissionType: cell(row, indexes.emission) || null, supplier: cell(row, indexes.supplier) || null, contractType: cell(row, indexes.contract) || null, externalReference: cell(row, indexes.reference) || null, status: "DESPACHADA", sourceRowNumber: offset + 1, sourceRecordKey });
+    output.push({ origin: detected.origin, tc: tc!, cedula: cedula!, nombre: name, direccionRaw: addressText(addressColumns.map((index) => row[index])), telefonosRaw: phoneList(phoneColumns.map((index) => row[index])), ...location, isRemote: indexes.remote >= 0 ? /^(SI|S|TRUE|1|X)$/i.test(cell(row, indexes.remote)) : null, dispatchDate: dispatchDate!, quantity, sourceTerminal, deliveryType: cell(row, indexes.delivery) || null, emissionType: cell(row, indexes.emission) || null, supplier: cell(row, indexes.supplier) || null, contractType: cell(row, indexes.contract) || null, externalReference: cell(row, indexes.reference) || null, status: "DESPACHADA", sourceRowNumber: offset + 1, sourceRecordKey });
   }
-  return { ...detected, rows: output, errors };
+  return { ...detected, rows: output, errors, ignored };
 }

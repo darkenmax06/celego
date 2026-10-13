@@ -12,6 +12,8 @@ import { WorkflowStatusBar } from "@/components/ui/workflow-status-bar";
 import { RouteProgressPanel } from "@/components/rutas/route-progress-panel";
 import { ContractDeliveryWizardModal } from "@/components/rutas/contract-delivery-wizard-modal";
 import { getRouteLifecycle } from "@/lib/route-item-lifecycle";
+import { formatDateOnly } from "@/lib/date";
+import { lotItemPhoneNumbers } from "@/lib/lot-phones";
 import { resolveReturnReasonPrompt } from "@/lib/return-reason-prompt";
 import { resolveOperativoTab, type OperativoTab } from "@/lib/rutas-operativo-tab";
 import { resolveContractIdentifiers } from "@/lib/route-contract-selection";
@@ -64,7 +66,7 @@ type LotItem = {
     status: string;
     returnReason: string | null;
     metadata?: unknown;
-    customer: { nombre: string; cedula: string };
+    customer: { nombre: string; cedula: string; telefonosRaw?: string | null };
   } | null;
 };
 
@@ -158,8 +160,7 @@ type RoutesDraft = {
 type ModuleTab = "operativo" | "lotes";
 
 function formatDate(value: string | null) {
-  if (!value) return "-";
-  return new Date(value).toLocaleDateString("es-DO");
+  return formatDateOnly(value);
 }
 
 function isClosedOperationalCard(card: Pick<OperationalCard, "status">) {
@@ -2372,7 +2373,12 @@ function TrackingLotModal({
                       </td>
                       <td className="px-3 py-2 font-display text-xs font-semibold text-blue-700">{item.tc}</td>
                       <td className="px-3 py-2">{item.cedula ?? "-"}</td>
-                      <td className="px-3 py-2">{item.telefono ?? "-"}</td>
+                      <td className="px-3 py-2">
+                        {(() => {
+                          const phones = lotItemPhoneNumbers(item);
+                          return phones.length ? phones.map((phone) => <div key={phone}>{phone}</div>) : "-";
+                        })()}
+                      </td>
                       <td className="px-3 py-2">{item.card?.customer.nombre ?? "-"}</td>
                       <td className="px-3 py-2 text-center">
                         <input

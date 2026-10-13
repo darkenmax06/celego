@@ -12,6 +12,7 @@ import { dateRangeFilterBarProps } from "@/components/filters/date-range-filter"
 import { FilterBar, groupByLevelLabel, ViewType } from "@/components/filters/filter-bar";
 import { NestedGroupList, useCollapsedGroups, type GroupSelection } from "@/components/grouping/nested-group-list";
 import { PageHeader } from "@/components/ui/page-header";
+import { ManualCardModal } from "@/components/cards/manual-card-modal";
 import { Panel } from "@/components/ui/panel";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { notificationFailureMessage, notifyInBrowser } from "@/lib/browser-notifications";
@@ -313,6 +314,8 @@ type TarjetasClientProps = {
 
 export default function TarjetasClient({ role }: TarjetasClientProps) {
   const canManageGroups = role === "ADMIN" || role === "OPERADOR";
+  const [manualCardOpen, setManualCardOpen] = useState(false);
+  const [manualCardNotice, setManualCardNotice] = useState("");
   const searchParams = useSearchParams();
   const [cards, setCards] = useState<CardRow[]>([]);
   const [filters, setFilters] = useState<Record<string, string>>(() => {
@@ -731,7 +734,26 @@ export default function TarjetasClient({ role }: TarjetasClientProps) {
 
   return (
     <div className="flex flex-col gap-5">
-      <PageHeader title="Tarjetas" subtitle="Consulta y clasificacion de tarjetas" />
+      <PageHeader
+        title="Tarjetas"
+        subtitle="Consulta y clasificacion de tarjetas"
+        actions={
+          canManageGroups ? (
+            <button
+              type="button"
+              onClick={() => setManualCardOpen(true)}
+              className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700"
+            >
+              Nueva tarjeta
+            </button>
+          ) : undefined
+        }
+      />
+      {manualCardNotice ? (
+        <div role="status" className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2 text-xs text-emerald-800">
+          {manualCardNotice}
+        </div>
+      ) : null}
 
       {/* FilterBar Odoo Style */}
       <FilterBar
@@ -1229,6 +1251,16 @@ export default function TarjetasClient({ role }: TarjetasClientProps) {
           cardId={selectedCardId}
           onClose={() => setSelectedCardId(null)}
           onUpdated={() => {
+            void fetchCards(filters);
+          }}
+        />
+      ) : null}
+      {manualCardOpen ? (
+        <ManualCardModal
+          onClose={() => setManualCardOpen(false)}
+          onCreated={(message) => {
+            setManualCardOpen(false);
+            setManualCardNotice(message);
             void fetchCards(filters);
           }}
         />

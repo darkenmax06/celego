@@ -5,6 +5,9 @@ import { MessengerServiceType } from "@prisma/client";
 import { formatCurrencyDOP, toCents } from "@/lib/money";
 import { PageHeader } from "@/components/ui/page-header";
 import { Panel } from "@/components/ui/panel";
+import { GeneralPeriods } from "@/components/mensajeros/general-periods";
+import { LoansPanel } from "@/components/mensajeros/loans-panel";
+import { PayrollPanel } from "@/components/mensajeros/payroll-panel";
 import { usePersistentState } from "@/lib/use-persistent-state";
 
 type Messenger = {
@@ -30,6 +33,8 @@ type DailyRecord = {
   entregasRemotas: number;
   recogidasBanco: number;
   mandados: number;
+  /** Second line of a cut day: what was delivered after the cut, counted for the next period. */
+  siguienteCorte?: boolean;
 };
 
 type MessengerReport = {
@@ -219,7 +224,7 @@ export default function MensajerosClient() {
     const next: Record<string, Counts> = {};
     messengers.forEach((messenger) => {
       const sameDay = records.find(
-        (record) => record.messengerId === messenger.id && dateKey(record.fecha) === globalDate,
+        (record) => record.messengerId === messenger.id && !record.siguienteCorte && dateKey(record.fecha) === globalDate,
       );
       next[messenger.id] = countsFromRecord(sameDay);
     });
@@ -341,6 +346,8 @@ export default function MensajerosClient() {
   return (
     <div>
       <PageHeader title="Mensajeros" subtitle="Nomina, registro diario y reportes por mensajero" />
+
+      <GeneralPeriods />
 
       <Panel>
         <div className="mb-4 flex items-center justify-between">
@@ -702,7 +709,7 @@ function MessengerModal({
   onClose: () => void;
   onUpdated: (message: string) => Promise<void>;
 }) {
-  const [tab, setTab] = useState<"perfil" | "registro" | "reporte" | "historial">("perfil");
+  const [tab, setTab] = useState<"perfil" | "registro" | "pagos" | "prestamos" | "reporte" | "historial">("perfil");
   const [telefono, setTelefono] = useState(messenger.telefono ?? "");
   const [zona, setZona] = useState(messenger.zonaPrincipal ?? "Metro");
   const [provinciaTrabajo, setProvinciaTrabajo] = useState(messenger.provinciaTrabajo ?? "");
@@ -730,7 +737,7 @@ function MessengerModal({
 
   useEffect(() => {
     skipRecordAutoSave.current = true;
-    const existing = records.find((record) => dateKey(record.fecha) === recordDate);
+    const existing = records.find((record) => !record.siguienteCorte && dateKey(record.fecha) === recordDate);
     const nextCounts = countsFromRecord(existing);
     setRecordCounts(nextCounts);
     lastRecordSignature.current = recordSignature(recordDate, nextCounts);
@@ -940,7 +947,7 @@ function MessengerModal({
         </div>
 
         <div className="flex border-b border-slate-200">
-          {(["perfil", "registro", "reporte", "historial"] as const).map((value) => (
+          {(["perfil", "registro", "pagos", "prestamos", "reporte", "historial"] as const).map((value) => (
             <button
               key={value}
               onClick={() => setTab(value)}
@@ -952,6 +959,8 @@ function MessengerModal({
             >
               {value === "perfil" ? "Perfil y tarifas" : null}
               {value === "registro" ? "Registro diario" : null}
+              {value === "pagos" ? "Periodos y pagos" : null}
+              {value === "prestamos" ? "Prestamos" : null}
               {value === "reporte" ? "Generar reporte" : null}
               {value === "historial" ? "Historial reportes" : null}
             </button>
@@ -959,6 +968,8 @@ function MessengerModal({
         </div>
 
         <div className="flex-1 overflow-y-auto px-5 py-4">
+          {tab === "pagos" ? <PayrollPanel messengerId={messenger.id} onChanged={() => void onUpdated("")} /> : null}
+          {tab === "prestamos" ? <LoansPanel messengerId={messenger.id} /> : null}
           {tab === "perfil" ? (
             <div>
               <div className="mb-4 rounded-2xl border border-blue-100 bg-blue-50/70 p-4">
@@ -1089,7 +1100,10 @@ function MessengerModal({
                   <tbody>
                     {records.slice(0, 12).map((record) => (
                       <tr key={record.id} className="border-t border-slate-100">
-                        <td className="px-3 py-2">{dateKey(record.fecha)}</td>
+                        <td className="px-3 py-2">
+                          {dateKey(record.fecha)}
+                          {record.siguienteCorte ? <span className="ml-2 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-800">restantes tras el corte</span> : null}
+                        </td>
                         <td className="px-3 py-2">{record.entregasNormales}</td>
                         <td className="px-3 py-2">{record.entregasRemotas}</td>
                         <td className="px-3 py-2">{record.recogidasBanco}</td>
@@ -1142,7 +1156,10 @@ function MessengerModal({
                   <tbody>
                     {previewRecords.map((record) => (
                       <tr key={record.id} className="border-t border-slate-100">
-                        <td className="px-3 py-2">{dateKey(record.fecha)}</td>
+                        <td className="px-3 py-2">
+                          {dateKey(record.fecha)}
+                          {record.siguienteCorte ? <span className="ml-2 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-800">restantes tras el corte</span> : null}
+                        </td>
                         <td className="px-3 py-2">{record.entregasNormales}</td>
                         <td className="px-3 py-2">{record.entregasRemotas}</td>
                         <td className="px-3 py-2">{record.recogidasBanco}</td>

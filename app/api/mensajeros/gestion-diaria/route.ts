@@ -2,6 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { requireApiSession } from "@/lib/api-session";
 import { prisma } from "@/lib/prisma";
+import { countedBetween, lockStateFor, totalForCounts } from "@/lib/payroll/counting";
+import { openPayment } from "@/lib/payroll/payments";
+import { toPayrollDay } from "@/lib/payroll/period";
 
 const recordSchema = z.object({
   type: z.literal("record"),
@@ -19,6 +22,8 @@ const reportSchema = z.object({
   messengerId: z.string().cuid(),
   from: z.string(),
   to: z.string(),
+  /** When set, the report is the payment of that period: amounts net of loan installments. */
+  periodId: z.string().cuid().optional(),
 });
 
 const bodySchema = z.union([recordSchema, reportSchema]);
@@ -71,7 +76,7 @@ export async function GET(request: NextRequest) {
     prisma.messengerDailyRecord.findMany({
       where,
       include: { messenger: true },
-      orderBy: { fecha: "desc" },
+      orderBy: [{ fecha: "desc" }, { siguienteCorte: "asc" }],
       skip: unpaginated ? undefined : (page - 1) * pageSize,
       take: unpaginated ? undefined : pageSize,
     }),
@@ -109,55 +114,58 @@ export async function POST(request: Request) {
   }
 
   if (parsed.data.type === "record") {
-    const rates = await prisma.messengerServiceRate.findMany({
-      where: { messengerId: parsed.data.messengerId },
-    });
+    let fecha: Date;
+    try {
+      fecha = toPayrollDay(parsed.data.fecha);
+    } catch {
+      return NextResponse.json({ error: "Fecha invalida" }, { status: 400 });
+    }
 
-    const rate = (serviceType: string) => rates.find((r) => r.serviceType === serviceType)?.amountCents ?? 0;
+    const lock = await lockStateFor(prisma, parsed.data.messengerId, fecha);
+    if (lock.locked) {
+      return NextResponse.json(
+        {
+          error: `El periodo "${lock.period?.label}" de este mensajero esta bloqueado. Desbloqueelo para modificar este dia y vuelva a bloquearlo al terminar.`,
+          code: "PERIODO_BLOQUEADO",
+        },
+        { status: 409 },
+      );
+    }
 
-    const totalCents =
-      parsed.data.entregasNormales * rate("NORMAL") +
-      parsed.data.entregasRemotas * rate("REMOTA") +
-      parsed.data.recogidasBanco * rate("RECOGIDA") +
-      parsed.data.mandados * rate("MANDADO");
+    const [rates, existing] = await Promise.all([
+      prisma.messengerServiceRate.findMany({ where: { messengerId: parsed.data.messengerId } }),
+      prisma.messengerDailyRecord.findFirst({
+        where: { messengerId: parsed.data.messengerId, siguienteCorte: false, fecha: { gte: fecha, lt: new Date(fecha.getTime() + 24 * 60 * 60 * 1000) } },
+      }),
+    ]);
 
-    const fecha = new Date(parsed.data.fecha);
-    const start = new Date(fecha);
-    start.setHours(0, 0, 0, 0);
-    const end = new Date(fecha);
-    end.setHours(23, 59, 59, 999);
-
-    const existing = await prisma.messengerDailyRecord.findFirst({
-      where: {
-        messengerId: parsed.data.messengerId,
-        fecha: { gte: start, lte: end },
+    // The automatic count stays the base; what the operator types becomes an
+    // adjustment on top of it, so a later recount keeps the correction.
+    const autoNormales = existing?.autoNormales ?? 0;
+    const autoRemotas = existing?.autoRemotas ?? 0;
+    const totalCents = totalForCounts(
+      {
+        normales: parsed.data.entregasNormales,
+        remotas: parsed.data.entregasRemotas,
+        recogidas: parsed.data.recogidasBanco,
+        mandados: parsed.data.mandados,
       },
-    });
+      rates,
+    );
+    const data = {
+      entregasNormales: parsed.data.entregasNormales,
+      entregasRemotas: parsed.data.entregasRemotas,
+      ajusteNormales: parsed.data.entregasNormales - autoNormales,
+      ajusteRemotas: parsed.data.entregasRemotas - autoRemotas,
+      recogidasBanco: parsed.data.recogidasBanco,
+      mandados: parsed.data.mandados,
+      totalCents,
+      notas: parsed.data.notas,
+    };
 
     const record = existing
-      ? await prisma.messengerDailyRecord.update({
-          where: { id: existing.id },
-          data: {
-            entregasNormales: parsed.data.entregasNormales,
-            entregasRemotas: parsed.data.entregasRemotas,
-            recogidasBanco: parsed.data.recogidasBanco,
-            mandados: parsed.data.mandados,
-            totalCents,
-            notas: parsed.data.notas,
-          },
-        })
-      : await prisma.messengerDailyRecord.create({
-          data: {
-            messengerId: parsed.data.messengerId,
-            fecha,
-            entregasNormales: parsed.data.entregasNormales,
-            entregasRemotas: parsed.data.entregasRemotas,
-            recogidasBanco: parsed.data.recogidasBanco,
-            mandados: parsed.data.mandados,
-            totalCents,
-            notas: parsed.data.notas,
-          },
-        });
+      ? await prisma.messengerDailyRecord.update({ where: { id: existing.id }, data })
+      : await prisma.messengerDailyRecord.create({ data: { messengerId: parsed.data.messengerId, fecha, ...data } });
 
     return NextResponse.json({ record });
   }
@@ -165,14 +173,23 @@ export async function POST(request: Request) {
   const from = parseStartDate(parsed.data.from) ?? new Date(parsed.data.from);
   const to = parseEndDate(parsed.data.to) ?? new Date(parsed.data.to);
 
-  const records = await prisma.messengerDailyRecord.findMany({
-    where: {
-      messengerId: parsed.data.messengerId,
-      fecha: { gte: from, lte: to },
-    },
-  });
-
-  const totalCents = records.reduce((acc, item) => acc + item.totalCents, 0);
+  let totalCents: number;
+  let days: number;
+  if (parsed.data.periodId) {
+    const period = await prisma.payrollPeriod.findUnique({ where: { id: parsed.data.periodId } });
+    if (!period || (period.messengerId && period.messengerId !== parsed.data.messengerId)) {
+      return NextResponse.json({ error: "Periodo no encontrado para este mensajero" }, { status: 404 });
+    }
+    const payment = await prisma.$transaction((tx) => openPayment(tx, parsed.data.messengerId, period.id));
+    totalCents = payment.netCents;
+    days = await prisma.messengerDailyRecord.count({ where: { messengerId: parsed.data.messengerId, ...countedBetween(period.fromDate, period.toDate) } });
+  } else {
+    const records = await prisma.messengerDailyRecord.findMany({
+      where: { messengerId: parsed.data.messengerId, fecha: { gte: from, lte: to } },
+    });
+    totalCents = records.reduce((acc, item) => acc + item.totalCents, 0);
+    days = records.length;
+  }
 
   const report = await prisma.messengerReport.create({
     data: {
@@ -184,5 +201,5 @@ export async function POST(request: Request) {
     },
   });
 
-  return NextResponse.json({ report, totalCents, days: records.length }, { status: 201 });
+  return NextResponse.json({ report, totalCents, days }, { status: 201 });
 }
