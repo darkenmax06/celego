@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { requireApiSession } from "@/lib/api-session";
 import { prisma } from "@/lib/prisma";
+import { lockStateFor, totalForCounts } from "@/lib/payroll/counting";
+import { toPayrollDay } from "@/lib/payroll/period";
 
 const recordSchema = z.object({
   type: z.literal("record"),
@@ -109,55 +111,58 @@ export async function POST(request: Request) {
   }
 
   if (parsed.data.type === "record") {
-    const rates = await prisma.messengerServiceRate.findMany({
-      where: { messengerId: parsed.data.messengerId },
-    });
+    let fecha: Date;
+    try {
+      fecha = toPayrollDay(parsed.data.fecha);
+    } catch {
+      return NextResponse.json({ error: "Fecha invalida" }, { status: 400 });
+    }
 
-    const rate = (serviceType: string) => rates.find((r) => r.serviceType === serviceType)?.amountCents ?? 0;
+    const lock = await lockStateFor(prisma, parsed.data.messengerId, fecha);
+    if (lock.locked) {
+      return NextResponse.json(
+        {
+          error: `El periodo "${lock.period?.label}" de este mensajero esta bloqueado. Desbloqueelo para modificar este dia y vuelva a bloquearlo al terminar.`,
+          code: "PERIODO_BLOQUEADO",
+        },
+        { status: 409 },
+      );
+    }
 
-    const totalCents =
-      parsed.data.entregasNormales * rate("NORMAL") +
-      parsed.data.entregasRemotas * rate("REMOTA") +
-      parsed.data.recogidasBanco * rate("RECOGIDA") +
-      parsed.data.mandados * rate("MANDADO");
+    const [rates, existing] = await Promise.all([
+      prisma.messengerServiceRate.findMany({ where: { messengerId: parsed.data.messengerId } }),
+      prisma.messengerDailyRecord.findFirst({
+        where: { messengerId: parsed.data.messengerId, fecha: { gte: fecha, lt: new Date(fecha.getTime() + 24 * 60 * 60 * 1000) } },
+      }),
+    ]);
 
-    const fecha = new Date(parsed.data.fecha);
-    const start = new Date(fecha);
-    start.setHours(0, 0, 0, 0);
-    const end = new Date(fecha);
-    end.setHours(23, 59, 59, 999);
-
-    const existing = await prisma.messengerDailyRecord.findFirst({
-      where: {
-        messengerId: parsed.data.messengerId,
-        fecha: { gte: start, lte: end },
+    // The automatic count stays the base; what the operator types becomes an
+    // adjustment on top of it, so a later recount keeps the correction.
+    const autoNormales = existing?.autoNormales ?? 0;
+    const autoRemotas = existing?.autoRemotas ?? 0;
+    const totalCents = totalForCounts(
+      {
+        normales: parsed.data.entregasNormales,
+        remotas: parsed.data.entregasRemotas,
+        recogidas: parsed.data.recogidasBanco,
+        mandados: parsed.data.mandados,
       },
-    });
+      rates,
+    );
+    const data = {
+      entregasNormales: parsed.data.entregasNormales,
+      entregasRemotas: parsed.data.entregasRemotas,
+      ajusteNormales: parsed.data.entregasNormales - autoNormales,
+      ajusteRemotas: parsed.data.entregasRemotas - autoRemotas,
+      recogidasBanco: parsed.data.recogidasBanco,
+      mandados: parsed.data.mandados,
+      totalCents,
+      notas: parsed.data.notas,
+    };
 
     const record = existing
-      ? await prisma.messengerDailyRecord.update({
-          where: { id: existing.id },
-          data: {
-            entregasNormales: parsed.data.entregasNormales,
-            entregasRemotas: parsed.data.entregasRemotas,
-            recogidasBanco: parsed.data.recogidasBanco,
-            mandados: parsed.data.mandados,
-            totalCents,
-            notas: parsed.data.notas,
-          },
-        })
-      : await prisma.messengerDailyRecord.create({
-          data: {
-            messengerId: parsed.data.messengerId,
-            fecha,
-            entregasNormales: parsed.data.entregasNormales,
-            entregasRemotas: parsed.data.entregasRemotas,
-            recogidasBanco: parsed.data.recogidasBanco,
-            mandados: parsed.data.mandados,
-            totalCents,
-            notas: parsed.data.notas,
-          },
-        });
+      ? await prisma.messengerDailyRecord.update({ where: { id: existing.id }, data })
+      : await prisma.messengerDailyRecord.create({ data: { messengerId: parsed.data.messengerId, fecha, ...data } });
 
     return NextResponse.json({ record });
   }
