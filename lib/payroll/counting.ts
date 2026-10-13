@@ -106,13 +106,13 @@ export async function syncCardCredits(db: Db, cardIds: string[]): Promise<DayRef
     const samePlace = Boolean(desired && existing && existing.messengerId === desired.messengerId && sameDay(existing.naturalDay, desired.day));
     if (desired && existing && samePlace && existing.serviceType === desired.serviceType) continue;
 
-    if (existing) touch(existing.messengerId, existing.day);
+    if (existing) touch(existing.messengerId, existing.naturalDay);
     if (!desired) {
       await db.messengerDeliveryCredit.delete({ where: { cardId } });
       continue;
     }
     const countDay = samePlace && existing ? existing.day : await firstOpenDay(db, desired.messengerId, desired.day);
-    touch(desired.messengerId, countDay);
+    touch(desired.messengerId, desired.day);
     await db.messengerDeliveryCredit.upsert({
       where: { cardId },
       create: { cardId, messengerId: desired.messengerId, serviceType: desired.serviceType, naturalDay: desired.day, day: countDay },
@@ -143,13 +143,50 @@ export async function lockStateFor(db: Db, messengerId: string, day: Date) {
 
 export type RefreshOutcome = "UPDATED" | "PENDING" | "UNCHANGED";
 
-/**
- * Rewrites the automatic part of one messenger's daily record from the ledger.
- * A locked period is left untouched and the day is queued as a pending change.
- */
-export async function refreshDailyRecord(db: Db, messengerId: string, day: Date, options: { ignoreLock?: boolean } = {}): Promise<RefreshOutcome> {
+/** Records that count inside [from, to]: by the day they count for, which is `fecha` unless the delivery was carried to a later period. */
+export function countedBetween(from: Date, to: Date): Prisma.MessengerDailyRecordWhereInput {
+  const end = new Date(to.getTime() + DAY_MS);
+  return {
+    OR: [
+      { countDay: { gte: from, lt: end } },
+      { countDay: null, fecha: { gte: from, lt: end } },
+    ],
+  };
+}
+
+type Line = { siguienteCorte: boolean; countDay: Date | null; normales: number; remotas: number };
+
+/** Writes one line of a day (the main one or the after-cut one) from its credit counts. */
+async function refreshLine(db: Db, messengerId: string, day: Date, line: Line, rates: { serviceType: string; amountCents: number }[], options: { ignoreLock?: boolean }): Promise<RefreshOutcome> {
+  const existing = await db.messengerDailyRecord.findFirst({
+    where: {
+      messengerId,
+      fecha: { gte: day, lt: new Date(day.getTime() + DAY_MS) },
+      siguienteCorte: line.siguienteCorte,
+      ...(line.siguienteCorte ? { countDay: line.countDay } : {}),
+    },
+  });
+
+  // A locked line is only a pending change when its numbers would really move.
+  const expectedTotal = existing
+    ? totalForCounts(
+        {
+          normales: Math.max(0, line.normales + (line.siguienteCorte ? 0 : existing.ajusteNormales)),
+          remotas: Math.max(0, line.remotas + (line.siguienteCorte ? 0 : existing.ajusteRemotas)),
+          recogidas: line.siguienteCorte ? 0 : existing.recogidasBanco,
+          mandados: line.siguienteCorte ? 0 : existing.mandados,
+        },
+        rates,
+      )
+    : 0;
+  const wouldChange = existing
+    ? existing.autoNormales !== line.normales || existing.autoRemotas !== line.remotas || existing.totalCents !== expectedTotal
+    : line.normales > 0 || line.remotas > 0;
+  if (!wouldChange) return "UNCHANGED";
+
+  const lockDay = line.countDay ?? day;
   if (!options.ignoreLock) {
-    const state = await lockStateFor(db, messengerId, day);
+    const state = await lockStateFor(db, messengerId, lockDay);
     if (state.locked) {
       await db.payrollPendingChange.upsert({
         where: { messengerId_day: { messengerId, day } },
@@ -160,38 +197,84 @@ export async function refreshDailyRecord(db: Db, messengerId: string, day: Date,
     }
   }
 
-  const [credits, rates, existing] = await Promise.all([
-    db.messengerDeliveryCredit.groupBy({ by: ["serviceType"], where: { messengerId, day }, _count: { _all: true } }),
-    db.messengerServiceRate.findMany({ where: { messengerId } }),
-    db.messengerDailyRecord.findFirst({ where: { messengerId, fecha: { gte: day, lt: new Date(day.getTime() + 24 * 60 * 60 * 1000) } } }),
-  ]);
-  const count = (type: MessengerServiceType) => credits.find((item) => item.serviceType === type)?._count._all ?? 0;
-  const autoNormales = count("NORMAL");
-  const autoRemotas = count("REMOTA");
+  if (line.siguienteCorte) {
+    // The after-cut line is purely automatic: it disappears when nothing is left on it.
+    if (line.normales === 0 && line.remotas === 0) {
+      if (!existing) return "UNCHANGED";
+      await db.messengerDailyRecord.delete({ where: { id: existing.id } });
+      return "UPDATED";
+    }
+    const totalCents = totalForCounts({ normales: line.normales, remotas: line.remotas, recogidas: 0, mandados: 0 }, rates);
+    const data = { autoNormales: line.normales, autoRemotas: line.remotas, entregasNormales: line.normales, entregasRemotas: line.remotas, totalCents };
+    if (!existing) {
+      await db.messengerDailyRecord.create({ data: { messengerId, fecha: day, siguienteCorte: true, countDay: line.countDay, ...data } });
+      return "UPDATED";
+    }
+    if (existing.autoNormales === line.normales && existing.autoRemotas === line.remotas && existing.totalCents === totalCents) return "UNCHANGED";
+    await db.messengerDailyRecord.update({ where: { id: existing.id }, data });
+    return "UPDATED";
+  }
 
-  if (!existing && autoNormales === 0 && autoRemotas === 0) return "UNCHANGED";
-
+  if (!existing && line.normales === 0 && line.remotas === 0) return "UNCHANGED";
   const ajusteNormales = existing?.ajusteNormales ?? 0;
   const ajusteRemotas = existing?.ajusteRemotas ?? 0;
-  const entregasNormales = Math.max(0, autoNormales + ajusteNormales);
-  const entregasRemotas = Math.max(0, autoRemotas + ajusteRemotas);
+  const entregasNormales = Math.max(0, line.normales + ajusteNormales);
+  const entregasRemotas = Math.max(0, line.remotas + ajusteRemotas);
   const totalCents = totalForCounts(
     { normales: entregasNormales, remotas: entregasRemotas, recogidas: existing?.recogidasBanco ?? 0, mandados: existing?.mandados ?? 0 },
     rates,
   );
-
   if (existing) {
-    if (existing.autoNormales === autoNormales && existing.autoRemotas === autoRemotas && existing.totalCents === totalCents) return "UNCHANGED";
+    if (existing.autoNormales === line.normales && existing.autoRemotas === line.remotas && existing.totalCents === totalCents) return "UNCHANGED";
     await db.messengerDailyRecord.update({
       where: { id: existing.id },
-      data: { autoNormales, autoRemotas, entregasNormales, entregasRemotas, totalCents },
+      data: { autoNormales: line.normales, autoRemotas: line.remotas, entregasNormales, entregasRemotas, totalCents },
     });
   } else {
     await db.messengerDailyRecord.create({
-      data: { messengerId, fecha: day, autoNormales, autoRemotas, entregasNormales, entregasRemotas, totalCents },
+      data: { messengerId, fecha: day, autoNormales: line.normales, autoRemotas: line.remotas, entregasNormales, entregasRemotas, totalCents },
     });
   }
   return "UPDATED";
+}
+
+/**
+ * Rewrites the automatic part of one messenger's records for a delivery day.
+ *
+ * A day has one line, or two when its period was cut during the day: the line
+ * inside the (locked) period and a second one, flagged `siguienteCorte`, with what
+ * was delivered afterwards, which counts for the next period. A line whose period
+ * is locked is left untouched and the day is queued as a pending change.
+ */
+export async function refreshDailyRecord(db: Db, messengerId: string, day: Date, options: { ignoreLock?: boolean } = {}): Promise<RefreshOutcome> {
+  const [credits, rates, carriedRecords] = await Promise.all([
+    db.messengerDeliveryCredit.findMany({ where: { messengerId, naturalDay: day }, select: { serviceType: true, day: true } }),
+    db.messengerServiceRate.findMany({ where: { messengerId } }),
+    db.messengerDailyRecord.findMany({
+      where: { messengerId, siguienteCorte: true, fecha: { gte: day, lt: new Date(day.getTime() + DAY_MS) } },
+      select: { countDay: true },
+    }),
+  ]);
+
+  const tally = (rows: typeof credits) => ({
+    normales: rows.filter((row) => row.serviceType === "NORMAL").length,
+    remotas: rows.filter((row) => row.serviceType === "REMOTA").length,
+  });
+  const carried = credits.filter((row) => !sameDay(row.day, day));
+  const countDays = new Map<number, Date>();
+  for (const row of carried) countDays.set(row.day.getTime(), row.day);
+  for (const record of carriedRecords) if (record.countDay) countDays.set(record.countDay.getTime(), record.countDay);
+
+  const outcomes: RefreshOutcome[] = [
+    await refreshLine(db, messengerId, day, { siguienteCorte: false, countDay: null, ...tally(credits.filter((row) => sameDay(row.day, day))) }, rates, options),
+  ];
+  for (const countDay of countDays.values()) {
+    outcomes.push(
+      await refreshLine(db, messengerId, day, { siguienteCorte: true, countDay, ...tally(carried.filter((row) => sameDay(row.day, countDay))) }, rates, options),
+    );
+  }
+  if (outcomes.includes("PENDING")) return "PENDING";
+  return outcomes.includes("UPDATED") ? "UPDATED" : "UNCHANGED";
 }
 
 export async function refreshDays(db: Db, days: DayRef[], options: { ignoreLock?: boolean } = {}) {
@@ -243,7 +326,7 @@ export async function recountRange(input: { from: Date; to: Date; messengerId?: 
       distinct: ["cardId"],
     }),
     prisma.messengerDeliveryCredit.findMany({
-      where: { day: { gte: fromDay, lte: toDay }, ...(input.messengerId ? { messengerId: input.messengerId } : {}) },
+      where: { naturalDay: { gte: fromDay, lte: toDay }, ...(input.messengerId ? { messengerId: input.messengerId } : {}) },
       select: { cardId: true },
     }),
   ]);
@@ -257,11 +340,11 @@ export async function recountRange(input: { from: Date; to: Date; messengerId?: 
   }
   // Days inside the range are always refreshed so a stale daily record converges even if no credit moved.
   const credits = await prisma.messengerDeliveryCredit.findMany({
-    where: { day: { gte: fromDay, lte: toDay }, ...(input.messengerId ? { messengerId: input.messengerId } : {}) },
-    select: { messengerId: true, day: true },
-    distinct: ["messengerId", "day"],
+    where: { naturalDay: { gte: fromDay, lte: toDay }, ...(input.messengerId ? { messengerId: input.messengerId } : {}) },
+    select: { messengerId: true, naturalDay: true },
+    distinct: ["messengerId", "naturalDay"],
   });
-  for (const ref of credits) touched.set(`${ref.messengerId}|${ref.day.toISOString()}`, ref);
+  for (const ref of credits) touched.set(`${ref.messengerId}|${ref.naturalDay.toISOString()}`, { messengerId: ref.messengerId, day: ref.naturalDay });
 
   const days = [...touched.values()].filter((ref) => (!input.messengerId || ref.messengerId === input.messengerId) && ref.day >= fromDay && ref.day <= toDay);
   const outcomes = await refreshDays(prisma, days);

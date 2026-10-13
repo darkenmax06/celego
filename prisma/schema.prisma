@@ -526,6 +526,10 @@ model MessengerDailyRecord {
   entregasNormales Int       @default(0)
   entregasRemotas  Int       @default(0)
   /// Counted automatically from delivered cards (MessengerDeliveryCredit). entregasNormales/Remotas = auto + ajuste.
+  /// Day the record counts for when it differs from `fecha`: the deliveries of a day registered after its period was cut belong to a later period.
+  countDay         DateTime?
+  /// True for the second line of a cut day: what was delivered after the cut.
+  siguienteCorte   Boolean   @default(false)
   autoNormales     Int       @default(0)
   autoRemotas      Int       @default(0)
   /// Manual correction on top of the automatic count, kept so a recount never erases it.

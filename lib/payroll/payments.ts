@@ -1,5 +1,6 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
+import { countedBetween } from "@/lib/payroll/counting";
 import { loanBalanceCents, nextPendingInstallment, uncoveredCents } from "@/lib/payroll/loan-schedule";
 
 type Db = Prisma.TransactionClient | typeof prisma;
@@ -62,7 +63,7 @@ export async function refreshPaymentTotals(db: Db, paymentId: string) {
   if (payment.lockedAt) return payment;
 
   const records = await db.messengerDailyRecord.findMany({
-    where: { messengerId: payment.messengerId, fecha: { gte: payment.period.fromDate, lt: new Date(payment.period.toDate.getTime() + 24 * 60 * 60 * 1000) } },
+    where: { messengerId: payment.messengerId, ...countedBetween(payment.period.fromDate, payment.period.toDate) },
     select: { totalCents: true },
   });
   const grossCents = records.reduce((total, record) => total + record.totalCents, 0);

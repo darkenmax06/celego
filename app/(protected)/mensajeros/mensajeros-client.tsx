@@ -33,6 +33,8 @@ type DailyRecord = {
   entregasRemotas: number;
   recogidasBanco: number;
   mandados: number;
+  /** Second line of a cut day: what was delivered after the cut, counted for the next period. */
+  siguienteCorte?: boolean;
 };
 
 type MessengerReport = {
@@ -222,7 +224,7 @@ export default function MensajerosClient() {
     const next: Record<string, Counts> = {};
     messengers.forEach((messenger) => {
       const sameDay = records.find(
-        (record) => record.messengerId === messenger.id && dateKey(record.fecha) === globalDate,
+        (record) => record.messengerId === messenger.id && !record.siguienteCorte && dateKey(record.fecha) === globalDate,
       );
       next[messenger.id] = countsFromRecord(sameDay);
     });
@@ -735,7 +737,7 @@ function MessengerModal({
 
   useEffect(() => {
     skipRecordAutoSave.current = true;
-    const existing = records.find((record) => dateKey(record.fecha) === recordDate);
+    const existing = records.find((record) => !record.siguienteCorte && dateKey(record.fecha) === recordDate);
     const nextCounts = countsFromRecord(existing);
     setRecordCounts(nextCounts);
     lastRecordSignature.current = recordSignature(recordDate, nextCounts);
@@ -1098,7 +1100,10 @@ function MessengerModal({
                   <tbody>
                     {records.slice(0, 12).map((record) => (
                       <tr key={record.id} className="border-t border-slate-100">
-                        <td className="px-3 py-2">{dateKey(record.fecha)}</td>
+                        <td className="px-3 py-2">
+                          {dateKey(record.fecha)}
+                          {record.siguienteCorte ? <span className="ml-2 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-800">restantes tras el corte</span> : null}
+                        </td>
                         <td className="px-3 py-2">{record.entregasNormales}</td>
                         <td className="px-3 py-2">{record.entregasRemotas}</td>
                         <td className="px-3 py-2">{record.recogidasBanco}</td>
@@ -1151,7 +1156,10 @@ function MessengerModal({
                   <tbody>
                     {previewRecords.map((record) => (
                       <tr key={record.id} className="border-t border-slate-100">
-                        <td className="px-3 py-2">{dateKey(record.fecha)}</td>
+                        <td className="px-3 py-2">
+                          {dateKey(record.fecha)}
+                          {record.siguienteCorte ? <span className="ml-2 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-800">restantes tras el corte</span> : null}
+                        </td>
                         <td className="px-3 py-2">{record.entregasNormales}</td>
                         <td className="px-3 py-2">{record.entregasRemotas}</td>
                         <td className="px-3 py-2">{record.recogidasBanco}</td>

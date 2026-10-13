@@ -136,6 +136,41 @@ export function PayrollPanel({ messengerId, onChanged }: { messengerId: string; 
 
   const locked = Boolean(payment?.lockedAt);
 
+  async function downloadPaymentImage(period: Period) {
+    setBusy(true);
+    setMessage("");
+    const params = new URLSearchParams({
+      mode: "single",
+      messengerId,
+      periodId: period.id,
+      from: period.fromDate.slice(0, 10),
+      to: period.toDate.slice(0, 10),
+    });
+    const image = await fetch(`/api/mensajeros/reportes?${params.toString()}`);
+    if (!image.ok) {
+      const json = await image.json().catch(() => ({}));
+      setMessage(json.error ?? "No se pudo generar la imagen del pago");
+      setBusy(false);
+      return;
+    }
+    const url = URL.createObjectURL(await image.blob());
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `pago-${period.label.replace(/[^\w.-]+/g, "_")}.jpg`;
+    link.click();
+    URL.revokeObjectURL(url);
+
+    const saved = await fetch("/api/mensajeros/gestion-diaria", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ type: "report", messengerId, from: period.fromDate.slice(0, 10), to: period.toDate.slice(0, 10), periodId: period.id }),
+    });
+    const json = await saved.json().catch(() => ({}));
+    setBusy(false);
+    setMessage(saved.ok ? `Imagen del pago generada y guardada en el historial: ${formatCurrencyDOP(json.totalCents ?? 0)} a pagar` : (json.error ?? "Imagen generada, pero no se pudo guardar en el historial"));
+    onChanged?.();
+  }
+
   return (
     <div className="space-y-5">
       <div className="rounded-xl border border-slate-200 p-4">
@@ -284,6 +319,16 @@ export function PayrollPanel({ messengerId, onChanged }: { messengerId: string; 
                   <p className="mt-3 text-xs text-slate-500">Sin cuotas de prestamo en este pago.</p>
                 )}
                 {locked ? <p className="mt-2 text-xs text-slate-500">Pago cerrado. Desbloquee el periodo para modificar cuotas o dias.</p> : null}
+                <div className="mt-3 flex flex-wrap items-center gap-3">
+                  <button
+                    onClick={() => void downloadPaymentImage(period)}
+                    disabled={busy}
+                    className="rounded-xl bg-[#0f2544] px-4 py-2 text-xs font-semibold text-white disabled:opacity-50"
+                  >
+                    Generar reporte de pago (imagen)
+                  </button>
+                  {!locked ? <span className="text-xs text-amber-700">Periodo abierto: las cifras son provisionales hasta bloquearlo.</span> : null}
+                </div>
               </div>
             ) : null}
           </div>
