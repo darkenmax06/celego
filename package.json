@@ -27,7 +27,8 @@
     "postinstall": "prisma generate",
     "cards:audit-tc": "tsx scripts/audit-tc-integrity.ts",
     "lots:backfill-typed-columns": "tsx scripts/backfill-lot-typed-columns.ts",
-    "cards:backfill-legacy-origin": "tsx scripts/backfill-legacy-dispatch-origin.ts"
+    "cards:backfill-legacy-origin": "tsx scripts/backfill-legacy-dispatch-origin.ts",
+    "cards:backfill-swapped-dates": "tsx scripts/backfill-swapped-dispatch-dates.ts"
   },
   "dependencies": {
     "@prisma/client": "^6.18.0",

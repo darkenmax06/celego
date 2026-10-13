@@ -441,6 +441,9 @@ export async function persistNormalizedCardImport(input: {
     // Re-processing a batch whose cards were removed replaces its previous row outcomes.
     await tx.cardImportRow.deleteMany({ where: { batchId: input.batchId } });
 
+    // Re-processing a batch whose cards were removed replaces its previous row outcomes.
+    await tx.cardImportRow.deleteMany({ where: { batchId: input.batchId } });
+
     if (input.rejectedRows.length) {
       await tx.cardImportRow.createMany({
         data: input.rejectedRows.map((row) => ({
