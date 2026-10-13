@@ -66,10 +66,31 @@ export async function desiredCredit(db: Db, cardId: string): Promise<Credit | nu
 }
 
 const sameDay = (a: Date, b: Date) => a.getTime() === b.getTime();
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * First day a delivery can count on. A delivery registered after the messenger's
+ * period was locked does not reopen it: it counts from the day after that period
+ * ends (and keeps moving forward while the following periods are locked too).
+ */
+export async function firstOpenDay(db: Db, messengerId: string, day: Date) {
+  let candidate = day;
+  for (let guard = 0; guard < 400; guard += 1) {
+    const state = await lockStateFor(db, messengerId, candidate);
+    if (!state.locked || !state.period) return candidate;
+    candidate = new Date(state.period.toDate.getTime() + DAY_MS);
+  }
+  return candidate;
+}
 
 /**
  * Brings the credit ledger in line with the cards' current state and returns the
  * (messenger, day) pairs whose count may have changed.
+ *
+ * A new delivery (or one that changes messenger or delivery day) is credited on
+ * its first open day, so a locked period is never altered by later deliveries.
+ * Withdrawing or retyping a delivery already counted in a locked period is a change
+ * to that period and is queued as pending by the daily refresh instead.
  */
 export async function syncCardCredits(db: Db, cardIds: string[]): Promise<DayRef[]> {
   const affected = new Map<string, DayRef>();
@@ -81,18 +102,21 @@ export async function syncCardCredits(db: Db, cardIds: string[]): Promise<DayRef
       db.messengerDeliveryCredit.findUnique({ where: { cardId } }),
     ]);
     if (!desired && !existing) continue;
-    if (desired && existing && existing.messengerId === desired.messengerId && sameDay(existing.day, desired.day) && existing.serviceType === desired.serviceType) continue;
+
+    const samePlace = Boolean(desired && existing && existing.messengerId === desired.messengerId && sameDay(existing.naturalDay, desired.day));
+    if (desired && existing && samePlace && existing.serviceType === desired.serviceType) continue;
 
     if (existing) touch(existing.messengerId, existing.day);
     if (!desired) {
       await db.messengerDeliveryCredit.delete({ where: { cardId } });
       continue;
     }
-    touch(desired.messengerId, desired.day);
+    const countDay = samePlace && existing ? existing.day : await firstOpenDay(db, desired.messengerId, desired.day);
+    touch(desired.messengerId, countDay);
     await db.messengerDeliveryCredit.upsert({
       where: { cardId },
-      create: { cardId, ...desired },
-      update: desired,
+      create: { cardId, messengerId: desired.messengerId, serviceType: desired.serviceType, naturalDay: desired.day, day: countDay },
+      update: { messengerId: desired.messengerId, serviceType: desired.serviceType, naturalDay: desired.day, day: countDay },
     });
   }
   return [...affected.values()];

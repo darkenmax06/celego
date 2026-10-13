@@ -1194,6 +1194,9 @@ model MessengerDeliveryCredit {
   card        Card                 @relation(fields: [cardId], references: [id], onDelete: Cascade)
   messengerId String
   messenger   Messenger            @relation(fields: [messengerId], references: [id], onDelete: Cascade)
+  /// Day the card was really delivered.
+  naturalDay  DateTime
+  /// Day it counts for: the same day, or the first open day after a locked period closed over it.
   day         DateTime
   serviceType MessengerServiceType
   updatedAt   DateTime             @updatedAt
