@@ -149,3 +149,9 @@ describe("status-digitales: ten-image batch with one additional card", () => {
     expect(prisma.__row("card", "a2")?.status).toBe("EN_RUTA");
   });
 });
+
+// The messenger pay count is covered in payroll-counting.test.ts; these tests only exercise the transition itself.
+vi.mock("@/lib/payroll/counting", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/payroll/counting")>()),
+  syncCardsAfterChange: vi.fn(async () => ({ UPDATED: 0, PENDING: 0, UNCHANGED: 0 })),
+}));
