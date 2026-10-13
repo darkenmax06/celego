@@ -201,13 +201,14 @@ export type RecountResult = {
 };
 
 /**
- * Settings action: rebuilds the credits for every delivery inside a date range
+ * Settings action: rebuilds the credits for every delivery inside a range of payroll days
  * (cards imported or closed before the automatic count existed) and refreshes
  * the affected daily records. Locked periods are queued, never rewritten.
  */
 export async function recountRange(input: { from: Date; to: Date; messengerId?: string }): Promise<RecountResult> {
-  const fromDay = payrollDay(input.from);
-  const toDay = payrollDay(input.to);
+  // `from` and `to` are payroll days (midnight UTC of the Dominican date), as the API passes them.
+  const fromDay = input.from;
+  const toDay = input.to;
   const start = new Date(fromDay.getTime() + 4 * 60 * 60 * 1000);
   const end = new Date(toDay.getTime() + 28 * 60 * 60 * 1000);
 
