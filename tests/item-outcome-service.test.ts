@@ -611,3 +611,9 @@ describe("applyItemOutcome — deliveredWithoutContract (contract exception)", (
     expect(prisma.__row("card", CARD_ID)?.status).toBe("ACUSE_RECIBIDO");
   });
 });
+
+// The messenger pay count is covered in payroll-counting.test.ts; these tests only exercise the transition itself.
+vi.mock("@/lib/payroll/counting", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/payroll/counting")>()),
+  syncCardsAfterChange: vi.fn(async () => ({ UPDATED: 0, PENDING: 0, UNCHANGED: 0 })),
+}));

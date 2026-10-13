@@ -1,3 +1,4 @@
+import { syncCardsAfterChange } from "@/lib/payroll/counting";
 import { NextResponse } from "next/server";
 import { CardStatus, DispatchOrigin } from "@prisma/client";
 import { requireApiSession } from "@/lib/api-session";
@@ -218,6 +219,8 @@ export async function POST(request: Request) {
           byUserId: auth.session.user.id,
         },
       });
+
+      await syncCardsAfterChange(tx, [currentCard.id]);
 
       return { kind: "ACTUALIZADA" as const, card: currentCard };
     });

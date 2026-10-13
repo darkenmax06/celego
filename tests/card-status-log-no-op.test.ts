@@ -235,3 +235,9 @@ describe("updateCardsFromPinitExport: no-op status must not write a bitácora ro
     expect(logs[0]).toMatchObject({ fromStatus: "EN_RUTA", toStatus: "TD_ENTREGADO" });
   });
 });
+
+// The messenger pay count is covered in payroll-counting.test.ts; these tests only exercise the transition itself.
+vi.mock("@/lib/payroll/counting", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/payroll/counting")>()),
+  syncCardsAfterChange: vi.fn(async () => ({ UPDATED: 0, PENDING: 0, UNCHANGED: 0 })),
+}));

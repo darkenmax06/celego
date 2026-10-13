@@ -1,3 +1,4 @@
+import { syncCardsAfterChange } from "@/lib/payroll/counting";
 import { Prisma, type CardStatus, type UserRole } from "@prisma/client";
 import { writeAuditEvent } from "@/lib/audit";
 import { prisma } from "@/lib/prisma";
@@ -268,6 +269,7 @@ async function syncDebitCards(
           },
         });
       }
+      await syncCardsAfterChange(tx, [existing.id]);
       cards.set(debitRowKey(row), existing.id);
       updated += 1;
     } else {
@@ -298,6 +300,7 @@ async function syncDebitCards(
           byUserId: userId,
         },
       });
+      await syncCardsAfterChange(tx, [card.id]);
       cards.set(debitRowKey(row), card.id);
       created += 1;
     }
