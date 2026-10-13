@@ -25,17 +25,54 @@ type UploadStatus = {
   type: "success" | "error" | "info";
   message: string;
   details?: string;
+  sections?: IssueSection[];
 };
 
+export type IssueSection = { title: string; lines: string[]; visible: number };
+
 /** One line per row so every rejected, skipped or ignored card says exactly why. */
-function summarizeRowErrors(errors: RowError[] | undefined, title = "Rechazadas", limit = 12) {
+function summarizeRowErrors(errors: RowError[] | undefined, title: string, visible = 12): IssueSection | undefined {
   if (!errors?.length) return undefined;
-  const lines = errors.slice(0, limit).map((error) => {
+  const lines = errors.map((error) => {
     const reason = error.message?.trim() || "motivo no especificado";
-    return typeof error.row === "number" ? `• Fila ${error.row}: ${reason}` : `• ${reason}`;
+    return typeof error.row === "number" ? `Fila ${error.row}: ${reason}` : reason;
   });
-  if (errors.length > limit) lines.push(`• ... y ${errors.length - limit} más`);
-  return [`${title} (${errors.length}):`, ...lines].join("\n");
+  return { title, lines, visible };
+}
+
+/** Shows the first lines of each group and expands to every case on demand. */
+export function IssueSections({ sections }: { sections: IssueSection[] }) {
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  return (
+    <div className="mt-2 space-y-3 text-xs opacity-90">
+      {sections.map((section) => {
+        const open = expanded[section.title] ?? false;
+        const hidden = section.lines.length - section.visible;
+        const shown = open ? section.lines : section.lines.slice(0, section.visible);
+        return (
+          <div key={section.title}>
+            <p className="font-semibold">
+              {section.title} ({section.lines.length}):
+            </p>
+            <ul className={cn("mt-1 space-y-0.5 leading-relaxed", open && "max-h-96 overflow-y-auto pr-2")}>
+              {shown.map((line, index) => (
+                <li key={`${index}-${line}`}>• {line}</li>
+              ))}
+            </ul>
+            {hidden > 0 ? (
+              <button
+                type="button"
+                onClick={() => setExpanded((current) => ({ ...current, [section.title]: !open }))}
+                className="mt-1 font-semibold underline underline-offset-2 hover:opacity-80"
+              >
+                {open ? "Ver menos" : `Ver los ${hidden} restantes`}
+              </button>
+            ) : null}
+          </div>
+        );
+      })}
+    </div>
+  );
 }
 
 /**
@@ -136,15 +173,15 @@ export function CardImportPanels() {
           ? `Data Diaria Crédito ya procesada anteriormente: ${created} creadas, ${updated} actualizadas, ${skipped} omitidas, ${rejected} rechazadas.`
           : `Data Diaria Crédito importada: ${created} creadas, ${updated} actualizadas, ${skipped} omitidas, ${rejected} rechazadas (${totalRows} filas en el archivo).`;
         // Rejected rows are dropped silently unless the reasons are surfaced here.
-        const reasons = [
+        const sections = [
           summarizeRowErrors(data.errors, "Rechazadas"),
           summarizeRowErrors(data.skippedRows, "Omitidas"),
           summarizeRowErrors(data.ignoredRows, "Ignoradas (no son tarjetas)", 5),
-        ].filter(Boolean).join("\n\n") || undefined;
+        ].filter((section): section is IssueSection => Boolean(section));
         setUploadStatus({
           type: rejected > 0 ? "error" : skipped > 0 ? "info" : "success",
           message: msg,
-          details: reasons,
+          sections: sections.length ? sections : undefined,
         });
       } else if (endpoint === "/api/importaciones/urgentes") {
         const linked = data.linked ?? 0;
@@ -195,6 +232,7 @@ export function CardImportPanels() {
               {uploadStatus.details ? (
                 <p className="text-xs opacity-85 mt-1 leading-relaxed whitespace-pre-line">{uploadStatus.details}</p>
               ) : null}
+              {uploadStatus.sections ? <IssueSections sections={uploadStatus.sections} /> : null}
             </div>
           </div>
           <button
