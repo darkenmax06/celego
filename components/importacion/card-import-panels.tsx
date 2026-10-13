@@ -27,23 +27,15 @@ type UploadStatus = {
   details?: string;
 };
 
-/** Groups rejected-row reasons so a partial import never looks like a clean one. */
-function summarizeRowErrors(errors: RowError[] | undefined) {
+/** One line per row so every rejected, skipped or ignored card says exactly why. */
+function summarizeRowErrors(errors: RowError[] | undefined, title = "Rechazadas", limit = 12) {
   if (!errors?.length) return undefined;
-  const byReason = new Map<string, number[]>();
-  for (const error of errors) {
+  const lines = errors.slice(0, limit).map((error) => {
     const reason = error.message?.trim() || "motivo no especificado";
-    const rows = byReason.get(reason) ?? [];
-    if (typeof error.row === "number") rows.push(error.row);
-    byReason.set(reason, rows);
-  }
-  return [...byReason.entries()]
-    .map(([reason, rows]) => {
-      const shown = rows.slice(0, 10).join(", ");
-      const rest = rows.length > 10 ? ` y ${rows.length - 10} más` : "";
-      return rows.length ? `${reason} (${rows.length}): filas ${shown}${rest}` : reason;
-    })
-    .join(" — ");
+    return typeof error.row === "number" ? `• Fila ${error.row}: ${reason}` : `• ${reason}`;
+  });
+  if (errors.length > limit) lines.push(`• ... y ${errors.length - limit} más`);
+  return [`${title} (${errors.length}):`, ...lines].join("\n");
 }
 
 /**
@@ -141,12 +133,16 @@ export function CardImportPanels() {
         const parsed = data.parsedRows ?? (created + updated + skipped);
         const totalRows = parsed + rejected;
         const msg = data.replay
-          ? `Data Diaria Crédito ya procesada anteriormente: ${created} creadas, ${updated} actualizadas.`
+          ? `Data Diaria Crédito ya procesada anteriormente: ${created} creadas, ${updated} actualizadas, ${skipped} omitidas, ${rejected} rechazadas.`
           : `Data Diaria Crédito importada: ${created} creadas, ${updated} actualizadas, ${skipped} omitidas, ${rejected} rechazadas (${totalRows} filas en el archivo).`;
         // Rejected rows are dropped silently unless the reasons are surfaced here.
-        const reasons = summarizeRowErrors(data.errors);
+        const reasons = [
+          summarizeRowErrors(data.errors, "Rechazadas"),
+          summarizeRowErrors(data.skippedRows, "Omitidas"),
+          summarizeRowErrors(data.ignoredRows, "Ignoradas (no son tarjetas)", 5),
+        ].filter(Boolean).join("\n\n") || undefined;
         setUploadStatus({
-          type: rejected > 0 ? "error" : "success",
+          type: rejected > 0 ? "error" : skipped > 0 ? "info" : "success",
           message: msg,
           details: reasons,
         });
@@ -197,7 +193,7 @@ export function CardImportPanels() {
             <div>
               <p className="font-semibold">{uploadStatus.message}</p>
               {uploadStatus.details ? (
-                <p className="text-xs opacity-85 mt-1 leading-relaxed">{uploadStatus.details}</p>
+                <p className="text-xs opacity-85 mt-1 leading-relaxed whitespace-pre-line">{uploadStatus.details}</p>
               ) : null}
             </div>
           </div>
