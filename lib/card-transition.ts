@@ -5,6 +5,7 @@ import {
   parkUrgencyOnPendingReception,
 } from "@/lib/urgent-alerts";
 import { isTerminalCardStatus, nextTcGuardState } from "@/lib/dispatch-origin";
+import { isPaidDeliveryStatus, syncCardsAfterChange } from "@/lib/payroll/counting";
 
 export const RETURN_REASON_REQUIRED = "RETURN_REASON_REQUIRED";
 
@@ -142,6 +143,11 @@ export async function applyCardTransition({
         byUserId,
       },
     });
+  }
+
+  // Messenger pay follows deliveries: credit, move or withdraw this card's delivery.
+  if (isPaidDeliveryStatus(card.status) || isPaidDeliveryStatus(nextStatus)) {
+    await syncCardsAfterChange(tx, [card.id]);
   }
 
   return updated;

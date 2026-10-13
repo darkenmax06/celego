@@ -8,6 +8,7 @@ import { toCardStatus } from "@/lib/card-status";
 import { buildListEnvelope, compile, ListQueryValidationError } from "@/lib/list-query";
 import { tarjetasListQuery } from "@/lib/list-query/descriptors/tarjetas";
 import { applyContactoEstado } from "@/lib/list-query/tarjetas-where";
+import { createManualCreditCard, ManualCardError, upsertCustomerPreservingData } from "@/lib/card-service";
 import { applyCardTransition, RETURN_REASON_REQUIRED } from "@/lib/card-transition";
 
 const originSchema = z.enum(["TORRE_POPULAR", "CENTRO_ACOPIO"]);
@@ -36,6 +37,8 @@ const createSchema = z.object({
   nombre: z.string().trim().min(1),
   provincia: z.string().trim().optional(),
   zona: z.string().trim().optional(),
+  telefonos: z.string().trim().optional(),
+  direccion: z.string().trim().optional(),
   isRemote: z.boolean().optional(),
   dispatchDate: z.coerce.date().optional(),
   origin: originSchema.optional().default("TORRE_POPULAR"),
@@ -219,20 +222,48 @@ export async function POST(request: Request) {
 
   const parsed = createSchema.safeParse(await request.json());
   if (!parsed.success) {
-    return NextResponse.json({ error: "Datos de tarjeta inv\u00e1lidos" }, { status: 400 });
+    const detail = parsed.error.issues.map((issue) => `${issue.path.join(".") || "datos"}: ${issue.message}`).join("; ");
+    return NextResponse.json({ error: `Datos de tarjeta inválidos (${detail})` }, { status: 400 });
   }
-  const { productType, tc, requestNumber, cedula, nombre, provincia, zona, isRemote, dispatchDate } = parsed.data;
+  const { productType, tc, requestNumber, cedula, nombre, provincia, zona, telefonos, direccion, isRemote, dispatchDate, origin } = parsed.data;
 
-  const customer = await prisma.customer.upsert({
-    where: { cedula },
-    update: { nombre, provincia: provincia ?? undefined, zona: zona ?? undefined },
-    create: { cedula, nombre, provincia: provincia ?? null, zona: zona ?? null },
+  if (productType === CardProductType.CREDITO) {
+    try {
+      const { card, preserved } = await createManualCreditCard({
+        tc: tc!,
+        cedula,
+        nombre,
+        provincia: provincia!,
+        zona,
+        telefonosRaw: telefonos,
+        direccionRaw: direccion,
+        dispatchDate,
+        origin,
+        isRemote,
+        byUserId: auth.session.user.id,
+      });
+      return NextResponse.json({ card, preservedCustomerFields: preserved }, { status: 201 });
+    } catch (error) {
+      if (error instanceof ManualCardError) {
+        return NextResponse.json({ error: error.message, code: error.code }, { status: error.status });
+      }
+      throw error;
+    }
+  }
+
+  const { customer } = await upsertCustomerPreservingData(prisma, {
+    cedula,
+    nombre,
+    provincia: provincia ?? null,
+    zona: zona ?? null,
+    telefonosRaw: telefonos ?? null,
+    direccionRaw: direccion ?? null,
   });
 
   const card = await prisma.card.create({
     data: {
-      tc: productType === CardProductType.CREDITO ? tc! : "",
-      requestNumber: productType === CardProductType.DEBITO ? requestNumber : null,
+      tc: "",
+      requestNumber,
       productType,
       customerId: customer.id,
       provincia: provincia ?? "Santo Domingo",

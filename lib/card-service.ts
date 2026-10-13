@@ -9,8 +9,9 @@ import { type ParsedDebitConsolidadoRow } from "@/lib/importers/debit-consolidad
 import { type ParsedDebitDespachoRow } from "@/lib/importers/debit-despacho";
 import { type ParsedDebitPinitRow } from "@/lib/importers/debit-pinit-import";
 import { isDebitTerminalStatus } from "@/lib/debit-status";
-import { canCreateDispatch, DispatchConflictError, nextTcGuardState } from "@/lib/dispatch-origin";
+import { buildSourceRecordKey, canCreateDispatch, DispatchConflictError, nextTcGuardState } from "@/lib/dispatch-origin";
 import { resolveZone } from "@/lib/zone-map";
+import { mergePhoneLists, planCustomerMerge, type CustomerData } from "@/lib/customer-merge";
 import { normalizeText } from "@/lib/utils";
 import { recalculateAdditionalCardsForGroups } from "@/lib/card-additional";
 import { applyMessengerReassignment } from "@/lib/route-reassignment";
@@ -79,23 +80,13 @@ export async function upsertCardsFromImport(rows: ParsedCardRow[], byUserId?: st
       resolveZone(provincia, zoneFromFile ?? "Metro");
     const zona = zoneFromProvince || zoneFromFile || "Metro";
 
-    const customer = await prisma.customer.upsert({
-      where: { cedula: item.cedula },
-      update: {
-        nombre: item.nombre,
-        telefonosRaw: item.telefonosRaw,
-        direccionRaw: item.direccionRaw,
-        provincia,
-        zona,
-      },
-      create: {
-        cedula: item.cedula,
-        nombre: item.nombre,
-        telefonosRaw: item.telefonosRaw,
-        direccionRaw: item.direccionRaw,
-        provincia,
-        zona,
-      },
+    const { customer } = await upsertCustomerPreservingData(prisma, {
+      cedula: item.cedula,
+      nombre: item.nombre,
+      telefonosRaw: item.telefonosRaw,
+      direccionRaw: item.direccionRaw,
+      provincia: provincia,
+      zona: zona,
     });
 
     const status = toCardStatus(item.status);
@@ -331,13 +322,6 @@ export function statusToRouteLifecycle(status: CardStatus) {
   return "PENDIENTE" as const;
 }
 
-export class CardImportConflictError extends Error {
-  constructor(public readonly code: "DELIVERED_TC_CONFLICT" | "ACTIVE_TC_CONFLICT") {
-    super(code);
-    this.name = "CardImportConflictError";
-  }
-}
-
 function nonEmpty(value: string | null | undefined) {
   const trimmed = value?.trim();
   return trimmed ? trimmed : null;
@@ -354,17 +338,108 @@ export function resolveNormalizedImportLocation(item: Pick<NormalizedCardImportR
   return { province, zone };
 }
 
-/** Persists the normalized dual-source contract without lifecycle regression on replay. */
+type CustomerClient = Prisma.TransactionClient | typeof prisma;
+
+/**
+ * Creates the customer or completes it without replacing what is already stored.
+ * Returns the customer plus the labels of the fields whose stored value was kept.
+ */
+export async function upsertCustomerPreservingData(
+  db: CustomerClient,
+  input: { cedula: string; nombre: string } & Partial<Omit<CustomerData, "nombre">>,
+) {
+  const base = await db.customer.upsert({
+    where: { cedula: input.cedula },
+    update: {},
+    create: {
+      cedula: input.cedula,
+      nombre: input.nombre,
+      telefonosRaw: nonEmpty(input.telefonosRaw),
+      direccionRaw: nonEmpty(input.direccionRaw),
+      provincia: nonEmpty(input.provincia),
+      zona: nonEmpty(input.zona),
+    },
+  });
+  const plan = planCustomerMerge(base, input);
+  const customer = Object.keys(plan.data).length
+    ? await db.customer.update({ where: { id: base.id }, data: plan.data })
+    : base;
+  return { customer, preserved: plan.preserved };
+}
+
+export type ImportRowIssue = { row: number; code: string; message: string };
+
+function isoDay(value: Date) {
+  return value.toISOString().slice(0, 10);
+}
+
+function shownValue(value: string | null | undefined) {
+  return value ? `"${value}"` : "vacio";
+}
+
+type TcAvailability =
+  | { ok: true }
+  | { ok: false; code: "DELIVERED_TC_CONFLICT" | "ACTIVE_TC_CONFLICT"; message: string };
+
+/**
+ * Says whether a new dispatch may be created for this TC, and why not when it
+ * may not. The guard row is upserted first to serialize every creation of the
+ * same TC, including the first one.
+ */
+async function checkTcAvailability(tx: Prisma.TransactionClient, tc: string): Promise<TcAvailability> {
+  await tx.cardTcGuard.upsert({ where: { tc }, update: {}, create: { tc } });
+  const guard = await tx.cardTcGuard.findUniqueOrThrow({ where: { tc } });
+  // Guard ids have no FK, so a hard-deleted card leaves a dangling reference that must not block a new dispatch.
+  const liveGuardIds = new Set((await tx.card.findMany({
+    where: { id: { in: [guard.activeCardId, guard.deliveredCardId].filter((id): id is string => Boolean(id)) } },
+    select: { id: true },
+  })).map((row) => row.id));
+  const activeCardId = guard.activeCardId && liveGuardIds.has(guard.activeCardId) ? guard.activeCardId : null;
+  const deliveredCardId = guard.deliveredCardId && liveGuardIds.has(guard.deliveredCardId) ? guard.deliveredCardId : null;
+  if (activeCardId !== guard.activeCardId || deliveredCardId !== guard.deliveredCardId) {
+    await tx.cardTcGuard.update({ where: { tc }, data: { activeCardId, deliveredCardId } });
+  }
+  try {
+    canCreateDispatch({ tc, activeCardId, deliveredCardId });
+    return { ok: true };
+  } catch (error) {
+    if (!(error instanceof DispatchConflictError)) throw error;
+    const blockingId = error.code === "DELIVERED_TC_CONFLICT" ? deliveredCardId : activeCardId;
+    const blocking = blockingId
+      ? await tx.card.findUnique({ where: { id: blockingId }, select: { status: true, dispatchDate: true } })
+      : null;
+    const detail = blocking ? ` (estado ${blocking.status}${blocking.dispatchDate ? `, despachada el ${isoDay(blocking.dispatchDate)}` : ""})` : "";
+    return {
+      ok: false,
+      code: error.code,
+      message: error.code === "DELIVERED_TC_CONFLICT"
+        ? `La TC ${tc} ya fue entregada${detail}; no se crea otro despacho para una tarjeta entregada`
+        : `La TC ${tc} ya tiene un despacho activo${detail}; no se duplica la tarjeta`,
+    };
+  }
+}
+
+/**
+ * Persists the normalized dual-source contract without lifecycle regression on replay.
+ *
+ * A row that cannot become a card (unresolvable zone, TC already dispatched) is
+ * rejected with its own reason instead of aborting the whole file, and an
+ * existing customer is completed, never overwritten.
+ */
 export async function persistNormalizedCardImport(input: {
   batchId: string;
   rows: NormalizedCardImportRow[];
-  rejectedRows: Array<{ row: number; code: string; message: string }>;
+  rejectedRows: ImportRowIssue[];
   byUserId?: string;
 }) {
   return prisma.$transaction(async (tx) => {
     let created = 0;
     const updated = 0;
-    let skipped = 0;
+    const skippedRows: ImportRowIssue[] = [];
+    const rejectedRows: ImportRowIssue[] = [...input.rejectedRows];
+
+    // Re-processing a batch whose cards were removed replaces its previous row outcomes.
+    await tx.cardImportRow.deleteMany({ where: { batchId: input.batchId } });
 
     if (input.rejectedRows.length) {
       await tx.cardImportRow.createMany({
@@ -378,39 +453,44 @@ export async function persistNormalizedCardImport(input: {
       });
     }
 
+    const reject = async (item: NormalizedCardImportRow, code: string, message: string) => {
+      await tx.cardImportRow.create({
+        data: { batchId: input.batchId, sourceRow: item.sourceRowNumber, sourceKey: `REJECTED:${item.sourceRowNumber}:${code}`, outcome: "REJECTED", reason: message },
+      });
+      rejectedRows.push({ row: item.sourceRowNumber, code, message });
+    };
+
     for (const item of input.rows) {
       const existing = await tx.card.findUnique({ where: { sourceRecordKey: item.sourceRecordKey } });
       if (existing) {
+        const message = `Tarjeta omitida: la TC ${item.tc} con cedula ${item.cedula} y fecha ${isoDay(item.dispatchDate)} ya existe en el sistema (estado ${existing.status}); no se modifico nada`;
         await tx.cardImportRow.create({
-          data: { batchId: input.batchId, cardId: existing.id, sourceRow: item.sourceRowNumber, sourceKey: item.sourceRecordKey, outcome: "SKIPPED", reason: "SOURCE_RECORD_REPLAY" },
+          data: { batchId: input.batchId, cardId: existing.id, sourceRow: item.sourceRowNumber, sourceKey: item.sourceRecordKey, outcome: "SKIPPED", reason: message },
         });
-        skipped += 1;
+        skippedRows.push({ row: item.sourceRowNumber, code: "SOURCE_RECORD_REPLAY", message });
         continue;
       }
 
       const { province, zone } = resolveNormalizedImportLocation(item);
-      if (!zone) throw new Error(`UNRESOLVED_ZONE_ROW_${item.sourceRowNumber}:${item.provincia ?? item.zona ?? ""}`);
-      const customer = await tx.customer.upsert({
-        where: { cedula: item.cedula },
-        update: {
-          ...(nonEmpty(item.nombre) ? { nombre: item.nombre } : {}),
-          ...(nonEmpty(item.direccionRaw) ? { direccionRaw: item.direccionRaw } : {}),
-          ...(nonEmpty(item.telefonosRaw) ? { telefonosRaw: item.telefonosRaw } : {}),
-          ...(province ? { provincia: province } : {}),
-          ...(zone ? { zona: zone } : {}),
-        },
-        create: { cedula: item.cedula, nombre: item.nombre, direccionRaw: item.direccionRaw || null, telefonosRaw: item.telefonosRaw, provincia: province, zona: zone },
-      });
-
-      // Upsert first to serialize all creations for this TC, including the first one.
-      await tx.cardTcGuard.upsert({ where: { tc: item.tc }, update: {}, create: { tc: item.tc } });
-      const guard = await tx.cardTcGuard.findUniqueOrThrow({ where: { tc: item.tc } });
-      try {
-        canCreateDispatch({ tc: item.tc, activeCardId: guard?.activeCardId ?? null, deliveredCardId: guard?.deliveredCardId ?? null });
-      } catch (error) {
-        if (error instanceof DispatchConflictError) throw new CardImportConflictError(error.code);
-        throw error;
+      if (!zone) {
+        await reject(item, "UNRESOLVED_ZONE", `Zona no resuelta: provincia ${shownValue(item.provincia)} y zona ${shownValue(item.zona)} no coinciden con ninguna provincia configurada; corrija la columna ZONA/PROVINCIA o agreguela al mapa de zonas`);
+        continue;
       }
+
+      const availability = await checkTcAvailability(tx, item.tc);
+      if (!availability.ok) {
+        await reject(item, availability.code, `${availability.message}; se omite la fila`);
+        continue;
+      }
+
+      const { customer, preserved } = await upsertCustomerPreservingData(tx, {
+        cedula: item.cedula,
+        nombre: item.nombre,
+        telefonosRaw: item.telefonosRaw,
+        direccionRaw: item.direccionRaw,
+        provincia: province,
+        zona: zone,
+      });
 
       const sla = await getSlaDaysForRow(item.cedula, item.externalReference ?? "");
       const card = await tx.card.create({
@@ -437,16 +517,111 @@ export async function persistNormalizedCardImport(input: {
       });
       await tx.cardTcGuard.upsert({ where: { tc: item.tc }, update: { activeCardId: card.id }, create: { tc: item.tc, activeCardId: card.id } });
       await tx.cardStatusLog.create({ data: { cardId: card.id, toStatus: CardStatus.DESPACHADA, note: "Creada por importacion", byUserId: input.byUserId } });
-      await tx.cardImportRow.create({ data: { batchId: input.batchId, cardId: card.id, sourceRow: item.sourceRowNumber, sourceKey: item.sourceRecordKey, outcome: "CREATED" } });
+      await tx.cardImportRow.create({
+        data: {
+          batchId: input.batchId,
+          cardId: card.id,
+          sourceRow: item.sourceRowNumber,
+          sourceKey: item.sourceRecordKey,
+          outcome: "CREATED",
+          reason: preserved.length ? `Datos del cliente conservados sin sobrescribir: ${preserved.join(", ")}` : null,
+        },
+      });
       created += 1;
     }
 
     await tx.cardImportBatch.update({
       where: { id: input.batchId },
-      data: { status: "COMPLETED", rowCount: input.rows.length + input.rejectedRows.length, createdCount: created, updatedCount: updated, skippedCount: skipped, rejectedCount: input.rejectedRows.length, completedAt: new Date() },
+      data: { status: "COMPLETED", rowCount: input.rows.length + input.rejectedRows.length, createdCount: created, updatedCount: updated, skippedCount: skippedRows.length, rejectedCount: rejectedRows.length, completedAt: new Date() },
     });
-    return { created, updated, skipped, rejected: input.rejectedRows.length };
+    return { created, updated, skipped: skippedRows.length, rejected: rejectedRows.length, rejectedRows, skippedRows };
   }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+}
+
+export class ManualCardError extends Error {
+  constructor(
+    public readonly code: "INVALID_TC" | "INVALID_CEDULA" | "UNRESOLVED_ZONE" | "DUPLICATE_SOURCE_RECORD" | "DELIVERED_TC_CONFLICT" | "ACTIVE_TC_CONFLICT",
+    message: string,
+    public readonly status: 409 | 422,
+  ) {
+    super(message);
+    this.name = "ManualCardError";
+  }
+}
+
+/**
+ * Creates one credit card by hand under the same rules as the file import:
+ * TC/cedula validation, province-to-zone resolution, duplicate and active-TC
+ * guards, SLA, and a customer that is completed but never overwritten.
+ */
+export async function createManualCreditCard(input: {
+  tc: string;
+  cedula: string;
+  nombre: string;
+  provincia: string;
+  zona?: string | null;
+  telefonosRaw?: string | null;
+  direccionRaw?: string | null;
+  dispatchDate?: Date;
+  origin: "TORRE_POPULAR" | "CENTRO_ACOPIO";
+  isRemote?: boolean;
+  byUserId?: string;
+}) {
+  const tc = input.tc.replace(/\D/g, "");
+  const cedula = input.cedula.replace(/\D/g, "");
+  if (!/^\d{15,19}$/.test(tc) || /^0+$/.test(tc)) {
+    throw new ManualCardError("INVALID_TC", `TC invalida: ${shownValue(input.tc)} (debe tener entre 15 y 19 digitos y no ser solo ceros)`, 422);
+  }
+  if (!/^\d{9,13}$/.test(cedula) || /^0+$/.test(cedula)) {
+    throw new ManualCardError("INVALID_CEDULA", `Cedula invalida: ${shownValue(input.cedula)} (debe tener entre 9 y 13 digitos y no ser solo ceros)`, 422);
+  }
+  const { province, zone } = resolveNormalizedImportLocation({ origin: "TORRE_POPULAR", provincia: input.provincia, zona: input.zona ?? null });
+  if (!zone) {
+    throw new ManualCardError("UNRESOLVED_ZONE", `Zona no resuelta: la provincia ${shownValue(input.provincia)} no coincide con ninguna provincia configurada`, 422);
+  }
+  const dispatchDate = input.dispatchDate ?? new Date();
+  const sourceRecordKey = buildSourceRecordKey({ origin: input.origin, tc, cedula, dispatchDate });
+  const telefonosRaw = mergePhoneLists(null, input.telefonosRaw);
+
+  const result = await prisma.$transaction(async (tx) => {
+    if (await tx.card.findUnique({ where: { sourceRecordKey }, select: { id: true } })) {
+      throw new ManualCardError("DUPLICATE_SOURCE_RECORD", `Ya existe una tarjeta con la TC ${tc}, la cedula ${cedula} y la fecha ${isoDay(dispatchDate)}; no se creo otra`, 409);
+    }
+    const availability = await checkTcAvailability(tx, tc);
+    if (!availability.ok) throw new ManualCardError(availability.code, availability.message, 409);
+
+    const { customer, preserved } = await upsertCustomerPreservingData(tx, {
+      cedula,
+      nombre: input.nombre.trim(),
+      telefonosRaw,
+      direccionRaw: nonEmpty(input.direccionRaw),
+      provincia: province,
+      zona: zone,
+    });
+    const sla = await getSlaDaysForRow(cedula, "");
+    const card = await tx.card.create({
+      data: {
+        tc,
+        customerId: customer.id,
+        zona: zone,
+        provincia: province ?? zone,
+        dispatchDate,
+        status: CardStatus.DESPACHADA,
+        isRemote: Boolean(input.isRemote),
+        dispatchOrigin: input.origin,
+        sourceRecordKey,
+        slaDueDate: addBusinessDaysStrict(dispatchDate, sla.totalDays),
+        slaExtensionDays: Math.max(0, sla.totalDays - sla.businessDays),
+      },
+      include: { customer: true },
+    });
+    await tx.cardTcGuard.upsert({ where: { tc }, update: { activeCardId: card.id }, create: { tc, activeCardId: card.id } });
+    await tx.cardStatusLog.create({ data: { cardId: card.id, toStatus: CardStatus.DESPACHADA, note: "Creacion manual", byUserId: input.byUserId } });
+    return { card, preserved };
+  }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+
+  await recalculateAdditionalCardsForGroups([{ customerCedula: cedula, dispatchDate: result.card.dispatchDate }]);
+  return result;
 }
 
 export async function updateTcGuardAfterTransition(input: { cardId: string; tc: string; nextStatus: CardStatus }) {
@@ -475,23 +650,13 @@ export async function persistDebitConsolidadoImport(input: {
   let updated = 0;
 
   for (const item of input.rows) {
-    const customer = await prisma.customer.upsert({
-      where: { cedula: item.cedula },
-      update: {
-        nombre: item.nombre,
-        telefonosRaw: item.telefonosRaw || undefined,
-        direccionRaw: item.direccionRaw || undefined,
-        provincia: item.provincia,
-        zona: item.zona,
-      },
-      create: {
-        cedula: item.cedula,
-        nombre: item.nombre,
-        telefonosRaw: item.telefonosRaw,
-        direccionRaw: item.direccionRaw,
-        provincia: item.provincia,
-        zona: item.zona,
-      },
+    const { customer } = await upsertCustomerPreservingData(prisma, {
+      cedula: item.cedula,
+      nombre: item.nombre,
+      telefonosRaw: item.telefonosRaw,
+      direccionRaw: item.direccionRaw,
+      provincia: item.provincia,
+      zona: item.zona,
     });
 
     const sla = await getSlaDaysForRow(item.cedula, item.requestNumber);
@@ -602,23 +767,13 @@ export async function persistDebitDespachoImport(input: {
   const createdCards = [];
 
   for (const item of input.rows) {
-    const customer = await prisma.customer.upsert({
-      where: { cedula: item.cedula },
-      update: {
-        nombre: item.nombre,
-        telefonosRaw: item.telefonosRaw || undefined,
-        direccionRaw: item.direccionRaw || undefined,
-        provincia: item.provincia,
-        zona: item.zona,
-      },
-      create: {
-        cedula: item.cedula,
-        nombre: item.nombre,
-        telefonosRaw: item.telefonosRaw,
-        direccionRaw: item.direccionRaw,
-        provincia: item.provincia,
-        zona: item.zona,
-      },
+    const { customer } = await upsertCustomerPreservingData(prisma, {
+      cedula: item.cedula,
+      nombre: item.nombre,
+      telefonosRaw: item.telefonosRaw,
+      direccionRaw: item.direccionRaw,
+      provincia: item.provincia,
+      zona: item.zona,
     });
 
     const sla = await getSlaDaysForRow(item.cedula, item.requestNumber);

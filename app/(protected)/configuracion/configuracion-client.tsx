@@ -2,6 +2,7 @@
 
 import { FormEvent, useEffect, useState } from "react";
 import toast from "react-hot-toast";
+import { RecountDeliveries } from "@/components/config/recount-deliveries";
 import { UserManagement } from "@/components/config/user-management";
 import { PageHeader } from "@/components/ui/page-header";
 import { Panel } from "@/components/ui/panel";
@@ -294,6 +295,9 @@ export default function ConfiguracionClient() {
       ) : (
         <>
           <div className="grid gap-5 xl:grid-cols-2">
+            <div className="xl:col-span-2">
+              <RecountDeliveries />
+            </div>
             <Panel title="SLA de entrega">
               {sla ? (
                 <div className="flex flex-wrap items-center gap-3">
