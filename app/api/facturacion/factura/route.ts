@@ -1,13 +1,11 @@
 import { promises as fs } from "fs";
 import path from "path";
 import { NextResponse } from "next/server";
-import { CardStatus } from "@prisma/client";
 import { PDFDocument, type PDFFont, type PDFPage, StandardFonts, rgb } from "pdf-lib";
 import { z } from "zod";
 import { requireApiSession } from "@/lib/api-session";
-import { dedupeBillingCardsByCustomerAndDispatchDate } from "@/lib/billing";
-import { resolveBillableZone } from "@/lib/delivery-location";
-import { prisma } from "@/lib/prisma";
+import { MissingBillingTariffError } from "@/lib/billing";
+import { loadBillingReport } from "@/lib/billing-report";
 import { writeAuditEvent } from "@/lib/audit";
 
 const schema = z.object({
@@ -27,7 +25,6 @@ const schema = z.object({
   paymentTerms: z.string().optional(),
 });
 
-type TariffRange = { minQty: number; maxQty: number | null; centsPerCard: number };
 
 type DrawTextInput = {
   x: number;
@@ -47,16 +44,6 @@ type DrawRightTextInput = {
   bold?: boolean;
 };
 
-function resolveCentsPerCard(
-  count: number,
-  baseCents: number,
-  ranges: TariffRange[],
-) {
-  const match = ranges.find(
-    (range) => count >= range.minQty && (range.maxQty == null || count <= range.maxQty),
-  );
-  return match?.centsPerCard ?? baseCents;
-}
 
 function formatAmount(value: number) {
   return new Intl.NumberFormat("en-US", {
@@ -130,7 +117,7 @@ export async function POST(request: Request) {
   const auth = await requireApiSession(["ADMIN", "FACTURACION", "OPERADOR"]);
   if ("error" in auth) return auth.error;
 
-  const parsed = schema.safeParse(await request.json());
+  const parsed = schema.safeParse(await request.json().catch(() => null));
   if (!parsed.success) {
     return NextResponse.json({ error: "Payload invalido para factura" }, { status: 400 });
   }
@@ -143,93 +130,18 @@ export async function POST(request: Request) {
   if (fromDate > toDate) {
     return NextResponse.json({ error: "La fecha inicial no puede ser mayor que la final" }, { status: 400 });
   }
-  toDate.setHours(23, 59, 59, 999);
+  toDate.setUTCHours(23, 59, 59, 999);
 
-  const [cards, tariffs] = await Promise.all([
-    prisma.card.findMany({
-      where: {
-        status: CardStatus.ENTREGADA,
-        dispatchDate: { gte: fromDate, lte: toDate },
-      },
-      select: {
-        id: true,
-        zona: true,
-        provincia: true,
-        reassignedProvince: true,
-        reassignedZone: true,
-        isRemote: true,
-        isAdditional: true,
-        dispatchDate: true,
-        customer: {
-          select: {
-            cedula: true,
-          },
-        },
-      },
-      take: 5000,
-    }),
-    prisma.zoneTariff.findMany({ where: { active: true }, include: { ranges: true } }),
-  ]);
-
-  const billableCards = dedupeBillingCardsByCustomerAndDispatchDate(
-    cards.map((card) => ({
-      id: card.id,
-      zona: resolveBillableZone(card),
-      isRemote: card.isRemote,
-      isAdditional: card.isAdditional,
-      dispatchDate: card.dispatchDate,
-      customerCedula: card.customer.cedula,
-    })),
-  );
-  const additionalExcluded = cards.filter((card) => card.isAdditional).length;
-
-  if (!billableCards.length) {
+  let report;
+  try {
+    report = await loadBillingReport(fromDate, toDate, parsed.data.fxRate);
+  } catch (error) {
+    if (error instanceof MissingBillingTariffError) return NextResponse.json({ error: error.message }, { status: 409 });
+    throw error;
+  }
+  const { items, totalUsdCents, totalDopCents, additionalExcluded } = report;
+  if (!report.totalEntregas) {
     return NextResponse.json({ error: "No hay entregas en el periodo seleccionado" }, { status: 404 });
-  }
-
-  const grouped = new Map<string, number>();
-  for (const card of billableCards) {
-    grouped.set(card.zona, (grouped.get(card.zona) ?? 0) + 1);
-  }
-
-  const tariffMap = new Map(tariffs.map((item) => [item.zona, item]));
-  const zonesOrder = ["Metro", "Este", "Norte", "Sur"];
-  const items = Array.from(grouped.entries())
-    .sort(([a], [b]) => {
-      const ai = zonesOrder.indexOf(a);
-      const bi = zonesOrder.indexOf(b);
-      if (ai >= 0 && bi >= 0) return ai - bi;
-      if (ai >= 0) return -1;
-      if (bi >= 0) return 1;
-      return a.localeCompare(b);
-    })
-    .map(([zona, qty]) => {
-      const tariff = tariffMap.get(zona);
-      const unitUsdCents = resolveCentsPerCard(qty, tariff?.baseCents ?? 0, tariff?.ranges ?? []);
-      return {
-        zona,
-        qty,
-        isRemoteSurcharge: false,
-        unitUsdCents,
-        totalUsdCents: unitUsdCents * qty,
-      };
-    });
-
-  const remoteCount = billableCards.filter((card) => card.isRemote).length;
-  if (remoteCount > 0) {
-    const remoteTariff = tariffMap.get("REMOTA");
-    const remoteSurchargeCents = resolveCentsPerCard(
-      remoteCount,
-      remoteTariff?.baseCents ?? 0,
-      remoteTariff?.ranges ?? [],
-    );
-    items.push({
-      zona: "REMOTA",
-      qty: remoteCount,
-      isRemoteSurcharge: true,
-      unitUsdCents: remoteSurchargeCents,
-      totalUsdCents: remoteSurchargeCents * remoteCount,
-    });
   }
 
   if (items.length > 18) {
@@ -239,8 +151,6 @@ export async function POST(request: Request) {
     );
   }
 
-  const totalUsdCents = items.reduce((acc, row) => acc + row.totalUsdCents, 0);
-  const totalDopCents = Math.round(totalUsdCents * parsed.data.fxRate);
 
   const templatePath = path.join(process.cwd(), "docs", "excels", "Factura Template Blank.pdf");
   let templateBytes: Buffer;
@@ -339,7 +249,7 @@ export async function POST(request: Request) {
       x: 111.6,
       y,
       width: 245,
-      text: `Transporte tarjetas masivas zona ${item.isRemoteSurcharge ? "remota" : item.zona}`,
+      text: `Tarjetas ${item.productType === "DEBITO" ? "débito" : "crédito"} - ${item.isRemoteSurcharge ? "recargo remota" : item.zona}`,
     });
     drawField(page, { regular, bold }, {
       x: 420,
@@ -428,7 +338,7 @@ export async function POST(request: Request) {
       from: parsed.data.from,
       to: parsed.data.to,
       invoiceNumber: parsed.data.invoiceNumber,
-      billableCards: billableCards.length,
+      billableCards: report.totalEntregas,
       additionalExcluded,
       totalUsdCents,
       totalDopCents,

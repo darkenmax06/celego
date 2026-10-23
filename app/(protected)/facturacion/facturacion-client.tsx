@@ -15,13 +15,16 @@ type ZoneRange = {
 
 type ZoneTariff = {
   id: string;
+  productType: "CREDITO" | "DEBITO";
+  configured?: boolean;
   zona: string;
-  baseCents: number;
+  baseCents: number | null;
   active: boolean;
   ranges: ZoneRange[];
 };
 
 type SummaryRow = {
+  productType: "CREDITO" | "DEBITO";
   zona: string;
   tarjetasEntregadas: number;
   tarifaAplicadaUsdCents?: number;
@@ -64,6 +67,8 @@ function buildDefaultInvoiceNumber() {
 
 export default function FacturacionClient() {
   const [zones, setZones] = useState<ZoneTariff[]>([]);
+  const [productType, setProductType] = useState<"CREDITO" | "DEBITO">("CREDITO");
+  const [summaryError, setSummaryError] = useState("");
   const [summary, setSummary] = useState<SummaryRow[]>([]);
   const [totalUsdCents, setTotalUsdCents] = useState(0);
   const [totalDopCents, setTotalDopCents] = useState(0);
@@ -107,13 +112,21 @@ export default function FacturacionClient() {
   async function loadTarifas() {
     const res = await fetch("/api/facturacion/tarifas", { cache: "no-store" });
     const json = await res.json();
-    setZones(json.zones ?? []);
+    if (!res.ok) { setMessage(json.error ?? "No se pudieron cargar las tarifas"); return; }
+    const saved: ZoneTariff[] = json.zones ?? [];
+    const names = Array.from(new Set(["Metro", "Este", "Norte", "Sur", "REMOTA", ...saved.map((zone) => zone.zona)]));
+    setZones((["CREDITO", "DEBITO"] as const).flatMap((type) => names.map((zona) =>
+      saved.find((zone) => zone.productType === type && zone.zona === zona) ?? {
+        id: `${type}-${zona}`, productType: type, zona, baseCents: null, active: true, ranges: [], configured: false,
+      },
+    )));
   }
 
   async function loadSummary() {
     const params = new URLSearchParams({ from, to, fxRate });
     const res = await fetch(`/api/facturacion/resumen?${params.toString()}`, { cache: "no-store" });
     const json = await res.json();
+    setSummaryError(res.ok ? "" : (json.error ?? "No se pudo calcular la facturacion"));
     setSummary(json.rows ?? []);
     setTotalUsdCents(json.totalUsdCents ?? 0);
     setTotalDopCents(json.totalDopCents ?? 0);
@@ -126,6 +139,10 @@ export default function FacturacionClient() {
   }, [billingFiltersHydrated]);
 
   async function saveZona(zone: ZoneTariff) {
+    if (zone.baseCents === null) {
+      setMessage(`Indica la tarifa base de ${zone.productType === "DEBITO" ? "débito" : "crédito"} para ${zone.zona}.`);
+      return;
+    }
     const ranges = zone.ranges
       .map((range) => ({
         minQty: Math.max(1, Math.trunc(range.minQty || 1)),
@@ -154,6 +171,7 @@ export default function FacturacionClient() {
     }
 
     const payload = {
+      productType: zone.productType,
       zona: zone.zona,
       baseCents: zone.baseCents,
       active: zone.active,
@@ -172,8 +190,9 @@ export default function FacturacionClient() {
       return;
     }
 
-    setMessage(`Tarifa guardada para zona ${zone.zona}`);
-    await Promise.all([loadTarifas(), loadSummary()]);
+    setMessage(`Tarifa de ${zone.productType === "DEBITO" ? "débito" : "crédito"} guardada para zona ${zone.zona}`);
+    setZones((previous) => previous.map((current) => current.productType === zone.productType && current.zona === zone.zona ? { ...data.zone, id: current.id, configured: true } : current));
+    await loadSummary();
   }
 
   async function exportFacturacion() {
@@ -256,13 +275,13 @@ export default function FacturacionClient() {
   }
 
   const summaryMap = useMemo(
-    () => new Map(summary.map((row) => [row.zona, row])),
+    () => new Map(summary.map((row) => [`${row.productType}|${row.zona}`, row])),
     [summary],
   );
 
   return (
     <div>
-      <PageHeader title="Facturacion" subtitle="Tarifas por zona y rangos de volumen (referencia UI)" />
+      <PageHeader title="Facturacion" subtitle="Tarifas de crédito y débito por zona y volumen" />
 
       <Panel>
         <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
@@ -319,12 +338,12 @@ export default function FacturacionClient() {
         </div>
 
         <div className="mb-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          {zones.map((zone) => {
-            const row = summaryMap.get(zone.zona);
+          {zones.filter((zone) => summaryMap.has(`${zone.productType}|${zone.zona}`)).map((zone) => {
+            const row = summaryMap.get(`${zone.productType}|${zone.zona}`);
             const colorClasses = ZONE_COLORS[zone.zona] ?? "border-t-slate-400 text-slate-700";
             return (
               <article key={zone.id} className={`rounded-xl border border-slate-200 border-t-4 bg-white p-4 ${colorClasses}`}>
-                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Zona {zone.zona}</p>
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">{zone.productType === "DEBITO" ? "Débito" : "Crédito"} · Zona {zone.zona}</p>
                 <p className="mt-1 font-display text-2xl font-bold">{formatCurrencyUSD(row?.totalUsdCents ?? 0)}</p>
                 <p className="text-xs text-slate-500">{formatCurrencyDOP(row?.totalDopCents ?? 0)}</p>
                 <p className="mt-1 text-xs text-slate-500">{row?.tarjetasEntregadas ?? 0} entregas</p>
@@ -333,22 +352,43 @@ export default function FacturacionClient() {
           })}
         </div>
 
-        <div className="grid gap-4 lg:grid-cols-2">
-          {zones.map((zone) => (
-            <ZoneEditor key={zone.id} zone={zone} onSave={saveZona} />
+        <div role="tablist" aria-label="Tarifas por tipo de tarjeta" className="mb-4 flex gap-2 border-b border-slate-200">
+          {(["CREDITO", "DEBITO"] as const).map((type) => (
+            <button key={type} type="button" role="tab" id={`tariff-tab-${type}`} aria-controls={`tariff-panel-${type}`} aria-selected={productType === type} tabIndex={productType === type ? 0 : -1}
+              onClick={() => setProductType(type)}
+              onKeyDown={(event) => {
+                if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+                event.preventDefault();
+                const next = event.key === "Home" ? "CREDITO" : event.key === "End" ? "DEBITO" : type === "CREDITO" ? "DEBITO" : "CREDITO";
+                setProductType(next);
+                document.getElementById(`tariff-tab-${next}`)?.focus();
+              }}
+              className={`border-b-2 px-4 py-3 text-sm font-semibold ${productType === type ? "border-slate-900 text-slate-900" : "border-transparent text-slate-500"}`}>
+              {type === "DEBITO" ? "Débito" : "Crédito"}
+            </button>
           ))}
         </div>
+        {(["CREDITO", "DEBITO"] as const).map((type) => (
+          <div key={type} role="tabpanel" id={`tariff-panel-${type}`} aria-labelledby={`tariff-tab-${type}`} hidden={productType !== type}>
+            <p className="mb-3 text-sm text-slate-500">Tarifas independientes por zona, volumen y recargo remoto. Crédito y débito se facturan como entregas separadas.</p>
+            <div className="grid gap-4 lg:grid-cols-2">
+              {zones.filter((zone) => zone.productType === type).map((zone) => <ZoneEditor key={zone.id} zone={zone} onSave={saveZona} />)}
+            </div>
+          </div>
+        ))}
       </Panel>
 
       <Panel className="mt-5" title="Total del periodo">
+        {summaryError ? <p role="alert" className="text-sm text-red-700">{summaryError}</p> : <>
         <p className="font-display text-3xl font-bold text-slate-900">{formatCurrencyUSD(totalUsdCents)}</p>
         <p className="text-sm text-slate-600">{formatCurrencyDOP(totalDopCents)} (tasa: {fxRate || "1"})</p>
         <p className="mt-1 text-xs text-slate-500">
           Adicionales excluidas de facturacion: {additionalExcluded}
         </p>
+        </>}
       </Panel>
 
-      {message ? <p className="mt-4 text-sm text-emerald-700">{message}</p> : null}
+      {message ? <p role="status" className="mt-4 text-sm text-slate-700">{message}</p> : null}
 
       {showInvoiceModal ? (
         <FacturaModal
@@ -374,17 +414,19 @@ function ZoneEditor({
   onSave: (zone: ZoneTariff) => Promise<void>;
 }) {
   const [local, setLocal] = useState<ZoneTariff>(zone);
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     setLocal(zone);
   }, [zone]);
 
   function addRange() {
+    if (local.baseCents === null) return;
     setLocal((prev) => {
       if (!prev.ranges.length) {
         return {
           ...prev,
-          ranges: [{ minQty: 1, maxQty: null, centsPerCard: prev.baseCents }],
+          ranges: [{ minQty: 1, maxQty: null, centsPerCard: prev.baseCents! }],
         };
       }
 
@@ -397,7 +439,7 @@ function ZoneEditor({
         nextRanges[lastIndex] = { ...last, maxQty: minQty - 1 };
       }
 
-      nextRanges.push({ minQty, maxQty: null, centsPerCard: prev.baseCents });
+      nextRanges.push({ minQty, maxQty: null, centsPerCard: prev.baseCents! });
       return { ...prev, ranges: nextRanges };
     });
   }
@@ -418,6 +460,7 @@ function ZoneEditor({
 
   return (
     <article className="rounded-xl border border-slate-200 bg-white p-4">
+      {zone.configured === false ? <p className="mb-3 text-sm text-amber-700">Sin configurar. Ingresa los importes acordados antes de facturar.</p> : null}
       <div className="mb-3 flex items-center justify-between">
         <h3 className="font-display text-lg font-bold text-slate-900">Zona {local.zona}</h3>
         <label className="flex items-center gap-2 text-sm text-slate-600">
@@ -436,9 +479,9 @@ function ZoneEditor({
           type="number"
           min={0}
           step="0.01"
-          value={local.baseCents / 100}
+          value={local.baseCents === null ? "" : local.baseCents / 100}
           onChange={(event) =>
-            setLocal((prev) => ({ ...prev, baseCents: toCents(Number(event.target.value || 0)) }))
+            setLocal((prev) => ({ ...prev, baseCents: event.target.value === "" ? null : toCents(Number(event.target.value)) }))
           }
           className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2"
         />
@@ -502,21 +545,23 @@ function ZoneEditor({
         <button
           type="button"
           onClick={addRange}
+          disabled={local.baseCents === null || saving}
           className="rounded-lg border border-dashed border-slate-300 px-3 py-2 text-xs text-slate-600"
         >
           + Agregar rango
         </button>
         <button
           type="button"
-          onClick={() => void onSave(local)}
+          disabled={saving || local.baseCents === null}
+          onClick={async () => { setSaving(true); try { await onSave(local); } finally { setSaving(false); } }}
           className="rounded-lg bg-[#0f2544] px-4 py-2 text-sm font-semibold text-white"
         >
-          Guardar zona
+          {saving ? "Guardando..." : "Guardar zona"}
         </button>
       </div>
 
       <p className="mt-2 text-xs text-slate-500">
-        Tarifa base actual: <span className="font-semibold text-slate-700">${fromCents(local.baseCents)}</span>
+        Tarifa base actual: <span className="font-semibold text-slate-700">{local.baseCents === null ? "Sin configurar" : `$${fromCents(local.baseCents)}`}</span>
       </p>
     </article>
   );

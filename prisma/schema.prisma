@@ -941,10 +941,13 @@ model LotItem {
 
 model ZoneTariff {
   id        String            @id @default(cuid())
-  zona      String            @unique
+  zona      String
+  productType CardProductType @default(CREDITO)
   baseCents Int               @default(0)
   active    Boolean           @default(true)
   ranges    ZoneTariffRange[]
+
+  @@unique([productType, zona])
 }
 
 model ZoneTariffRange {

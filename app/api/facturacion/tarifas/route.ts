@@ -10,6 +10,7 @@ const rangeSchema = z.object({
 });
 
 const bodySchema = z.object({
+  productType: z.enum(["CREDITO", "DEBITO"]),
   zona: z.string(),
   baseCents: z.number().int().min(0),
   active: z.boolean().default(true),
@@ -34,25 +35,32 @@ function hasInvalidRanges(
   return false;
 }
 
-export async function GET() {
+export async function GET(request: Request) {
   const auth = await requireApiSession(["ADMIN", "FACTURACION", "OPERADOR"]);
   if ("error" in auth) return auth.error;
+
+  const product = new URL(request.url).searchParams.get("productType");
+  if (product && product !== "CREDITO" && product !== "DEBITO") {
+    return NextResponse.json({ error: "Tipo de tarjeta invalido" }, { status: 400 });
+  }
 
   const billingConfig = await prisma.billingConfig.findUnique({
     where: { id: "default" },
   });
 
   await prisma.zoneTariff.upsert({
-    where: { zona: "REMOTA" },
+    where: { productType_zona: { productType: "CREDITO", zona: "REMOTA" } },
     update: {},
     create: {
       zona: "REMOTA",
+      productType: "CREDITO",
       baseCents: billingConfig?.remoteSurchargeCents ?? 0,
       active: true,
     },
   });
 
   const zones = await prisma.zoneTariff.findMany({
+    ...(product ? { where: { productType: product as "CREDITO" | "DEBITO" } } : {}),
     include: { ranges: { orderBy: { minQty: "asc" } } },
     orderBy: { zona: "asc" },
   });
@@ -64,7 +72,7 @@ export async function POST(request: Request) {
   const auth = await requireApiSession(["ADMIN", "FACTURACION"]);
   if ("error" in auth) return auth.error;
 
-  const parsed = bodySchema.safeParse(await request.json());
+  const parsed = bodySchema.safeParse(await request.json().catch(() => null));
   if (!parsed.success) {
     return NextResponse.json({ error: "Payload invalido" }, { status: 400 });
   }
@@ -82,34 +90,37 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Zona invalida" }, { status: 400 });
   }
 
-  const zone = await prisma.zoneTariff.upsert({
-    where: { zona },
-    update: {
-      baseCents: parsed.data.baseCents,
-      active: parsed.data.active,
-    },
-    create: {
-      zona,
-      baseCents: parsed.data.baseCents,
-      active: parsed.data.active,
-    },
-  });
-
-  await prisma.zoneTariffRange.deleteMany({ where: { zoneTariffId: zone.id } });
-  if (parsed.data.ranges.length) {
-    await prisma.zoneTariffRange.createMany({
-      data: parsed.data.ranges.map((range) => ({
-        zoneTariffId: zone.id,
-        minQty: range.minQty,
-        maxQty: range.maxQty ?? null,
-        centsPerCard: range.centsPerCard,
-      })),
+  const updated = await prisma.$transaction(async (tx) => {
+    const zone = await tx.zoneTariff.upsert({
+      where: { productType_zona: { productType: parsed.data.productType, zona } },
+      update: {
+        baseCents: parsed.data.baseCents,
+        active: parsed.data.active,
+      },
+      create: {
+        zona,
+        productType: parsed.data.productType,
+        baseCents: parsed.data.baseCents,
+        active: parsed.data.active,
+      },
     });
-  }
 
-  const updated = await prisma.zoneTariff.findUnique({
-    where: { id: zone.id },
-    include: { ranges: { orderBy: { minQty: "asc" } } },
+    await tx.zoneTariffRange.deleteMany({ where: { zoneTariffId: zone.id } });
+    if (parsed.data.ranges.length) {
+      await tx.zoneTariffRange.createMany({
+        data: parsed.data.ranges.map((range) => ({
+          zoneTariffId: zone.id,
+          minQty: range.minQty,
+          maxQty: range.maxQty ?? null,
+          centsPerCard: range.centsPerCard,
+        })),
+      });
+    }
+
+    return tx.zoneTariff.findUnique({
+      where: { id: zone.id },
+      include: { ranges: { orderBy: { minQty: "asc" } } },
+    });
   });
 
   return NextResponse.json({ zone: updated });
