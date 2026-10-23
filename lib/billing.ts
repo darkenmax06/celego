@@ -1,3 +1,5 @@
+import { normalizeCustomerId } from "./customer-id";
+
 type BillingCardKeyInput = {
   id: string;
   dispatchDate: Date | null;
@@ -6,8 +8,7 @@ type BillingCardKeyInput = {
 };
 
 function normalizeCedula(cedula: string) {
-  const digits = cedula.replace(/\D/g, "");
-  return digits || cedula.trim().toUpperCase();
+  return normalizeCustomerId(cedula) ?? (cedula.replace(/\D/g, "") || cedula.trim().toUpperCase());
 }
 
 function toUtcDateKey(value: Date) {

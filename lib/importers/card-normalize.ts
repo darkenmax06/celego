@@ -1,3 +1,4 @@
+import { CUSTOMER_ID_RULE, normalizeCustomerId } from "../customer-id";
 import { buildSourceRecordKey, type DispatchOrigin } from "../dispatch-origin";
 
 export type NormalizedCardImportRow = {
@@ -204,11 +205,11 @@ export function parseNormalizedCardRows(rows: Rows) {
       continue;
     }
     const tc = validIdentifier(rawTc, 15, 19);
-    const cedula = validIdentifier(rawCedula, 9, 13);
+    const cedula = normalizeCustomerId(rawCedula);
     const quantity = centro ? Number(quantityRaw) : 1;
     const failures = [
       !tc && `TC invalido: ${shown(rawTc)} (debe tener entre 15 y 19 digitos y no ser solo ceros)`,
-      !cedula && `cedula invalida: ${shown(rawCedula)} (debe tener entre 9 y 13 digitos y no ser solo ceros)`,
+      !cedula && `cedula invalida: ${shown(rawCedula)} (debe ser ${CUSTOMER_ID_RULE})`,
       !name && "nombre vacio (el cliente es obligatorio)",
       !dispatchDate && `fecha invalida: ${shown(text(rawDate))} (use dd/mm/aaaa o aaaa-mm-dd)`,
       !(Number.isInteger(quantity) && quantity > 0) && `cantidad invalida: ${shown(quantityRaw)} (debe ser un entero mayor que 0)`,

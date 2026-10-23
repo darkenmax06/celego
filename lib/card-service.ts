@@ -9,6 +9,7 @@ import { type ParsedDebitConsolidadoRow } from "@/lib/importers/debit-consolidad
 import { type ParsedDebitDespachoRow } from "@/lib/importers/debit-despacho";
 import { type ParsedDebitPinitRow } from "@/lib/importers/debit-pinit-import";
 import { isDebitTerminalStatus } from "@/lib/debit-status";
+import { CUSTOMER_ID_RULE, normalizeCustomerId } from "@/lib/customer-id";
 import { buildSourceRecordKey, canCreateDispatch, DispatchConflictError, nextTcGuardState } from "@/lib/dispatch-origin";
 import { resolveZone } from "@/lib/zone-map";
 import { mergePhoneLists, planCustomerMerge, type CustomerData } from "@/lib/customer-merge";
@@ -568,12 +569,12 @@ export async function createManualCreditCard(input: {
   byUserId?: string;
 }) {
   const tc = input.tc.replace(/\D/g, "");
-  const cedula = input.cedula.replace(/\D/g, "");
+  const cedula = normalizeCustomerId(input.cedula);
   if (!/^\d{15,19}$/.test(tc) || /^0+$/.test(tc)) {
     throw new ManualCardError("INVALID_TC", `TC invalida: ${shownValue(input.tc)} (debe tener entre 15 y 19 digitos y no ser solo ceros)`, 422);
   }
-  if (!/^\d{9,13}$/.test(cedula) || /^0+$/.test(cedula)) {
-    throw new ManualCardError("INVALID_CEDULA", `Cedula invalida: ${shownValue(input.cedula)} (debe tener entre 9 y 13 digitos y no ser solo ceros)`, 422);
+  if (!cedula) {
+    throw new ManualCardError("INVALID_CEDULA", `Cedula invalida: ${shownValue(input.cedula)} (debe ser ${CUSTOMER_ID_RULE})`, 422);
   }
   const { province, zone } = resolveNormalizedImportLocation({ origin: "TORRE_POPULAR", provincia: input.provincia, zona: input.zona ?? null });
   if (!zone) {
