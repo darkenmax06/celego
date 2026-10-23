@@ -36,6 +36,8 @@ enum CardStatus {
   ENTREGA_SIN_CONTRATO
   /// SDD solicitudes-reclamaciones-urgentes: card parked pending physical return receipt.
   EN_PROCESO_DE_RETORNO
+  /// Calls overhaul: debit counterpart of EN_PROCESO_DE_RETORNO (return requested from a call).
+  TD_EN_PROCESO_DE_RETORNO
 }
 
 enum UrgentCaseType {
@@ -218,6 +220,8 @@ model User {
   approvedSlaExtensions      SLAExtensionRequest[]      @relation("SlaExtensionApprovedBy")
   createdCardGroups          CardGroup[]                @relation("CardGroupCreatedBy")
   addedCardGroupMembers      CardGroupMember[]          @relation("CardGroupMemberAddedBy")
+  callAssignmentsReceived    CallAssignment[]           @relation("CallAssignmentAssignedTo")
+  callAssignmentsMade        CallAssignment[]           @relation("CallAssignmentAssignedBy")
 }
 
 model Customer {
@@ -301,6 +305,7 @@ model Card {
   originQuarantines     DispatchOriginQuarantine[]
   slaExtensionRequests  SLAExtensionRequest[]
   groupMemberships      CardGroupMember[]
+  callAssignment        CallAssignment?            @relation("CallAssignmentCard")
 
   @@index([tc])
   @@index([requestNumber])
@@ -777,9 +782,35 @@ model ContactLog {
   telefonosUsados String?
   comentario      String?
   contactado      Boolean  @default(false)
+  /// Calls overhaul: CONTACTADA | NO_CONTACTADA | RETORNO_SOLICITADO | TRASLADO_SOLICITADO.
+  resultado               String?
+  canalContacto           String?
+  /// Array of { numero, estado, nota } recorded per phone during the call.
+  telefonosDetalle        Json?
+  motivoNoContacto        String?
+  nuevaDireccion          String?
+  fechaPreferenciaEntrega DateTime?
+  /// Card data captured at call time (nombre, cedula, tc, provincia, zona, direccion, status, mensajero, operador).
+  snapshot                Json?
   createdAt       DateTime @default(now())
 
   @@index([cardId, createdAt])
+  @@index([createdAt])
+}
+
+/// Calls overhaul: one operator assigned to call a card (reassigned by upsert).
+model CallAssignment {
+  id           String   @id @default(cuid())
+  cardId       String   @unique
+  card         Card     @relation("CallAssignmentCard", fields: [cardId], references: [id], onDelete: Cascade)
+  assignedToId String
+  assignedTo   User     @relation("CallAssignmentAssignedTo", fields: [assignedToId], references: [id], onDelete: Cascade)
+  assignedById String?
+  assignedBy   User?    @relation("CallAssignmentAssignedBy", fields: [assignedById], references: [id], onDelete: SetNull)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([assignedToId])
 }
 
 model Redaction {
@@ -941,10 +972,13 @@ model LotItem {
 
 model ZoneTariff {
   id        String            @id @default(cuid())
-  zona      String            @unique
+  zona      String
+  productType CardProductType @default(CREDITO)
   baseCents Int               @default(0)
   active    Boolean           @default(true)
   ranges    ZoneTariffRange[]
+
+  @@unique([productType, zona])
 }
 
 model ZoneTariffRange {

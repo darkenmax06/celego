@@ -1,15 +1,17 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useSearchParams } from "next/navigation";
 import { CardDetailModal } from "@/components/cards/card-detail-modal";
 import { CardExportWizardModal } from "@/components/cards/card-export-wizard-modal";
 import { CardGroupAssignModal } from "@/components/cards/card-group-assign-modal";
 import { CardGroupFanoutNote } from "@/components/cards/card-group-fanout-note";
 import { CardSelectCheckbox } from "@/components/cards/card-select-checkbox";
 import { CardSelectionBar, type SelectedCardEntry } from "@/components/cards/card-selection-bar";
+import { CardTile } from "@/components/cards/card-tile";
+import { CardTileGrid } from "@/components/cards/card-tile-grid";
 import { dateRangeFilterBarProps } from "@/components/filters/date-range-filter";
-import { FilterBar, groupByLevelLabel, ViewType } from "@/components/filters/filter-bar";
+import { CardFilterBar } from "@/components/filters/card-filter-bar";
+import { groupByLevelLabel, type ViewType } from "@/components/filters/filter-bar";
 import { NestedGroupList, useCollapsedGroups, type GroupSelection } from "@/components/grouping/nested-group-list";
 import { PageHeader } from "@/components/ui/page-header";
 import { ManualCardModal } from "@/components/cards/manual-card-modal";
@@ -24,13 +26,7 @@ import {
   getCardDateGroup,
   parseDateGroupToken,
 } from "@/lib/card-date-fields";
-import {
-  dateRangeParamKeys,
-  LEGACY_DATE_FIELD_PARAM,
-  LEGACY_DATE_FROM_PARAM,
-  LEGACY_DATE_TO_PARAM,
-  normalizeDateRangeFilters,
-} from "@/lib/date-range-params";
+import { normalizeDateRangeFilters } from "@/lib/date-range-params";
 import {
   CARD_GROUP_BY_FIELD,
   bucketCountLabel,
@@ -44,6 +40,8 @@ import { useCardGroupBucketTotals } from "@/lib/use-card-group-bucket-totals";
 import { useCardGroups } from "@/lib/use-card-groups";
 import { useCardSelection } from "@/lib/use-card-selection";
 import { usePersistentState } from "@/lib/use-persistent-state";
+import { useCardListFilters } from "@/lib/use-card-list-filters";
+import { deriveContactoEstado, type CardTileData } from "@/lib/cards/card-tile-data";
 
 type CardRow = {
   id: string;
@@ -274,27 +272,29 @@ const TARJETA_DATE_FILTER_FIELDS = cardDateFilterOptions([
   "updatedAt",
 ]);
 
-/**
- * Filter keys read from the URL on load. Date ranges use `date.<field>.from|to`;
- * the legacy `dateField`/`dateFrom`/`dateTo` form is still read and migrated.
- */
-const URL_FILTER_KEYS = [
-  "status",
-  "zona",
-  "provincia",
-  "urgent",
-  "from",
-  "to",
-  "origin",
-  "remote",
-  "productType",
-  "contactoEstado",
-  "grupo",
-  ...dateRangeParamKeys(TARJETA_DATE_FILTER_FIELDS.map((field) => field.value)),
-  LEGACY_DATE_FIELD_PARAM,
-  LEGACY_DATE_FROM_PARAM,
-  LEGACY_DATE_TO_PARAM,
-];
+const DEFAULT_FILTERS: Record<string, string> = { page: "1", pageSize: "50" };
+
+/** Maps a tarjetas row into the shared tile view model. */
+function toTileData(card: CardRow): CardTileData {
+  const estado = deriveContactoEstado({
+    contactoEstado: card.contactoEstado,
+    contactado: card.contactado,
+    solicitudRetorno: card.solicitudRetorno,
+    traslado: card.traslado,
+  });
+  return {
+    id: card.id,
+    tc: card.tc,
+    nombre: card.customer.nombre,
+    cedula: card.customer.cedula,
+    provincia: card.provincia,
+    zona: card.zona,
+    status: card.status,
+    isRemote: card.isRemote,
+    // This view only badges cards with a recorded outcome (never "No contactada").
+    contactoEstado: estado === "NO_CONTACTADA" ? null : estado,
+  };
+}
 
 const TARJETA_GROUP_BY_OPTIONS = [
   { field: "contactoEstado", label: "Gestión Contacto" },
@@ -316,16 +316,16 @@ export default function TarjetasClient({ role }: TarjetasClientProps) {
   const canManageGroups = role === "ADMIN" || role === "OPERADOR";
   const [manualCardOpen, setManualCardOpen] = useState(false);
   const [manualCardNotice, setManualCardNotice] = useState("");
-  const searchParams = useSearchParams();
   const [cards, setCards] = useState<CardRow[]>([]);
-  const [filters, setFilters] = useState<Record<string, string>>(() => {
-    const initial: Record<string, string> = { page: "1", pageSize: "50" };
-    for (const key of URL_FILTER_KEYS) {
-      const value = searchParams.get(key);
-      if (value) initial[key] = value;
-    }
-    return normalizeDateRangeFilters(initial);
-  });
+  // Filters live in the URL (read on mount, written back on change).
+  const { filters, setFilters, resetFilters } = useCardListFilters({ defaults: DEFAULT_FILTERS });
+  // Old links may still carry the legacy `dateField`/`dateFrom`/`dateTo` form; migrate it once.
+  useEffect(() => {
+    setFilters((prev) => {
+      const next = normalizeDateRangeFilters(prev);
+      return JSON.stringify(next) === JSON.stringify(prev) ? prev : next;
+    });
+  }, [setFilters]);
   const [viewMode, setViewMode] = useState<ViewType>("list");
   const [visibleColumns, setVisibleColumns] = usePersistentState<TarjetaColumnKey[]>(
     "tarjetas:visible-columns",
@@ -678,58 +678,39 @@ export default function TarjetasClient({ role }: TarjetasClientProps) {
     </tr>
   );
 
-  // SDD card-groups — Work Unit G, Task 22. Moved out of an inline literal:
-  // `filter-bar.tsx:149` depends on `facets` for its effect, so the ORIGINAL
-  // inline array already re-ran that effect on every render — this is
-  // required, not hygiene, once `groups` is a real dependency.
-  const tarjetaFacets = useMemo(
-    () => [
-      {
-        field: "contactoEstado",
-        label: "Gestión Contacto",
-        options: [
-          { label: "Contactadas", value: "CONTACTADA" },
-          { label: "No contactadas / Pendientes", value: "NO_CONTACTADA" },
-          { label: "Retorno solicitado", value: "RETORNO_SOLICITADO" },
-          { label: "Traslado solicitado", value: "TRASLADO_SOLICITADO" },
-        ],
-      },
-      {
-        field: "productType",
-        label: "Producto",
-        options: [
-          { label: "Crédito", value: "CREDITO" },
-          { label: "Débito", value: "DEBITO" },
-        ],
-      },
-      { field: "status", label: "Estado", multi: true },
-      { field: "provincia", label: "Provincia", multi: true },
-      { field: "zona", label: "Zona", multi: true },
-      {
-        field: "grupo",
-        label: "Grupo",
-        multi: true,
-        options: [
-          ...cardGroups.groups.map((group) => ({ label: group.name, value: group.id })),
-          { label: "Sin grupo", value: "SIN_GRUPO" },
-        ],
-      },
-      {
-        field: "origin",
-        label: "Origen",
-        options: [
-          { label: "Torre Popular", value: "TORRE_POPULAR" },
-          { label: "Centro de Acopio", value: "CENTRO_ACOPIO" },
-          { label: "BPD Débito", value: "BPD_DEBITO" },
-        ],
-      },
-      {
-        field: "urgent",
-        label: "Urgente",
-        options: [{ label: "Solo urgentes", value: "1" }],
-      },
-    ],
-    [cardGroups.groups],
+  // Card groups are owned here (reloaded after group actions), so the shared
+  // filter bar takes them as a source instead of fetching its own stale copy.
+  // Memoized: the bar rebuilds its facets whenever a source changes identity.
+  const facetSources = useMemo(() => ({ groups: cardGroups.groups }), [cardGroups.groups]);
+
+  const renderTile = (card: CardRow) => (
+    <CardTile
+      data={toTileData(card)}
+      selection={
+        canManageGroups
+          ? { checked: cardSelection.isSelected(card.id), onToggle: () => cardSelection.toggle(card.id) }
+          : undefined
+      }
+      footerLeft={card.isAdditional ? `Adic. ${card.additionalIndex}` : "Principal"}
+      actions={
+        <>
+          <button
+            type="button"
+            onClick={() => setUrgencyTarget(card)}
+            className="rounded-lg border border-rose-200 px-2 py-1 text-xs font-medium text-rose-700 hover:bg-rose-50"
+          >
+            Urgencia
+          </button>
+          <button
+            type="button"
+            onClick={() => setSelectedCardId(card.id)}
+            className="rounded-lg border border-slate-200 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
+          >
+            Ver
+          </button>
+        </>
+      }
+    />
   );
 
   return (
@@ -755,20 +736,21 @@ export default function TarjetasClient({ role }: TarjetasClientProps) {
         </div>
       ) : null}
 
-      {/* FilterBar Odoo Style */}
-      <FilterBar
+      {/* Shared card search + filters (catalog in lib/filters/card-facets.ts) */}
+      <CardFilterBar
+        preset="tarjetas"
+        sources={facetSources}
         resource="tarjetas"
         sectionKey="tarjetas"
         filters={filters}
         onFilterChange={(next) =>
           setFilters({ ...normalizeDateRangeFilters(next), page: "1", pageSize: filters.pageSize || "50" })
         }
-        onReset={() => setFilters({ page: "1", pageSize: "50" })}
+        onReset={resetFilters}
         searchPlaceholder="Buscar por TC, cédula, nombre o referencia..."
         allowedViews={["list", "cards"]}
         currentView={viewMode}
         onViewChange={setViewMode}
-        facets={tarjetaFacets}
         groupByOptions={TARJETA_GROUP_BY_OPTIONS}
         {...dateRangeFilterBarProps({
           fields: TARJETA_DATE_FILTER_FIELDS,
@@ -818,71 +800,7 @@ export default function TarjetasClient({ role }: TarjetasClientProps) {
                 selection={groupSelection}
                 countLabel={groupCountLabel}
                 renderRows={(rows) => (
-                  <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-                    {rows.map((card) => (
-                      <div
-                        key={card.id}
-                        className="flex flex-col justify-between rounded-xl border border-slate-200/80 bg-white p-4 shadow-sm transition hover:border-slate-300"
-                      >
-                        <div>
-                          <div className="flex items-start justify-between gap-2 flex-wrap">
-                            <div className="flex items-center gap-2">
-                              {canManageGroups ? (
-                                <CardSelectCheckbox
-                                  checked={cardSelection.isSelected(card.id)}
-                                  onChange={() => cardSelection.toggle(card.id)}
-                                  label={`Seleccionar tarjeta ${card.tc}`}
-                                />
-                              ) : null}
-                              <span className="font-mono text-sm font-bold text-blue-700">{card.tc}</span>
-                            </div>
-                            <div className="flex items-center gap-1 flex-wrap">
-                              {card.solicitudRetorno || card.contactoEstado === "RETORNO_SOLICITADO" ? (
-                                <span className="inline-flex items-center gap-1 rounded-md bg-rose-50 border border-rose-200 px-1.5 py-0.5 text-[10px] font-bold text-rose-700">
-                                  ⚠ Retorno
-                                </span>
-                              ) : card.traslado || card.contactoEstado === "TRASLADO_SOLICITADO" ? (
-                                <span className="inline-flex items-center gap-1 rounded-md bg-indigo-50 border border-indigo-200 px-1.5 py-0.5 text-[10px] font-bold text-indigo-700">
-                                  ✈ Traslado
-                                </span>
-                              ) : card.contactado || card.contactoEstado === "CONTACTADA" ? (
-                                <span className="inline-flex items-center gap-1 rounded-md bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 text-[10px] font-bold text-emerald-700">
-                                  ✓ Contactada
-                                </span>
-                              ) : null}
-                              <StatusBadge value={card.status} />
-                            </div>
-                          </div>
-                          <h4 className="mt-2 font-semibold text-slate-900">{card.customer.nombre}</h4>
-                          <p className="text-xs text-slate-500">Cédula: {card.customer.cedula}</p>
-                          <p className="mt-2 text-xs text-slate-600">
-                            {card.provincia} • {card.zona} {card.isRemote ? "(Remota)" : ""}
-                          </p>
-                        </div>
-                        <div className="mt-4 flex items-center justify-between border-t border-slate-100 pt-3">
-                          <span className="text-xs text-slate-400">
-                            {card.isAdditional ? `Adic. ${card.additionalIndex}` : "Principal"}
-                          </span>
-                          <div className="flex gap-1.5">
-                            <button
-                              type="button"
-                              onClick={() => setUrgencyTarget(card)}
-                              className="rounded-lg border border-rose-200 px-2 py-1 text-xs font-medium text-rose-700 hover:bg-rose-50"
-                            >
-                              Urgencia
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => setSelectedCardId(card.id)}
-                              className="rounded-lg border border-slate-200 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
-                            >
-                              Ver
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
+                  <CardTileGrid items={rows} getKey={(card) => card.id} renderItem={renderTile} loading={loading} />
                 )}
               />
               {!groupedCards.length && !loading ? (
@@ -892,76 +810,7 @@ export default function TarjetasClient({ role }: TarjetasClientProps) {
               ) : null}
             </div>
           ) : (
-            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-              {cards.map((card) => (
-                <div
-                  key={card.id}
-                  className="flex flex-col justify-between rounded-xl border border-slate-200/80 bg-white p-4 shadow-sm transition hover:border-slate-300"
-                >
-                  <div>
-                    <div className="flex items-start justify-between gap-2 flex-wrap">
-                      <div className="flex items-center gap-2">
-                        {canManageGroups ? (
-                          <CardSelectCheckbox
-                            checked={cardSelection.isSelected(card.id)}
-                            onChange={() => cardSelection.toggle(card.id)}
-                            label={`Seleccionar tarjeta ${card.tc}`}
-                          />
-                        ) : null}
-                        <span className="font-mono text-sm font-bold text-blue-700">{card.tc}</span>
-                      </div>
-                      <div className="flex items-center gap-1 flex-wrap">
-                        {card.solicitudRetorno || card.contactoEstado === "RETORNO_SOLICITADO" ? (
-                          <span className="inline-flex items-center gap-1 rounded-md bg-rose-50 border border-rose-200 px-1.5 py-0.5 text-[10px] font-bold text-rose-700">
-                            ⚠ Retorno
-                          </span>
-                        ) : card.traslado || card.contactoEstado === "TRASLADO_SOLICITADO" ? (
-                          <span className="inline-flex items-center gap-1 rounded-md bg-indigo-50 border border-indigo-200 px-1.5 py-0.5 text-[10px] font-bold text-indigo-700">
-                            ✈ Traslado
-                          </span>
-                        ) : card.contactado || card.contactoEstado === "CONTACTADA" ? (
-                          <span className="inline-flex items-center gap-1 rounded-md bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 text-[10px] font-bold text-emerald-700">
-                            ✓ Contactada
-                          </span>
-                        ) : null}
-                        <StatusBadge value={card.status} />
-                      </div>
-                    </div>
-                    <h4 className="mt-2 font-semibold text-slate-900">{card.customer.nombre}</h4>
-                    <p className="text-xs text-slate-500">Cédula: {card.customer.cedula}</p>
-                    <p className="mt-2 text-xs text-slate-600">
-                      {card.provincia} • {card.zona} {card.isRemote ? "(Remota)" : ""}
-                    </p>
-                  </div>
-                  <div className="mt-4 flex items-center justify-between border-t border-slate-100 pt-3">
-                    <span className="text-xs text-slate-400">
-                      {card.isAdditional ? `Adic. ${card.additionalIndex}` : "Principal"}
-                    </span>
-                    <div className="flex gap-1.5">
-                      <button
-                        type="button"
-                        onClick={() => setUrgencyTarget(card)}
-                        className="rounded-lg border border-rose-200 px-2 py-1 text-xs font-medium text-rose-700 hover:bg-rose-50"
-                      >
-                        Urgencia
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setSelectedCardId(card.id)}
-                        className="rounded-lg border border-slate-200 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
-                      >
-                        Ver
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              ))}
-              {!cards.length && !loading ? (
-                <p className="col-span-full py-8 text-center text-sm text-slate-500">
-                  No hay tarjetas que coincidan con estos filtros.
-                </p>
-              ) : null}
-            </div>
+            <CardTileGrid items={cards} getKey={(card) => card.id} renderItem={renderTile} loading={loading} />
           )
         ) : (
           /* Table View with Horizontal Scroll & Resizable Headers */

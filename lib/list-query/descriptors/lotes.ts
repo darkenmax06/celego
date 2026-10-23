@@ -16,7 +16,8 @@ export const lotesListQuery = defineListQuery<Prisma.LotWhereInput>({
   searchFields: [],
   filters: [
     { kind: "string", param: "status", field: "estatus" },
-    { kind: "day", param: "date", field: "fechaEnvio" },
+    { kind: "string", param: "messenger", field: "enviadoA", insensitive: true },
+    { kind: "dateRange", field: "fechaEnvio", fromParam: "from", toParam: "to" },
   ],
   sort: {
     keys: {},

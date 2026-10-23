@@ -12,13 +12,17 @@ import { WorkflowStatusBar } from "@/components/ui/workflow-status-bar";
 import { RouteProgressPanel } from "@/components/rutas/route-progress-panel";
 import { ContractDeliveryWizardModal } from "@/components/rutas/contract-delivery-wizard-modal";
 import { getRouteLifecycle } from "@/lib/route-item-lifecycle";
-import { formatDateOnly } from "@/lib/date";
 import { lotItemPhoneNumbers } from "@/lib/lot-phones";
 import { resolveReturnReasonPrompt } from "@/lib/return-reason-prompt";
 import { resolveOperativoTab, type OperativoTab } from "@/lib/rutas-operativo-tab";
 import { resolveContractIdentifiers } from "@/lib/route-contract-selection";
+import {
+  buildResolvedCardsPreviewSummary,
+  getPostCreateRouteBrowseFilters,
+} from "@/lib/route-preview";
 import { usePersistentState } from "@/lib/use-persistent-state";
 import { useWorkflowDraft } from "@/lib/use-workflow-draft";
+import { formatDateOnly, getRecentDateRange } from "@/lib/date";
 
 type Messenger = { id: string; nombre: string };
 type ProvinceRow = { id: string; nombre: string; zona: string; active: boolean };
@@ -447,6 +451,12 @@ export default function RutasClient() {
   });
   const [routePage, setRoutePage] = usePersistentState("rutas:route-page", 1);
   const [lotPage, setLotPage] = usePersistentState("rutas:lot-page", 1);
+  const defaultBrowseRange = useMemo(() => getRecentDateRange(30), []);
+  const [browseFrom, setBrowseFrom] = usePersistentState("rutas:browse-from", defaultBrowseRange.from);
+  const [browseTo, setBrowseTo] = usePersistentState("rutas:browse-to", defaultBrowseRange.to);
+  const [browseMessengerId, setBrowseMessengerId] = usePersistentState("rutas:browse-messenger", "ALL");
+  const [showRouteWizard, setShowRouteWizard] = useState(false);
+  const [routeWizardStep, setRouteWizardStep] = useState<1 | 2 | 3>(1);
 
   const [fecha, setFecha] = usePersistentState(
     "rutas:fecha",
@@ -727,10 +737,12 @@ export default function RutasClient() {
 
   async function loadRoutes(pageArg = routePage) {
     const params = new URLSearchParams({
-      date: fecha,
+      from: browseFrom,
+      to: browseTo,
       page: String(pageArg),
       pageSize: String(routesPagination.pageSize),
     });
+    if (browseMessengerId !== "ALL") params.set("messengerId", browseMessengerId);
     if (routeProductFilter !== "ALL") params.set("productType", routeProductFilter);
     const res = await fetch(`/api/rutas?${params.toString()}`, { cache: "no-store" });
     const json = await res.json();
@@ -755,10 +767,15 @@ export default function RutasClient() {
 
   async function loadLots(pageArg = lotPage) {
     const params = new URLSearchParams({
-      date: fecha,
+      from: browseFrom,
+      to: browseTo,
       page: String(pageArg),
       pageSize: String(lotsPagination.pageSize),
     });
+    if (browseMessengerId !== "ALL") {
+      const selectedMessenger = messengers.find((item) => item.id === browseMessengerId);
+      if (selectedMessenger) params.set("messenger", selectedMessenger.nombre);
+    }
     const res = await fetch(`/api/lotes?${params.toString()}`, { cache: "no-store" });
     const json = await res.json();
     const pagination = json.pagination as PaginationMeta | undefined;
@@ -778,15 +795,15 @@ export default function RutasClient() {
   useEffect(() => {
     setRoutePage(1);
     setLotPage(1);
-  }, [fecha]);
+  }, [browseFrom, browseTo, browseMessengerId]);
 
   useEffect(() => {
     void loadRoutes(routePage);
-  }, [fecha, routePage, routeProductFilter]);
+  }, [browseFrom, browseTo, browseMessengerId, routePage, routeProductFilter]);
 
   useEffect(() => {
     void loadLots(lotPage);
-  }, [fecha, lotPage]);
+  }, [browseFrom, browseTo, browseMessengerId, lotPage, messengers]);
 
   const selectedRoute = useMemo(
     () => routes.find((route) => route.id === selectedRouteId) ?? null,
@@ -819,14 +836,7 @@ export default function RutasClient() {
         setRouteSelections({});
         setRoutePreview({
           items: [],
-          summary: {
-            found: 0,
-            ambiguous: 0,
-            notFound: 0,
-            alreadyAssigned: 0,
-            notEligible: 0,
-            duplicates: 0,
-          },
+          summary: buildResolvedCardsPreviewSummary(routeSelectedCards.length),
         });
         setMessage("Revisa las tarjetas seleccionadas antes de crear la ruta.");
         return;
@@ -913,10 +923,19 @@ export default function RutasClient() {
     setContractCardIds(new Set());
     setRoutePickerValue("");
     setRouteSelectedCards([]);
+    const nextBrowseFilters = getPostCreateRouteBrowseFilters({
+      createdDate: fecha,
+      currentFrom: browseFrom,
+      currentTo: browseTo,
+    });
+    setBrowseFrom(nextBrowseFilters.from);
+    setBrowseTo(nextBrowseFilters.to);
+    setBrowseMessengerId(nextBrowseFilters.messengerId);
+    setRouteProductFilter(nextBrowseFilters.productType);
     setRoutePage(1);
-    await loadRoutes(1);
     setSelectedRouteId(data.route.id);
     await workflowDraft.clearDraft();
+    setShowRouteWizard(false);
   }
 
   async function exportRoute(format: "pdf" | "xlsx") {
@@ -1298,10 +1317,42 @@ export default function RutasClient() {
             </button>
           </div>
 
+          <div className="mb-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+            <div className="grid gap-3 lg:grid-cols-[1fr_1fr_1.4fr_1fr_auto] lg:items-end">
+              <label className="text-xs font-semibold uppercase text-slate-500">
+                Desde
+                <input type="date" value={browseFrom} onChange={(event) => setBrowseFrom(event.target.value)} className="mt-1 block w-full rounded-xl border border-slate-300 px-3 py-2 text-sm font-normal text-slate-900" />
+              </label>
+              <label className="text-xs font-semibold uppercase text-slate-500">
+                Hasta
+                <input type="date" value={browseTo} onChange={(event) => setBrowseTo(event.target.value)} className="mt-1 block w-full rounded-xl border border-slate-300 px-3 py-2 text-sm font-normal text-slate-900" />
+              </label>
+              <label className="text-xs font-semibold uppercase text-slate-500">
+                Mensajero
+                <select value={browseMessengerId} onChange={(event) => setBrowseMessengerId(event.target.value)} className="mt-1 block w-full rounded-xl border border-slate-300 px-3 py-2 text-sm font-normal text-slate-900">
+                  <option value="ALL">Todos los mensajeros</option>
+                  {messengers.map((messenger) => <option key={messenger.id} value={messenger.id}>{messenger.nombre}</option>)}
+                </select>
+              </label>
+              <label className="text-xs font-semibold uppercase text-slate-500">
+                Producto
+                <select value={routeProductFilter} onChange={(event) => setRouteProductFilter(event.target.value as "ALL" | "CREDITO" | "DEBITO")} className="mt-1 block w-full rounded-xl border border-slate-300 px-3 py-2 text-sm font-normal text-slate-900">
+                  <option value="ALL">Todos</option><option value="CREDITO">Crédito</option><option value="DEBITO">Débito</option>
+                </select>
+              </label>
+              <button type="button" onClick={() => { setRouteWizardStep(1); setRoutePreview(null); setShowRouteWizard(true); }} className="rounded-xl bg-[#0f2544] px-4 py-2.5 text-sm font-semibold text-white">+ Nueva ruta</button>
+            </div>
+            <p className="mt-2 text-xs text-slate-500">Mostrando rutas de los últimos 30 días por defecto. Estos filtros también controlan Progreso de rutas.</p>
+          </div>
+
           {operativoTab === "asignacion" ? (
-        <div className="grid gap-5 xl:grid-cols-[360px_1fr]">
-          <Panel title="Crear ruta diaria">
+        <div className="grid gap-5">
+          {showRouteWizard ? (
+          <div className="fixed inset-0 z-[120] flex items-start justify-center overflow-y-auto bg-black/40 px-4 py-6" onMouseDown={(event) => { if (event.target === event.currentTarget) setShowRouteWizard(false); }}>
+          <div className="w-full max-w-2xl">
+          <Panel title="Crear ruta diaria" subtitle={`Paso ${routeWizardStep} de 3`}>
             <form className="space-y-3" onSubmit={previewRoute}>
+              {routeWizardStep === 1 ? <>
               <div>
                 <label className="mb-1 block text-xs font-semibold uppercase text-slate-500">Fecha</label>
                 <input
@@ -1325,14 +1376,8 @@ export default function RutasClient() {
                   ))}
                 </select>
               </div>
-              <div>
-                <label className="mb-1 block text-xs font-semibold uppercase text-slate-500">Producto en rutas listadas</label>
-                <select value={routeProductFilter} onChange={(event) => { setRouteProductFilter(event.target.value as "ALL" | "CREDITO" | "DEBITO"); setRoutePage(1); }} className="w-full rounded-xl border border-slate-300 px-3 py-2">
-                  <option value="ALL">Todos</option>
-                  <option value="CREDITO">Crédito</option>
-                  <option value="DEBITO">Débito</option>
-                </select>
-              </div>
+              </> : null}
+              {routeWizardStep === 2 ? <>
               <div>
                   <label className="mb-1 block text-xs font-semibold uppercase text-slate-500">
                     Pistolear tarjeta operativa
@@ -1356,21 +1401,12 @@ export default function RutasClient() {
                     onClearAll={clearAllRouteCards}
                   />
                 </div>
-                <div>
-                  <label className="mb-1 block text-xs font-semibold uppercase text-slate-500">
-                    Tarjetas / Solicitudes / Cedulas / Referencias
-                </label>
-                <textarea
-                  value={identifiers}
-                  onChange={(event) => setIdentifiers(event.target.value)}
-                  rows={7}
-                  className="w-full rounded-xl border border-slate-300 px-3 py-2"
-                  placeholder="Una por línea o separadas por coma"
-                />
+              </> : null}
+              {routeWizardStep === 3 ? <div className="rounded-xl bg-slate-50 p-4 text-sm text-slate-700"><p><strong>Fecha:</strong> {formatDate(fecha)}</p><p><strong>Mensajero:</strong> {messengers.find((item) => item.id === messengerId)?.nombre ?? "-"}</p><p><strong>Tarjetas:</strong> {routeSelectedCards.length}</p></div> : null}
+              <div className="flex justify-between gap-2 border-t border-slate-200 pt-3">
+                <button type="button" onClick={() => routeWizardStep === 1 ? setShowRouteWizard(false) : setRouteWizardStep((routeWizardStep - 1) as 1 | 2)} className="rounded-xl border border-slate-300 px-4 py-2 text-sm">{routeWizardStep === 1 ? "Cancelar" : "Anterior"}</button>
+                {routeWizardStep < 3 ? <button type="button" disabled={routeWizardStep === 2 && !routeSelectedCards.length} onClick={() => setRouteWizardStep((routeWizardStep + 1) as 2 | 3)} className="rounded-xl bg-[#0f2544] px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">Siguiente</button> : <button className="rounded-xl bg-[#0f2544] px-4 py-2 text-sm font-semibold text-white">Previsualizar ruta</button>}
               </div>
-              <button className="w-full rounded-xl bg-[#0f2544] px-4 py-2 text-sm font-semibold text-white">
-                Previsualizar ruta
-              </button>
             </form>
 
             {routePreview ? (
@@ -1378,6 +1414,12 @@ export default function RutasClient() {
                 <div className="rounded-lg bg-blue-50 px-3 py-2 text-xs text-blue-900">
                   Encontradas: {routePreview.summary.found} · Ambiguas: {routePreview.summary.ambiguous} · No encontradas: {routePreview.summary.notFound} · No elegibles: {routePreview.summary.alreadyAssigned + routePreview.summary.notEligible}
                 </div>
+                {routeSelectedCards.map((card) => (
+                  <div key={card.id} className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-xs text-slate-700">
+                    <p className="font-semibold text-emerald-900">Tarjeta {card.tc} (ENCONTRADA)</p>
+                    <p className="mt-1">{card.customer.nombre} · {card.customer.cedula}</p>
+                  </div>
+                ))}
                 {routePreview.items.map((item) => (
                   <div key={item.identifier} className="rounded-lg border border-slate-200 p-2 text-xs">
                     <p className="font-semibold text-slate-800">{item.identifier} <span className="text-slate-500">({item.classification.replaceAll("_", " ")})</span></p>
@@ -1395,6 +1437,8 @@ export default function RutasClient() {
             ) : null}
 
           </Panel>
+          </div></div>
+          ) : null}
 
           <Panel title="Pistoleo y gestion de acuses">
             {!selectedRoute ? (
@@ -1665,13 +1709,13 @@ export default function RutasClient() {
                 <p className="font-display text-lg font-bold text-slate-900">Lotes</p>
                 <p className="text-xs text-slate-500">Gestion de envios a mensajeros y seguimiento</p>
               </div>
-              <div className="flex items-center gap-2">
-                <input
-                  type="date"
-                  value={fecha}
-                  onChange={(event) => setFecha(event.target.value)}
-                  className="rounded-xl border border-slate-300 px-3 py-2 text-sm"
-                />
+              <div className="flex flex-wrap items-center gap-2">
+                <input type="date" aria-label="Lotes desde" value={browseFrom} onChange={(event) => setBrowseFrom(event.target.value)} className="rounded-xl border border-slate-300 px-3 py-2 text-sm" />
+                <input type="date" aria-label="Lotes hasta" value={browseTo} onChange={(event) => setBrowseTo(event.target.value)} className="rounded-xl border border-slate-300 px-3 py-2 text-sm" />
+                <select aria-label="Mensajero de lotes" value={browseMessengerId} onChange={(event) => setBrowseMessengerId(event.target.value)} className="rounded-xl border border-slate-300 px-3 py-2 text-sm">
+                  <option value="ALL">Todos los mensajeros</option>
+                  {messengers.map((messenger) => <option key={messenger.id} value={messenger.id}>{messenger.nombre}</option>)}
+                </select>
                 <button
                   onClick={exportLotTrackingCsv}
                   className="rounded-xl border border-slate-300 px-3 py-2 text-sm"
@@ -1727,7 +1771,7 @@ export default function RutasClient() {
                     {!lots.length ? (
                       <tr>
                         <td colSpan={7} className="px-3 py-6 text-center text-sm text-slate-500">
-                          No hay lotes de seguimiento para la fecha.
+                          No hay lotes para los filtros seleccionados.
                         </td>
                       </tr>
                     ) : null}

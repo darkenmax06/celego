@@ -1,4 +1,5 @@
 import { Prisma, type DispatchOrigin } from "@prisma/client";
+import { normalizeCustomerId } from "./customer-id";
 import { buildSourceRecordKey } from "./dispatch-origin";
 
 export const LEGACY_TORRE_BACKFILL_AUDIT = {
@@ -48,8 +49,8 @@ function buildLegacyTorreSourceRecordKey(input: { tc: string; cedula: string; di
     return buildSourceRecordKey({ origin: "TORRE_POPULAR", ...input, tc });
   }
 
-  const cedula = input.cedula.replace(/\D/g, "");
-  if (!/^\d{9,13}$/.test(cedula) || /^0+$/.test(cedula)) throw new Error("INVALID_CEDULA");
+  const cedula = normalizeCustomerId(input.cedula);
+  if (!cedula) throw new Error("INVALID_CEDULA");
   if (Number.isNaN(input.dispatchDate.getTime())) throw new Error("INVALID_DISPATCH_DATE");
   return `TORRE_POPULAR|${tc}|${cedula}|${input.dispatchDate.toISOString().slice(0, 10)}`;
 }

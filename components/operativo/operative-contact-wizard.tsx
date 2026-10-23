@@ -1,15 +1,27 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Copy, Check, Phone, MessageSquare, MapPin, Send, ArrowLeft, ArrowRight, X, AlertTriangle, Truck, Layers } from "lucide-react";
 import { CardGroupAssignModal } from "@/components/cards/card-group-assign-modal";
 import type { CardGroupSummary } from "@/lib/use-card-groups";
+import { NoContactConfirm } from "@/components/operativo/no-contact-confirm";
+import { PhoneEstadoSelect } from "@/components/operativo/phone-estado-select";
+import { StatusBadge } from "@/components/ui/status-badge";
+import {
+  buildContactTemplateContext,
+  DEFAULT_SCRIPT_TEXT,
+  DEFAULT_WHATSAPP_TEXT,
+  renderContactTemplate,
+} from "@/lib/contact-template";
+import type { PhoneCallDetail } from "@/lib/contact-call-shared";
 
 export type PhoneState = {
   num: string;
   principal: boolean;
   funciona: boolean;
   comentario?: string;
+  /** Calls overhaul: per-phone call outcome (`PHONE_CALL_STATES`), `""` when not set. */
+  estado?: string;
 };
 
 export type OperativeWizardCard = {
@@ -34,6 +46,7 @@ export type OperativeWizardCard = {
   direcciones: string[];
   refs: string[];
   mensajero?: string;
+  mensajeroTelefono?: string | null;
   telefonos: PhoneState[];
   comentarioContacto?: string;
   contactado?: boolean;
@@ -47,28 +60,45 @@ export type OperativeWizardCard = {
   /** Ids of the CardGroups this card belongs to. Names resolve via useCardGroups. */
   groupIds?: string[];
   readOnly?: boolean;
+  productType?: string | null;
+  grupos?: string[];
 };
+
+export type WizardSavePayload = {
+  telefonos: PhoneState[];
+  comentario: string;
+  contactado: boolean;
+  canalContacto?: "WHATSAPP" | "LLAMADA_DIRECTA" | null;
+  nuevaDireccion?: string | null;
+  fechaPreferenciaEntrega?: string | null;
+  solicitudRetorno?: boolean;
+  motivoRetorno?: string | null;
+  trasladoProvincia?: string | null;
+  trasladoMotivo?: string | null;
+  telefonosDetalle?: PhoneCallDetail[];
+  motivoNoContacto?: string | null;
+};
+
+/**
+ * `string` = error message to show; `null` = saved; an object = saved and
+ * carries the card status after the save (e.g. after a return request).
+ */
+export type WizardSaveResult = string | null | { status?: string | null };
 
 type Props = {
   card: OperativeWizardCard;
   index: number;
   total: number;
   provincesList?: string[];
+  /** Name of the signed-in operator, used for the `{{operador}}` template variable. */
+  operatorName?: string | null;
+  /** Override prev/next availability (e.g. when the list spans several pages). */
+  hasPrev?: boolean;
+  hasNext?: boolean;
   onClose: () => void;
   onPrev: () => void;
   onNext: () => void;
-  onSave: (payload: {
-    telefonos: PhoneState[];
-    comentario: string;
-    contactado: boolean;
-    canalContacto?: "WHATSAPP" | "LLAMADA_DIRECTA" | null;
-    nuevaDireccion?: string | null;
-    fechaPreferenciaEntrega?: string | null;
-    solicitudRetorno?: boolean;
-    motivoRetorno?: string | null;
-    trasladoProvincia?: string | null;
-    trasladoMotivo?: string | null;
-  }) => Promise<string | null>;
+  onSave: (payload: WizardSavePayload) => Promise<WizardSaveResult>;
   /**
    * Stage B, Task B3. Gates the footer's group action to ADMIN/OPERADOR.
    */
@@ -84,12 +114,6 @@ type Props = {
   onGroupsChanged?: () => void;
 };
 
-const DEFAULT_SCRIPT =
-  "Hola {{name}}, le saludamos del equipo de entrega de tarjetas. Nos comunicamos para coordinar la entrega de su tarjeta con terminación {{tc}} (Cédula: {{cedula}}) en la dirección registrada: {{direccion}}, {{provincia}}. Por favor confírmenos si se encuentra en dicha dirección o si prefiere coordinar un día u horario de preferencia. ¡Muchas gracias!";
-
-const DEFAULT_WHATSAPP =
-  "¡Hola {{name}}! 👋 Le escribimos del departamento de entrega y logística. Le contactamos para coordinar la entrega de su tarjeta terminación *{{tc}}*.\n\n📍 *Dirección registrada:* {{direccion}}, {{provincia}}\n👤 *Titular:* {{name}} (Cédula: {{cedula}})\n\n¿Se encuentra disponible para recibirla o desea indicar una fecha/horario de su preferencia?";
-
 function formatPhoneDisplay(num: string) {
   const digits = num.replace(/\D/g, "");
   if (digits.length === 10) {
@@ -98,11 +122,38 @@ function formatPhoneDisplay(num: string) {
   return num;
 }
 
+/** Phones worth sending (the API requires at least 3 characters). */
+function usablePhones(phones: PhoneState[]) {
+  return phones.filter((phone) => phone.num && phone.num.trim().length >= 3);
+}
+
+/** `telefonos` as persisted in the card metadata (without the per-call `estado`). */
+function toSavedPhones(phones: PhoneState[]): PhoneState[] {
+  return usablePhones(phones).map(({ num, principal, funciona, comentario }) => ({ num, principal, funciona, comentario }));
+}
+
+/** Per-phone call detail stored on the `ContactLog` (`telefonosDetalle`). */
+export function toTelefonosDetalle(phones: PhoneState[]): PhoneCallDetail[] {
+  return usablePhones(phones).map((phone) => ({
+    numero: phone.num.trim(),
+    estado: phone.estado?.trim() || null,
+    nota: phone.comentario?.trim() || null,
+  }));
+}
+
+function isEditableTarget(target: EventTarget | null) {
+  if (!(target instanceof HTMLElement)) return false;
+  return target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName);
+}
+
 export function OperativeContactWizard({
   card,
   index,
   total,
   provincesList = [],
+  operatorName,
+  hasPrev,
+  hasNext,
   onClose,
   onPrev,
   onNext,
@@ -111,6 +162,8 @@ export function OperativeContactWizard({
   cardGroups = [],
   onGroupsChanged,
 }: Props) {
+  const canPrev = hasPrev ?? index > 0;
+  const canNext = hasNext ?? index < total - 1;
   // Column 2 state
   const [telefonos, setTelefonos] = useState<PhoneState[]>([]);
   const [newPhoneNum, setNewPhoneNum] = useState("");
@@ -121,8 +174,8 @@ export function OperativeContactWizard({
   const [comentarioGeneral, setComentarioGeneral] = useState("");
 
   // Column 3 state (Script & WhatsApp template)
-  const [scriptTemplate, setScriptTemplate] = useState(DEFAULT_SCRIPT);
-  const [whatsappTemplate, setWhatsappTemplate] = useState(DEFAULT_WHATSAPP);
+  const [scriptTemplate, setScriptTemplate] = useState(DEFAULT_SCRIPT_TEXT);
+  const [whatsappTemplate, setWhatsappTemplate] = useState(DEFAULT_WHATSAPP_TEXT);
   const [scriptTab, setScriptTab] = useState<"SPEECH" | "WHATSAPP">("SPEECH");
   const [copied, setCopied] = useState(false);
 
@@ -132,6 +185,9 @@ export function OperativeContactWizard({
   const [transferReason, setTransferReason] = useState("");
   const [showReturnModal, setShowReturnModal] = useState(false);
   const [returnReason, setReturnReason] = useState("");
+  const [showNoContactConfirm, setShowNoContactConfirm] = useState(false);
+  const [motivoNoContacto, setMotivoNoContacto] = useState("");
+  const [noContactError, setNoContactError] = useState("");
 
   // Stage B, Task B3: group assignment for this single card.
   const [groupModalOpen, setGroupModalOpen] = useState(false);
@@ -150,6 +206,7 @@ export function OperativeContactWizard({
   // Save states
   const [saving, setSaving] = useState(false);
   const [feedback, setFeedback] = useState("");
+  const [savedStatus, setSavedStatus] = useState<string | null>(null);
 
   // Load template from config
   useEffect(() => {
@@ -162,11 +219,15 @@ export function OperativeContactWizard({
       .catch(() => {});
   }, []);
 
-  // Initialize card data
+  // Initialize card data once per card: a refreshed card object for the SAME
+  // id (e.g. after saving) must not wipe the operator's feedback.
+  const initializedForRef = useRef<string | null>(null);
   useEffect(() => {
+    if (initializedForRef.current === card.id) return;
+    initializedForRef.current = card.id;
     const basePhones = card.telefonos && card.telefonos.length > 0
-      ? card.telefonos.map((t) => ({ ...t, comentario: t.comentario || "" }))
-      : [{ num: "", principal: true, funciona: false, comentario: "" }];
+      ? card.telefonos.map((t) => ({ ...t, comentario: t.comentario || "", estado: t.estado || "" }))
+      : [{ num: "", principal: true, funciona: false, comentario: "", estado: "" }];
 
     setTelefonos(basePhones);
     setCanalContacto(card.canalContacto || null);
@@ -176,37 +237,59 @@ export function OperativeContactWizard({
     setTransferTargetProvince("");
     setTransferReason("");
     setReturnReason(card.motivoRetorno || "");
+    setMotivoNoContacto("");
+    setNoContactError("");
+    setShowNoContactConfirm(false);
+    setSavedStatus(null);
     setFeedback("");
   }, [card]);
 
-  // Keyboard navigation & ESC
+  const anySubModalOpen = showTransferModal || showReturnModal || showNoContactConfirm;
+
+  // Keyboard: ESC closes, ←/→ move between cards (never while typing or inside a sub-modal)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !showTransferModal && !showReturnModal) {
+      if (anySubModalOpen) return;
+      if (e.key === "Escape") {
         onClose();
+        return;
       }
+      if (isEditableTarget(e.target) || e.altKey || e.ctrlKey || e.metaKey) return;
+      if (e.key === "ArrowLeft" && canPrev) onPrev();
+      if (e.key === "ArrowRight" && canNext) onNext();
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [onClose, showTransferModal, showReturnModal]);
+  }, [onClose, onPrev, onNext, canPrev, canNext, anySubModalOpen]);
 
-  // Resolved dynamic text for Column 3
+  // Resolved dynamic text for Column 3 (single source of truth: lib/contact-template)
   const principalPhone = useMemo(() => {
-    return telefonos.find((t) => t.principal)?.num || telefonos[0]?.num || "-";
+    return telefonos.find((t) => t.principal)?.num || telefonos[0]?.num || null;
   }, [telefonos]);
 
   const resolvedText = useMemo(() => {
     const activeTemplate = scriptTab === "WHATSAPP" ? whatsappTemplate : scriptTemplate;
-    return activeTemplate
-      .replaceAll("{{name}}", card.nombre)
-      .replaceAll("{{cedula}}", card.cedula)
-      .replaceAll("{{tc}}", card.tc)
-      .replaceAll("{{provincia}}", card.provincia)
-      .replaceAll("{{zona}}", card.zona)
-      .replaceAll("{{direccion}}", nuevaDireccion || card.direcciones.join(" · ") || "No especificada")
-      .replaceAll("{{mensajero}}", card.mensajero || "Sin asignar")
-      .replaceAll("{{solicitud}}", card.requestNumber || card.tipoEmision || "N/A")
-      .replaceAll("{{telefono_principal}}", principalPhone);
+    const context = buildContactTemplateContext({
+      nombre: card.nombre,
+      cedula: card.cedula,
+      tc: card.tc,
+      provincia: card.provincia,
+      zona: card.zona,
+      direccion: card.direcciones.join(" · "),
+      nuevaDireccion,
+      mensajero: card.mensajero,
+      mensajeroTelefono: card.mensajeroTelefono,
+      solicitud: card.requestNumber || card.tipoEmision,
+      telefonos: telefonos.map((phone) => phone.num).filter(Boolean),
+      telefonoPrincipal: principalPhone,
+      operador: operatorName,
+      canalContacto,
+      fechaPreferenciaEntrega: fechaPreferencia || null,
+      slaDueDate: card.slaDueDate,
+      productType: card.productType,
+      grupos: card.grupos,
+    });
+    return renderContactTemplate(activeTemplate, context);
   }, [
     scriptTab,
     scriptTemplate,
@@ -214,7 +297,33 @@ export function OperativeContactWizard({
     card,
     nuevaDireccion,
     principalPhone,
+    telefonos,
+    operatorName,
+    canalContacto,
+    fechaPreferencia,
   ]);
+
+  const phoneEstadoChange = useCallback((phoneIdx: number, estado: string) => {
+    setTelefonos((prev) => prev.map((t, idx) => (idx === phoneIdx ? { ...t, estado } : t)));
+  }, []);
+
+  /** Runs `onSave` and normalizes its result; returns the error message (or null). */
+  const runSave = async (payload: WizardSavePayload): Promise<string | null> => {
+    setSaving(true);
+    setFeedback("");
+    const result = await onSave(payload);
+    setSaving(false);
+    if (typeof result === "string") return result;
+    setSavedStatus(result && typeof result === "object" ? (result.status ?? null) : null);
+    return null;
+  };
+
+  const basePayload = () => ({
+    telefonos: toSavedPhones(telefonos),
+    telefonosDetalle: toTelefonosDetalle(telefonos),
+    comentario: comentarioGeneral,
+    nuevaDireccion: nuevaDireccion.trim() || null,
+  });
 
   const handleCopyText = async () => {
     try {
@@ -273,45 +382,38 @@ export function OperativeContactWizard({
 
   // Action Bar Handlers
   const handleSaveContacted = async () => {
-    setSaving(true);
-    setFeedback("");
-    const validPhones = telefonos.filter((t) => t.num && t.num.trim().length >= 3);
-    const err = await onSave({
-      telefonos: validPhones,
-      comentario: comentarioGeneral,
+    const err = await runSave({
+      ...basePayload(),
       contactado: true,
       canalContacto,
-      nuevaDireccion: nuevaDireccion.trim() || null,
       fechaPreferenciaEntrega: fechaPreferencia || null,
       solicitudRetorno: false,
     });
-    setSaving(false);
-    if (err) {
-      setFeedback(err);
-    } else {
-      setFeedback("✓ Guardada como contactada con éxito");
-    }
+    setFeedback(err ?? "✓ Guardada como contactada con éxito");
   };
 
-  const handleSaveNotContacted = async () => {
-    setSaving(true);
-    setFeedback("");
-    const validPhones = telefonos.filter((t) => t.num && t.num.trim().length >= 3);
-    const err = await onSave({
-      telefonos: validPhones,
-      comentario: comentarioGeneral,
+  const handleOpenNoContact = () => {
+    setNoContactError("");
+    setShowNoContactConfirm(true);
+  };
+
+  const handleConfirmNotContacted = async () => {
+    setNoContactError("");
+    const err = await runSave({
+      ...basePayload(),
       contactado: false,
       canalContacto: null,
-      nuevaDireccion: nuevaDireccion.trim() || null,
       fechaPreferenciaEntrega: fechaPreferencia || null,
       solicitudRetorno: false,
+      motivoNoContacto: motivoNoContacto.trim() || null,
     });
-    setSaving(false);
     if (err) {
-      setFeedback(err);
-    } else {
-      setFeedback("✓ Marcada como no contactada");
+      // Keep the confirmation open so the operator can fix what the API rejected.
+      setNoContactError(err);
+      return;
     }
+    setShowNoContactConfirm(false);
+    setFeedback("✓ Marcada como no contactada");
   };
 
   const handleConfirmTransfer = async () => {
@@ -319,26 +421,16 @@ export function OperativeContactWizard({
       setFeedback("Selecciona una provincia de destino");
       return;
     }
-    setSaving(true);
-    setFeedback("");
-    const validPhones = telefonos.filter((t) => t.num && t.num.trim().length >= 3);
-    const err = await onSave({
-      telefonos: validPhones,
-      comentario: comentarioGeneral,
+    const err = await runSave({
+      ...basePayload(),
       contactado: false,
       canalContacto,
-      nuevaDireccion: nuevaDireccion.trim() || null,
       fechaPreferenciaEntrega: fechaPreferencia || null,
       trasladoProvincia: transferTargetProvince,
       trasladoMotivo: transferReason.trim() || `Traslado solicitado a ${transferTargetProvince}`,
     });
-    setSaving(false);
     setShowTransferModal(false);
-    if (err) {
-      setFeedback(err);
-    } else {
-      setFeedback(`✓ Traslado registrado hacia ${transferTargetProvince} y solicitud de extensión generada`);
-    }
+    setFeedback(err ?? `✓ Traslado registrado hacia ${transferTargetProvince} y solicitud de extensión generada`);
   };
 
   const handleConfirmReturn = async () => {
@@ -346,26 +438,16 @@ export function OperativeContactWizard({
       setFeedback("Indica el motivo de solicitud de retorno");
       return;
     }
-    setSaving(true);
-    setFeedback("");
-    const validPhones = telefonos.filter((t) => t.num && t.num.trim().length >= 3);
-    const err = await onSave({
-      telefonos: validPhones,
-      comentario: comentarioGeneral,
+    const err = await runSave({
+      ...basePayload(),
       contactado: false,
       canalContacto: null,
-      nuevaDireccion: nuevaDireccion.trim() || null,
       fechaPreferenciaEntrega: null,
       solicitudRetorno: true,
       motivoRetorno: returnReason.trim(),
     });
-    setSaving(false);
     setShowReturnModal(false);
-    if (err) {
-      setFeedback(err);
-    } else {
-      setFeedback("✓ Solicitud de retorno registrada correctamente");
-    }
+    setFeedback(err ?? "✓ Solicitud de retorno registrada correctamente");
   };
 
   return (
@@ -415,34 +497,35 @@ export function OperativeContactWizard({
           </div>
 
           <div className="flex items-center gap-2">
-            <div className="flex items-center gap-1 rounded-xl bg-white px-2.5 py-1.5 border border-slate-200 text-xs font-semibold text-slate-600 shadow-2xs">
-              <span>
-                {index + 1} de {total}
+            <nav aria-label="Navegación entre tarjetas" className="flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={onPrev}
+                disabled={!canPrev}
+                className="flex items-center gap-1.5 rounded-xl border border-slate-300 bg-white px-3 py-1.5 text-xs font-bold text-slate-700 shadow-2xs hover:bg-slate-100 disabled:opacity-40"
+                title="Tarjeta anterior (←)"
+              >
+                <ArrowLeft className="h-4 w-4" />
+                Anterior
+              </button>
+              <span className="min-w-[4.5rem] text-center text-xs font-semibold text-slate-600" aria-live="polite">
+                {total > 0 ? `${index + 1} de ${total}` : "1 de 1"}
               </span>
-              <div className="flex items-center ml-2 border-l border-slate-200 pl-2 gap-1">
-                <button
-                  type="button"
-                  onClick={onPrev}
-                  disabled={index <= 0}
-                  className="rounded p-1 hover:bg-slate-100 disabled:opacity-30"
-                  title="Anterior tarjeta"
-                >
-                  <ArrowLeft className="h-4 w-4" />
-                </button>
-                <button
-                  type="button"
-                  onClick={onNext}
-                  disabled={index >= total - 1}
-                  className="rounded p-1 hover:bg-slate-100 disabled:opacity-30"
-                  title="Siguiente tarjeta"
-                >
-                  <ArrowRight className="h-4 w-4" />
-                </button>
-              </div>
-            </div>
+              <button
+                type="button"
+                onClick={onNext}
+                disabled={!canNext}
+                className="flex items-center gap-1.5 rounded-xl border border-slate-300 bg-white px-3 py-1.5 text-xs font-bold text-slate-700 shadow-2xs hover:bg-slate-100 disabled:opacity-40"
+                title="Tarjeta siguiente (→)"
+              >
+                Siguiente
+                <ArrowRight className="h-4 w-4" />
+              </button>
+            </nav>
             <button
               type="button"
               onClick={onClose}
+              aria-label="Cerrar"
               className="rounded-xl border border-slate-200 bg-white p-2 text-slate-500 hover:bg-slate-100 hover:text-slate-800 shadow-2xs"
             >
               <X className="h-4 w-4" />
@@ -576,9 +659,10 @@ export function OperativeContactWizard({
               <div className="space-y-2">
                 {/* Headers */}
                 <div className="grid grid-cols-12 gap-2 px-2 text-[11px] font-bold uppercase tracking-wider text-slate-500">
-                  <span className="col-span-3 text-center">Funciona</span>
-                  <span className="col-span-4">Número</span>
-                  <span className="col-span-5">Nota / Estado</span>
+                  <span className="col-span-2 text-center">Funciona</span>
+                  <span className="col-span-3">Número</span>
+                  <span className="col-span-3">Estado</span>
+                  <span className="col-span-4">Nota</span>
                 </div>
 
                 {/* Rows */}
@@ -592,7 +676,7 @@ export function OperativeContactWizard({
                     }`}
                   >
                     {/* Col 1: Funciona & Principal */}
-                    <div className="col-span-3 flex items-center justify-center gap-2">
+                    <div className="col-span-2 flex items-center justify-center gap-2">
                       <button
                         type="button"
                         onClick={() => handleSetPrincipal(idx)}
@@ -615,9 +699,10 @@ export function OperativeContactWizard({
                     </div>
 
                     {/* Col 2: Número */}
-                    <div className="col-span-4">
+                    <div className="col-span-3">
                       <input
                         type="text"
+                        aria-label={`Número ${idx + 1}`}
                         value={t.num}
                         onChange={(e) => {
                           const val = e.target.value;
@@ -630,10 +715,20 @@ export function OperativeContactWizard({
                       />
                     </div>
 
-                    {/* Col 3: Comentario individual */}
-                    <div className="col-span-5 flex items-center gap-1.5">
+                    {/* Col 3: Estado de la llamada a este número */}
+                    <div className="col-span-3">
+                      <PhoneEstadoSelect
+                        value={t.estado || ""}
+                        onChange={(next) => phoneEstadoChange(idx, next)}
+                        label={`Estado del número ${t.num || idx + 1}`}
+                      />
+                    </div>
+
+                    {/* Col 4: Comentario individual */}
+                    <div className="col-span-4 flex items-center gap-1.5">
                       <input
                         type="text"
+                        aria-label={`Nota del número ${t.num || idx + 1}`}
                         value={t.comentario || ""}
                         onChange={(e) => handlePhoneCommentChange(idx, e.target.value)}
                         placeholder="Ej: Apagado, no contesta..."
@@ -853,6 +948,11 @@ export function OperativeContactWizard({
                 {feedback}
               </span>
             ) : null}
+            {savedStatus ? (
+              <span className="flex items-center gap-1.5 text-xs font-semibold text-slate-600">
+                Estado actual: <StatusBadge value={savedStatus} />
+              </span>
+            ) : null}
             {saving ? (
               <span className="text-xs font-semibold text-slate-500 animate-pulse">
                 Procesando cambios...
@@ -913,7 +1013,7 @@ export function OperativeContactWizard({
             {/* Marcar No Contactada */}
             <button
               type="button"
-              onClick={handleSaveNotContacted}
+              onClick={handleOpenNoContact}
               disabled={saving}
               className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-xs font-bold text-slate-700 hover:bg-slate-100 transition-all disabled:opacity-50"
             >
@@ -949,6 +1049,21 @@ export function OperativeContactWizard({
               setGroupModalOpen(false);
               onGroupsChanged?.();
             }}
+          />
+        ) : null}
+
+        {/* CONFIRMACIÓN NO CONTACTADA */}
+        {showNoContactConfirm ? (
+          <NoContactConfirm
+            phones={telefonos}
+            motivo={motivoNoContacto}
+            saving={saving}
+            error={noContactError}
+            onEstadoChange={phoneEstadoChange}
+            onNotaChange={handlePhoneCommentChange}
+            onMotivoChange={setMotivoNoContacto}
+            onCancel={() => setShowNoContactConfirm(false)}
+            onConfirm={() => void handleConfirmNotContacted()}
           />
         ) : null}
 

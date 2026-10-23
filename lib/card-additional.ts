@@ -1,4 +1,5 @@
 import { Prisma } from "@prisma/client";
+import { normalizeCustomerId } from "./customer-id";
 import { prisma } from "./prisma";
 
 type CardAdditionalClient = Pick<Prisma.TransactionClient, "card">;
@@ -26,8 +27,7 @@ export type AdditionalAssignment = {
 };
 
 function normalizeCedula(cedula: string) {
-  const digits = cedula.replace(/\D/g, "");
-  return digits || cedula.trim().toUpperCase();
+  return normalizeCustomerId(cedula) ?? (cedula.replace(/\D/g, "") || cedula.trim().toUpperCase());
 }
 
 export function cardDispatchDateKey(value: Date | null | undefined) {

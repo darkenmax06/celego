@@ -8,6 +8,12 @@ import {
   slaVencidasListQuery,
   SLA_CLOSED_STATUSES,
 } from "@/lib/list-query/descriptors/sla-vencidas";
+import {
+  ASIGNADO_PARAM,
+  buildAsignadoWhere,
+  CALL_ASSIGNMENT_SELECT,
+  toAsignadoA,
+} from "@/lib/call-assignment";
 
 export async function GET(request: NextRequest) {
   const auth = await requireApiSession(["ADMIN", "OPERADOR", "FACTURACION"]);
@@ -57,9 +63,27 @@ export async function GET(request: NextRequest) {
     }
   }
 
+  // Calls overhaul: `asignado` (ME | SIN_ASIGNAR | userId).
+  const asignadoConstraint = buildAsignadoWhere(
+    request.nextUrl.searchParams.get(ASIGNADO_PARAM),
+    auth.session.user.id,
+  );
+
+  // Calls overhaul: `canalContacto` / `urgent` facets of the shared "llamadas" set.
+  const canalContactoParam = request.nextUrl.searchParams.get("canalContacto");
+  const canalConstraint: Prisma.CardWhereInput | undefined =
+    canalContactoParam === "WHATSAPP" || canalContactoParam === "LLAMADA_DIRECTA"
+      ? { metadata: { path: ["operativo", "canalContacto"], equals: canalContactoParam } }
+      : undefined;
+  const urgentConstraint: Prisma.CardWhereInput | undefined =
+    request.nextUrl.searchParams.get("urgent") === "1" ? { urgent: true } : undefined;
+
   const { where, orderBy, skip, take, page, pageSize, unpaginated } = compiled;
-  const finalWhere: Prisma.CardWhereInput = contactoConstraint
-    ? { AND: [where, contactoConstraint] }
+  const extraConstraints = [contactoConstraint, asignadoConstraint, canalConstraint, urgentConstraint].filter(
+    (clause): clause is Prisma.CardWhereInput => Boolean(clause),
+  );
+  const finalWhere: Prisma.CardWhereInput = extraConstraints.length
+    ? { AND: [where, ...extraConstraints] }
     : where;
 
   const [cards, messengers, total] = await Promise.all([
@@ -94,6 +118,8 @@ export async function GET(request: NextRequest) {
         // named here. Bare ids only — clients resolve id -> name through
         // `lib/use-card-groups.ts`. Same shape as `app/api/urgentes/route.ts`.
         groupMemberships: { select: { groupId: true } },
+        callAssignment: CALL_ASSIGNMENT_SELECT,
+        _count: { select: { contacts: true } },
       },
       orderBy,
       skip,
@@ -153,6 +179,8 @@ export async function GET(request: NextRequest) {
       motivoRetorno,
       traslado,
       comentarioContacto,
+      asignadoA: toAsignadoA(card.callAssignment),
+      attempts: card._count.contacts,
       metadata: card.metadata,
       groupIds: card.groupMemberships.map((membership) => membership.groupId),
     };

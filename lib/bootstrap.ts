@@ -46,9 +46,9 @@ export async function ensureBaseCatalogs() {
 
   for (const zona of [...ZONAS, "REMOTA"]) {
     await prisma.zoneTariff.upsert({
-      where: { zona },
+      where: { productType_zona: { productType: "CREDITO", zona } },
       update: {},
-      create: { zona, baseCents: 0 },
+      create: { zona, productType: "CREDITO", baseCents: 0 },
     });
   }
 

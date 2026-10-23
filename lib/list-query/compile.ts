@@ -99,10 +99,12 @@ function parseDayBoundary(
 function expandSingleDay(raw: string): { gte: Date; lt: Date } | null {
   const trimmed = raw.trim();
   if (!trimmed) return null;
-  const start = new Date(trimmed);
+  const start = /^\d{4}-\d{2}-\d{2}$/.test(trimmed)
+    ? new Date(`${trimmed}T00:00:00.000Z`)
+    : new Date(trimmed);
   if (Number.isNaN(start.getTime())) return null;
   const end = new Date(start);
-  end.setDate(end.getDate() + 1);
+  end.setUTCDate(end.getUTCDate() + 1);
   return { gte: start, lt: end };
 }
 

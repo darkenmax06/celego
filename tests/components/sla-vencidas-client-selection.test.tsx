@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 /**
@@ -13,8 +13,23 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
  * `colSpan` in the table must grow with it — otherwise the grouped-header and
  * empty-state rows stop spanning the full width.
  */
+
+// Calls overhaul: list filters live in the URL and tiles navigate to the call
+// detail screen, so the client needs the router, pathname and search params.
+const navigation = vi.hoisted(() => ({ push: vi.fn(), replace: vi.fn() }));
+vi.mock("next/navigation", () => ({
+  useSearchParams: () => new URLSearchParams(),
+  useRouter: () => navigation,
+  usePathname: () => "/sla-vencidas",
+}));
+
+let capturedOnViewChange: ((view: string) => void) | null = null;
+
 vi.mock("@/components/filters/filter-bar", () => ({
-  FilterBar: () => <div data-testid="filter-bar" />,
+  FilterBar: (props: { onViewChange?: (view: string) => void }) => {
+    capturedOnViewChange = props.onViewChange ?? null;
+    return <div data-testid="filter-bar" />;
+  },
 }));
 
 vi.mock("@/components/operativo/operative-contact-wizard", () => ({
@@ -80,7 +95,20 @@ function stubFetch(rows: ReturnType<typeof buildRow>[]) {
   });
 }
 
+/**
+ * Tiles are the default view since the calls overhaul; the checkbox column and
+ * its colSpan rules live in the table, so these tests switch to the list view.
+ */
+async function renderListView(role: string) {
+  render(<SlaVencidasClient role={role} />);
+  await waitFor(() => expect(capturedOnViewChange).not.toBeNull());
+  await act(async () => {
+    capturedOnViewChange!("list");
+  });
+}
+
 beforeEach(() => {
+  capturedOnViewChange = null;
   window.localStorage.clear();
   URL.createObjectURL = vi.fn(() => "blob:stub");
   URL.revokeObjectURL = vi.fn();
@@ -91,7 +119,7 @@ beforeEach(() => {
 
 describe("SlaVencidasClient — card-groups selection wiring (ADMIN)", () => {
   it("renders a leading header checkbox and one per-row checkbox", async () => {
-    render(<SlaVencidasClient role="ADMIN" />);
+    await renderListView("ADMIN");
 
     await waitFor(() => expect(screen.getAllByRole("checkbox")).toHaveLength(3));
     expect(
@@ -103,7 +131,7 @@ describe("SlaVencidasClient — card-groups selection wiring (ADMIN)", () => {
   });
 
   it("selects only the current page's rows from the header checkbox and shows the bar", async () => {
-    render(<SlaVencidasClient role="ADMIN" />);
+    await renderListView("ADMIN");
     await waitFor(() => expect(screen.getAllByRole("checkbox")).toHaveLength(3));
 
     fireEvent.click(screen.getByRole("checkbox", { name: "Seleccionar todas en esta página" }));
@@ -115,7 +143,7 @@ describe("SlaVencidasClient — card-groups selection wiring (ADMIN)", () => {
   });
 
   it("opens the assign modal and reads the off-filter count for resource sla-vencidas", async () => {
-    render(<SlaVencidasClient role="ADMIN" />);
+    await renderListView("ADMIN");
     await waitFor(() => expect(screen.getAllByRole("checkbox")).toHaveLength(3));
 
     fireEvent.click(screen.getByRole("checkbox", { name: "Seleccionar todas en esta página" }));
@@ -140,7 +168,7 @@ describe("SlaVencidasClient — card-groups selection wiring (ADMIN)", () => {
   it("grows every colSpan so the checkbox column does not shorten the empty-state row", async () => {
     stubFetch([]);
 
-    render(<SlaVencidasClient role="ADMIN" />);
+    await renderListView("ADMIN");
 
     await waitFor(() =>
       expect(screen.getByText(/No hay tarjetas SLA vencidas/)).toBeInTheDocument(),
@@ -151,7 +179,7 @@ describe("SlaVencidasClient — card-groups selection wiring (ADMIN)", () => {
   });
 
   it("keeps the checkbox column out of the exportable column set", async () => {
-    render(<SlaVencidasClient role="ADMIN" />);
+    await renderListView("ADMIN");
     await waitFor(() => expect(screen.getAllByRole("checkbox")).toHaveLength(3));
 
     fireEvent.click(screen.getByRole("button", { name: "Exportar CSV" }));
