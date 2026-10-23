@@ -4,9 +4,10 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { PageHeader } from "@/components/ui/page-header";
 import { Panel } from "@/components/ui/panel";
-import { FilterBar } from "@/components/filters/filter-bar";
+import { FilterBar, type ViewType } from "@/components/filters/filter-bar";
 import { CardTile } from "@/components/cards/card-tile";
 import { CardTileGrid } from "@/components/cards/card-tile-grid";
+import { CardListTable } from "@/components/cards/card-list-table";
 import { ContactReportModal } from "@/components/llamadas/contact-report-modal";
 import { useCardListFilters } from "@/lib/use-card-list-filters";
 import { useCallOperators } from "@/lib/llamadas/use-call-operators";
@@ -22,6 +23,7 @@ import { callDetailHref, writeNavContext } from "@/lib/llamadas/nav-context";
 
 const ASIGNACIONES_ENDPOINT = "/api/llamadas/asignaciones";
 const DEFAULT_FILTERS = { page: "1", pageSize: "50" };
+const MIS_GESTIONES_VIEWS: ViewType[] = ["cards", "list"];
 
 type PaginationMeta = { page: number; pageSize: number; total: number; totalPages: number };
 type AsignacionesResponse = { cards?: OperativoRowLike[]; pagination?: PaginationMeta; error?: string };
@@ -46,6 +48,7 @@ export default function MisGestionesClient({ isAdmin }: { isAdmin: boolean }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showReport, setShowReport] = useState(false);
+  const [viewMode, setViewMode] = useState<ViewType>("cards");
 
   const listParams = useMemo(() => buildListParams(filters, isAdmin), [filters, isAdmin]);
 
@@ -105,21 +108,22 @@ export default function MisGestionesClient({ isAdmin }: { isAdmin: boolean }) {
     [items, filters.page, pathname, listParams, pagination, router],
   );
 
+  const callButton = (item: CallListItem) =>
+    item.cardId ? (
+      <button
+        type="button"
+        onClick={() => openCallDetail(item.cardId as string, { llamar: true })}
+        className="rounded-lg bg-[#0f2544] px-2.5 py-1 text-xs font-bold text-white hover:bg-slate-800"
+      >
+        Llamar
+      </button>
+    ) : null;
+
   const renderTile = (item: CallListItem) => (
     <CardTile
       data={item}
       onOpen={item.cardId ? () => openCallDetail(item.cardId as string) : undefined}
-      actions={
-        item.cardId ? (
-          <button
-            type="button"
-            onClick={() => openCallDetail(item.cardId as string, { llamar: true })}
-            className="rounded-lg bg-[#0f2544] px-2.5 py-1 text-xs font-bold text-white hover:bg-slate-800"
-          >
-            Llamar
-          </button>
-        ) : null
-      }
+      actions={callButton(item)}
     />
   );
 
@@ -168,19 +172,33 @@ export default function MisGestionesClient({ isAdmin }: { isAdmin: boolean }) {
           onFilterChange={(next) => setFilters({ ...next, page: "1", pageSize: filters.pageSize || "50" })}
           onReset={resetFilters}
           searchPlaceholder="Buscar por TC, cédula, nombre o referencia..."
+          allowedViews={MIS_GESTIONES_VIEWS}
+          currentView={viewMode}
+          onViewChange={setViewMode}
           className="min-w-0 flex-1"
         />
       </div>
 
       <Panel>
         {error ? <p className="mb-3 text-sm font-semibold text-red-600">{error}</p> : null}
-        <CardTileGrid
-          items={items}
-          getKey={(item) => item.id}
-          renderItem={renderTile}
-          loading={loading}
-          emptyMessage={loading ? "Cargando..." : "No hay tarjetas asignadas."}
-        />
+        {viewMode === "list" ? (
+          <CardListTable
+            items={items}
+            getKey={(item) => item.id}
+            onOpen={(item) => (item.cardId ? openCallDetail(item.cardId) : undefined)}
+            renderActions={(item) => callButton(item)}
+            loading={loading}
+            emptyMessage={loading ? "Cargando..." : "No hay tarjetas asignadas."}
+          />
+        ) : (
+          <CardTileGrid
+            items={items}
+            getKey={(item) => item.id}
+            renderItem={renderTile}
+            loading={loading}
+            emptyMessage={loading ? "Cargando..." : "No hay tarjetas asignadas."}
+          />
+        )}
 
         <div className="mt-4 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-xs text-slate-600">
           <span>

@@ -17,6 +17,7 @@ export const operationalCardSelect = Prisma.validator<Prisma.CardSelect>()({
   isRemote: true,
   zona: true,
   provincia: true,
+  productType: true,
   customer: {
     select: {
       nombre: true,

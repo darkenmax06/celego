@@ -27,6 +27,7 @@ export type OperationalCard = {
   isRemote: boolean;
   zona: string;
   provincia?: string | null;
+  productType?: "CREDITO" | "DEBITO";
 };
 
 export type OperationalSearchResult =

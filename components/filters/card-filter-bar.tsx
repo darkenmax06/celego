@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { FilterBar, type FacetConfig, type FilterBarProps, type GroupByConfig } from "@/components/filters/filter-bar";
 import {
   buildCardFacets,
@@ -8,6 +8,7 @@ import {
   CARD_FACET_PRESETS,
   CARD_GROUP_BY_PRESETS,
   OPEN_CARD_STATUS_VALUES,
+  pruneStatusesForProduct,
   requiredFacetSources,
   type CardFacetKey,
   type CardFacetPreset,
@@ -94,27 +95,40 @@ export function useCardFacetSources(keys: readonly CardFacetKey[]): CardFacetSou
   );
 }
 
-export function CardFilterBar({ preset, extraFacets, groupByOptions, sources: sourceOverrides, ...rest }: CardFilterBarProps) {
+export function CardFilterBar({
+  preset,
+  extraFacets,
+  groupByOptions,
+  sources: sourceOverrides,
+  onFilterChange,
+  ...rest
+}: CardFilterBarProps) {
   const keys = CARD_FACET_PRESETS[preset];
   const loadedSources = useCardFacetSources(keys);
   const sources = useMemo(() => ({ ...loadedSources, ...sourceOverrides }), [loadedSources, sourceOverrides]);
 
   // FilterBar re-runs its distinct-values effect whenever `facets` changes
   // identity, so the array must be memoized.
+  const productType = rest.filters.productType;
   const facets = useMemo(
     () => [
       ...buildCardFacets(keys, {
         ...sources,
         statusValues: preset === "llamadas" ? OPEN_CARD_STATUS_VALUES : undefined,
+        productType,
       }),
       ...(extraFacets ?? []),
     ],
-    [keys, sources, preset, extraFacets],
+    [keys, sources, preset, extraFacets, productType],
+  );
+  const handleFilterChange = useCallback(
+    (next: Record<string, string>) => onFilterChange(pruneStatusesForProduct(next)),
+    [onFilterChange],
   );
   const groupBy = useMemo(
     () => groupByOptions ?? buildGroupByOptions(CARD_GROUP_BY_PRESETS[preset]),
     [groupByOptions, preset],
   );
 
-  return <FilterBar {...rest} facets={facets} groupByOptions={groupBy} />;
+  return <FilterBar {...rest} onFilterChange={handleFilterChange} facets={facets} groupByOptions={groupBy} />;
 }

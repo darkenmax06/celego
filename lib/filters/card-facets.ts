@@ -31,6 +31,8 @@ export type CardFacetSources = {
   operadores?: ReadonlyArray<{ id: string; name: string }>;
   /** Restricts the status options (e.g. open statuses only for call workspaces). */
   statusValues?: readonly string[];
+  /** Selected product filter; narrows the status options to that product's statuses. */
+  productType?: string | null;
 };
 
 export const ZONA_VALUES = ["Metro", "Norte", "Sur", "Este"] as const;
@@ -74,6 +76,35 @@ export const OPEN_CARD_STATUS_VALUES = [
   "TD_EN_PROCESO_DE_RETORNO",
 ] as const;
 
+/** Logistics statuses both products go through before their product-specific outcome. */
+const SHARED_CARD_STATUS_VALUES = new Set<string>(["DESPACHADA", "ENVIADA_INTERIOR", "EN_RUTA", "NO_LOCALIZADO"]);
+
+/**
+ * Statuses a product can be in: debit cards use the shared logistics statuses
+ * plus the `TD_*` ones, credit cards every non-`TD_*` status. Any other value
+ * (no product selected) keeps the full list.
+ */
+export function cardStatusValuesForProduct(productType?: string | null): readonly string[] {
+  if (productType === "DEBITO") {
+    return ALL_CARD_STATUS_VALUES.filter((value) => value.startsWith("TD_") || SHARED_CARD_STATUS_VALUES.has(value));
+  }
+  if (productType === "CREDITO") return ALL_CARD_STATUS_VALUES.filter((value) => !value.startsWith("TD_"));
+  return ALL_CARD_STATUS_VALUES;
+}
+
+/** Drops selected statuses that the selected product can never be in, so the list does not silently go empty. */
+export function pruneStatusesForProduct(filters: Record<string, string>): Record<string, string> {
+  if (!filters.status) return filters;
+  const allowed = new Set(cardStatusValuesForProduct(filters.productType));
+  const selected = filters.status.split(",").filter(Boolean);
+  const kept = selected.filter((value) => allowed.has(value));
+  if (kept.length === selected.length) return filters;
+  const next = { ...filters };
+  if (kept.length) next.status = kept.join(",");
+  else delete next.status;
+  return next;
+}
+
 /** Same human label `StatusBadge` renders (`TD_X_Y` -> `TD- X Y`). */
 export function cardStatusLabel(value: string): string {
   const upper = value.toUpperCase().replace(/\s+/g, "_");
@@ -101,10 +132,12 @@ const FACET_BUILDERS: Record<CardFacetKey, (sources: CardFacetSources) => FacetC
     field: "status",
     label: "Estado",
     multi: true,
-    options: (sources.statusValues ?? ALL_CARD_STATUS_VALUES).map((value) => ({
-      label: cardStatusLabel(value),
-      value,
-    })),
+    options: (sources.statusValues ?? ALL_CARD_STATUS_VALUES)
+      .filter((value) => cardStatusValuesForProduct(sources.productType).includes(value))
+      .map((value) => ({
+        label: cardStatusLabel(value),
+        value,
+      })),
   }),
   productType: () => ({
     field: "productType",

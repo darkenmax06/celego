@@ -27,7 +27,8 @@ import { SLAExtensionRequestsTable } from "@/components/operativo/sla-extension-
 import { CardFilterBar } from "@/components/filters/card-filter-bar";
 import { AssignedToMeChip } from "@/components/filters/assigned-to-me-chip";
 import { ContactReportModal } from "@/components/llamadas/contact-report-modal";
-import type { FacetConfig } from "@/components/filters/filter-bar";
+import { CallAssignModal } from "@/components/llamadas/call-assign-modal";
+import type { FacetConfig, ViewType } from "@/components/filters/filter-bar";
 import { NestedGroupList, useCollapsedGroups, type GroupSelection } from "@/components/grouping/nested-group-list";
 import { dateRangeFilterBarProps } from "@/components/filters/date-range-filter";
 import {
@@ -39,6 +40,7 @@ import {
 import { normalizeDateRangeFilters } from "@/lib/date-range-params";
 import { CardTile } from "@/components/cards/card-tile";
 import { CardTileGrid } from "@/components/cards/card-tile-grid";
+import { CardListTable } from "@/components/cards/card-list-table";
 import { callItemFromOperativoRow, callItemGroupKey, type CallListItem } from "@/lib/llamadas/call-list-item";
 import { callDetailHref, writeNavContext } from "@/lib/llamadas/nav-context";
 import {
@@ -49,6 +51,8 @@ import {
   Clock,
   FileSpreadsheet,
   RotateCcw,
+  UserMinus,
+  UserPlus,
 } from "lucide-react";
 
 type OperativeTab =
@@ -92,6 +96,7 @@ const DEFAULT_FILTERS = { page: "1", pageSize: "50", days: "3" };
  * while the server quietly returned 100.
  */
 const PAGE_SIZE_OPTIONS = [25, 50, 100] as const;
+const OPERATIVO_VIEWS: ViewType[] = ["cards", "list"];
 
 const OPERATIVO_DATE_FILTER_FIELDS = cardDateFilterOptions([
   "dispatchDate",
@@ -217,6 +222,7 @@ export default function OperativoClient({ role }: OperativoClientProps) {
   const facetSources = useMemo(() => ({ groups: cardGroups.groups }), [cardGroups.groups]);
   const collapsedGroups = useCollapsedGroups();
   const [loading, setLoading] = useState(false);
+  const [viewMode, setViewMode] = useState<ViewType>("cards");
   const [showReport, setShowReport] = usePersistentState("operativo:report-modal", false);
   const [pagination, setPagination] = useState<PaginationMeta>({
     page: 1,
@@ -231,6 +237,8 @@ export default function OperativoClient({ role }: OperativoClientProps) {
   const cardSelection = useCardSelection();
   const [assignModalMode, setAssignModalMode] = useState<"existing" | "new" | null>(null);
   const [groupActionError, setGroupActionError] = useState<string | null>(null);
+  // Target ids are frozen when the modal opens: the selection can change underneath it.
+  const [callAssign, setCallAssign] = useState<{ mode: "assign" | "unassign"; cardIds: string[] } | null>(null);
 
   const activeGroupFilterIds = (filters.grupo ?? "").split(",").filter(Boolean);
 
@@ -448,15 +456,54 @@ export default function OperativoClient({ role }: OperativoClientProps) {
     />
   );
 
-  const renderTileGrid = (gridCards: OperativoRow[]) => (
-    <CardTileGrid
-      items={gridCards.map((card) => itemsById.get(card.id) ?? callItemFromOperativoRow(card))}
-      getKey={(item) => item.id}
-      renderItem={renderTile}
-      loading={loading}
-      emptyMessage="No hay tarjetas con esos filtros."
-    />
-  );
+  const renderTileGrid = (gridCards: OperativoRow[]) => {
+    const items = gridCards.map((card) => itemsById.get(card.id) ?? callItemFromOperativoRow(card));
+    if (viewMode === "list") {
+      const selectable = items.filter((item) => item.cardId);
+      return (
+        <CardListTable
+          items={items}
+          getKey={(item) => item.id}
+          loading={loading}
+          emptyMessage="No hay tarjetas con esos filtros."
+          onOpen={(item) => (item.cardId ? openCallDetail(item.cardId) : undefined)}
+          selection={
+            canManageGroups
+              ? {
+                  isSelected: (item) => Boolean(item.cardId && cardSelection.isSelected(item.cardId)),
+                  toggle: (item) => (item.cardId ? cardSelection.toggle(item.cardId) : undefined),
+                  setAll: (checked) => {
+                    const ids = selectable.map((item) => item.cardId as string);
+                    if (checked) cardSelection.selectMany(ids);
+                    else cardSelection.deselectMany(ids);
+                  },
+                }
+              : undefined
+          }
+          renderActions={(item) =>
+            item.cardId ? (
+              <button
+                type="button"
+                onClick={() => openCallDetail(item.cardId as string, { llamar: true })}
+                className="rounded-lg bg-[#0f2544] px-2.5 py-1 text-xs font-bold text-white hover:bg-slate-800"
+              >
+                Llamar
+              </button>
+            ) : null
+          }
+        />
+      );
+    }
+    return (
+      <CardTileGrid
+        items={items}
+        getKey={(item) => item.id}
+        renderItem={renderTile}
+        loading={loading}
+        emptyMessage="No hay tarjetas con esos filtros."
+      />
+    );
+  };
 
   return (
     <div className="space-y-5">
@@ -582,6 +629,9 @@ export default function OperativoClient({ role }: OperativoClientProps) {
             extraFacets={extraFacets}
             sources={facetSources}
             groupByOptions={OPERATIVO_GROUP_BY_OPTIONS}
+            allowedViews={OPERATIVO_VIEWS}
+            currentView={viewMode}
+            onViewChange={setViewMode}
             {...dateRangeFilterBarProps({
               fields: OPERATIVO_DATE_FILTER_FIELDS,
               filters,
@@ -723,6 +773,26 @@ export default function OperativoClient({ role }: OperativoClientProps) {
           onCreateGroup={() => setAssignModalMode("new")}
           onAssignExisting={() => setAssignModalMode("existing")}
           onRemoveFromGroup={() => void handleRemoveFromGroup()}
+          actions={
+            <>
+              <button
+                type="button"
+                onClick={() => setCallAssign({ mode: "assign", cardIds: [...cardSelection.ids] })}
+                className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-700"
+              >
+                <UserPlus className="h-3.5 w-3.5" />
+                Asignar a operario
+              </button>
+              <button
+                type="button"
+                onClick={() => setCallAssign({ mode: "unassign", cardIds: [...cardSelection.ids] })}
+                className="flex items-center gap-1.5 rounded-lg border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-semibold text-red-700 hover:bg-red-100"
+              >
+                <UserMinus className="h-3.5 w-3.5" />
+                Quitar asignación
+              </button>
+            </>
+          }
         />
       ) : null}
       {groupActionError ? (
@@ -742,6 +812,16 @@ export default function OperativoClient({ role }: OperativoClientProps) {
           initialMode={assignModalMode}
           onClose={() => setAssignModalMode(null)}
           onSuccess={() => void afterGroupAction()}
+        />
+      ) : null}
+
+      {callAssign ? (
+        <CallAssignModal
+          cardIds={callAssign.cardIds}
+          mode={callAssign.mode}
+          onClose={() => setCallAssign(null)}
+          onAssigned={() => void afterGroupAction()}
+          onUnassigned={() => void afterGroupAction()}
         />
       ) : null}
 
