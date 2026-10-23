@@ -180,6 +180,7 @@ const CLOSED_STATUSES = new Set<CardStatus>([
 const PENDING_RECEPTION_STATUSES = new Set<CardStatus>([
   CardStatus.ENTREGA_DIGITAL,
   CardStatus.EN_PROCESO_DE_RETORNO,
+  CardStatus.TD_EN_PROCESO_DE_RETORNO,
 ]);
 
 export function classifyCardLifecycle(status: CardStatus): CardLifecyclePhase {

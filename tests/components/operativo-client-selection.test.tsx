@@ -17,6 +17,16 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
  * case with no linked card). Those have no card to assign, so they must not
  * offer a checkbox at all.
  */
+
+// Calls overhaul: list filters live in the URL and tiles navigate to the call
+// detail screen, so the client needs the router, pathname and search params.
+const navigation = vi.hoisted(() => ({ push: vi.fn(), replace: vi.fn() }));
+vi.mock("next/navigation", () => ({
+  useSearchParams: () => new URLSearchParams(),
+  useRouter: () => navigation,
+  usePathname: () => "/operativo",
+}));
+
 vi.mock("@/components/filters/filter-bar", () => ({
   FilterBar: () => <div data-testid="filter-bar" />,
 }));

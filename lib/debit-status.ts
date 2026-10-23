@@ -137,6 +137,9 @@ export function debitStatusToConsolidadoString(status: CardStatus | string | nul
     case CardStatus.TD_ZONA_FUERA_COBERTURA:
     case "TD_ZONA_FUERA_COBERTURA":
       return "TD- ZONA FUERA DE COBERTURA";
+    case CardStatus.TD_EN_PROCESO_DE_RETORNO:
+    case "TD_EN_PROCESO_DE_RETORNO":
+      return "TD- EN PROCESO DE RETORNO";
     case CardStatus.NO_LOCALIZADO:
     case "NO_LOCALIZADO":
       return "NO LOCALIZADO";
@@ -221,6 +224,9 @@ export function formatDebitStatusLabel(status: CardStatus | string | null | unde
     case CardStatus.TD_ZONA_FUERA_COBERTURA:
     case "TD_ZONA_FUERA_COBERTURA":
       return "TD- Fuera de Cobertura";
+    case CardStatus.TD_EN_PROCESO_DE_RETORNO:
+    case "TD_EN_PROCESO_DE_RETORNO":
+      return "TD- En proceso de retorno";
     case CardStatus.NO_LOCALIZADO:
     case "NO_LOCALIZADO":
       return "No Localizado";

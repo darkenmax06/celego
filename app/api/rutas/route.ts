@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { CardStatus, RouteStatus } from "@prisma/client";
+import { CardStatus, Prisma, RouteStatus } from "@prisma/client";
 import { z } from "zod";
 import { requireApiSession } from "@/lib/api-session";
 import { buildListEnvelope, compile } from "@/lib/list-query";
@@ -113,8 +113,18 @@ export async function GET(request: NextRequest) {
   // `date` stays a SINGLE param expanded to [start, start + 1 day) and
   // `messengerId` an exact match; the descriptor declares nothing else, because
   // the route never accepted anything else.
-  const query = compile(rutasListQuery, request.nextUrl.searchParams);
-  const where = query.where;
+  const params = new URLSearchParams(request.nextUrl.searchParams);
+  const legacyDate = params.get("date");
+  if (legacyDate && !params.has("from") && !params.has("to")) {
+    params.set("from", legacyDate);
+    params.set("to", legacyDate);
+  }
+  const query = compile(rutasListQuery, params);
+  const productType = params.get("productType");
+  const where: Prisma.RouteWhereInput =
+    productType === "CREDITO" || productType === "DEBITO"
+      ? { AND: [query.where, { items: { some: { card: { productType } } } }] }
+      : query.where;
 
   const [routes, total] = await Promise.all([
     prisma.route.findMany({

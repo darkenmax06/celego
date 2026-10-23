@@ -9,6 +9,7 @@ import { remainingBusinessDays } from "@/lib/sla";
 import { compileCardDateRangeWhere } from "@/lib/list-query/card-date-range";
 import { ListQueryValidationError } from "@/lib/list-query";
 import { slaWhereWithDates } from "../shared";
+import { ASIGNADO_PARAM, buildAsignadoWhere } from "@/lib/call-assignment";
 
 function escapeXml(value: string) {
   return value
@@ -125,14 +126,22 @@ export async function GET(request: NextRequest) {
   }
 
   const cards = await prisma.card.findMany({
-    where: slaWhereWithDates(
-      {
-        tab: "OVERDUE",
-        productType: rawProductType && rawProductType !== "ALL" ? rawProductType as CardProductType : undefined,
-        messengerId: messengerId && messengerId !== "ALL" ? messengerId : undefined,
-      },
-      dateClauses,
-    ),
+    where: (() => {
+      const base = slaWhereWithDates(
+        {
+          tab: "OVERDUE",
+          productType: rawProductType && rawProductType !== "ALL" ? rawProductType as CardProductType : undefined,
+          messengerId: messengerId && messengerId !== "ALL" ? messengerId : undefined,
+        },
+        dateClauses,
+      );
+      // Calls overhaul: `asignado` (ME | SIN_ASIGNAR | userId).
+      const asignadoWhere = buildAsignadoWhere(
+        request.nextUrl.searchParams.get(ASIGNADO_PARAM),
+        auth.session.user.id,
+      );
+      return asignadoWhere ? { AND: [base, asignadoWhere] } : base;
+    })(),
     select: {
       tc: true,
       requestNumber: true,

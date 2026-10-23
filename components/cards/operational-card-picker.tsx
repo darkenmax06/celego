@@ -9,6 +9,7 @@ import {
 } from "react";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { cn } from "@/lib/utils";
+import { formatDateOnlyEs } from "@/lib/date";
 
 export type OperationalCard = {
   id: string;
@@ -51,6 +52,12 @@ type OperationalCardPickerProps = {
   disabled?: boolean;
   className?: string;
   inputRef?: React.RefObject<HTMLInputElement | null>;
+  /**
+   * Calls overhaul: renders a textarea so a pasted list (one TC/cédula per
+   * line) keeps its line breaks; Ctrl/Cmd+Enter searches. Default stays the
+   * single-line scanner input.
+   */
+  multiline?: boolean;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -101,10 +108,7 @@ function parseOperationalResult(payload: unknown): OperationalSearchResult | nul
 }
 
 function formatDate(value: string | null | undefined) {
-  if (!value) return "Sin fecha";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleDateString("es-DO");
+  return value ? formatDateOnlyEs(value) : "Sin fecha";
 }
 
 function cardDescription(card: OperationalCard) {
@@ -124,12 +128,13 @@ export function OperationalCardPicker({
   disabled = false,
   className,
   inputRef: externalInputRef,
+  multiline = false,
 }: OperationalCardPickerProps) {
   const inputId = useId();
   const dialogTitleId = useId();
   const dialogDescriptionId = useId();
   const dialogRef = useRef<HTMLDivElement>(null);
-  const internalInputRef = useRef<HTMLInputElement>(null);
+  const internalInputRef = useRef<HTMLInputElement & HTMLTextAreaElement>(null);
   const inputRef = externalInputRef ?? internalInputRef;
   const priorFocusRef = useRef<HTMLElement | null>(null);
   const [dialog, setDialog] = useState<PickerDialog | null>(null);
@@ -318,11 +323,30 @@ export function OperationalCardPicker({
     }
   }
 
-  function onInputKeyDown(event: KeyboardEvent<HTMLInputElement>) {
+  function onInputKeyDown(event: KeyboardEvent<HTMLInputElement | HTMLTextAreaElement>) {
     if (event.key !== "Enter") return;
+    if (multiline && !event.ctrlKey && !event.metaKey) return;
     event.preventDefault();
     void search();
   }
+
+  const fieldProps = {
+    // One ref serves both elements; only `.focus()` is used through it.
+    ref: inputRef as React.RefObject<(HTMLInputElement & HTMLTextAreaElement) | null>,
+    id: inputId,
+    value,
+    onChange: (event: { target: { value: string } }) => {
+      setFeedback("");
+      onValueChange(event.target.value);
+    },
+    onKeyDown: onInputKeyDown,
+    placeholder,
+    autoFocus,
+    disabled,
+    readOnly: isSearching,
+    "aria-busy": isSearching,
+    "aria-describedby": feedback ? `${inputId}-feedback` : undefined,
+  };
 
   const selectedClosedCard =
     dialog?.kind === "closed"
@@ -344,21 +368,11 @@ export function OperationalCardPicker({
         <label className="sr-only" htmlFor={inputId}>
           {inputLabel}
         </label>
-        <input
-          ref={inputRef}
-          id={inputId}
-          value={value}
-          onChange={(event) => {
-            setFeedback("");
-            onValueChange(event.target.value);
-          }}
-          onKeyDown={onInputKeyDown}
-          placeholder={placeholder}
-          className="flex-1 bg-transparent text-sm outline-none"
-          autoFocus={autoFocus}
-          disabled={disabled}
-          aria-describedby={feedback ? `${inputId}-feedback` : undefined}
-        />
+        {multiline ? (
+          <textarea {...fieldProps} rows={5} className="flex-1 resize-y bg-transparent text-sm outline-none" />
+        ) : (
+          <input {...fieldProps} className="flex-1 bg-transparent text-sm outline-none" />
+        )}
         <button
           type="button"
           onClick={(e) => {

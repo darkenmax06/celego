@@ -17,6 +17,16 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 let capturedOnFilterChange: ((next: Record<string, string>) => void) | null = null;
 let capturedGroupByOptions: { field: string; label: string }[] = [];
 
+
+// Calls overhaul: list filters live in the URL and tiles navigate to the call
+// detail screen, so the client needs the router, pathname and search params.
+const navigation = vi.hoisted(() => ({ push: vi.fn(), replace: vi.fn() }));
+vi.mock("next/navigation", () => ({
+  useSearchParams: () => new URLSearchParams(),
+  useRouter: () => navigation,
+  usePathname: () => "/operativo",
+}));
+
 vi.mock("@/components/filters/filter-bar", () => ({
   FilterBar: (props: {
     groupByOptions: { field: string; label: string }[];
@@ -75,6 +85,7 @@ const CARDS = [
 
 beforeEach(() => {
   window.localStorage.clear();
+  window.sessionStorage.clear();
   capturedOnFilterChange = null;
   capturedGroupByOptions = [];
   fetchMock.mockReset();
@@ -149,17 +160,19 @@ describe("OperativoClient — group by Grupo", () => {
     ).toBe(false);
   });
 
-  it("opens the right card and keeps a coherent counter when clicked from the second bucket", async () => {
+  it("opens the right card and keeps a coherent prev/next order when clicked from the second bucket", async () => {
     await renderGroupedBy("grupo");
     await waitFor(() => expect(screen.getAllByText("4000000000000001")).toHaveLength(2));
 
     const secondOccurrence = screen.getAllByText("4000000000000001")[1];
-    fireEvent.click(secondOccurrence.closest("[class*='cursor-pointer']")!);
+    fireEvent.click(secondOccurrence.closest("[data-testid='card-tile']")!);
 
-    await waitFor(() =>
-      // index 0 of the flat page array of 3, not a bucket-relative index.
-      expect(screen.getByTestId("wizard")).toHaveTextContent("4000000000000001|0|3"),
-    );
+    // Calls overhaul: a tile opens the call detail screen instead of the wizard modal.
+    await waitFor(() => expect(navigation.push).toHaveBeenCalledWith("/llamadas/card-1"));
+    // The fanned-out card appears once in the stored order, and the card-less
+    // urgent row is not navigable.
+    const context = JSON.parse(window.sessionStorage.getItem("llamadas:nav")!) as { ids: string[] };
+    expect(context.ids).toEqual(["card-1", "card-2"]);
   });
 });
 

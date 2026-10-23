@@ -29,6 +29,7 @@ export function StatusBadge({
     ENTREGA_DIGITAL_SIN_CONTRATO: "bg-amber-100 text-amber-700",
     ENTREGA_SIN_CONTRATO: "bg-amber-100 text-amber-700",
     EN_PROCESO_DE_RETORNO: "bg-cyan-100 text-cyan-700",
+    TD_EN_PROCESO_DE_RETORNO: "bg-cyan-100 text-cyan-700",
   };
 
   let label = value.replaceAll("_", " ");

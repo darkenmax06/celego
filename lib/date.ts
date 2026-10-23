@@ -7,6 +7,31 @@ export function formatDateEs(value: Date | string | null | undefined) {
   return format(date, "dd/MM/yyyy");
 }
 
+const DATE_ONLY_PATTERN = /^(\d{4})-(\d{2})-(\d{2})/;
+
+/** Formats a calendar date without allowing the runtime timezone to move its day. */
+export function formatDateOnlyEs(value: Date | string | null | undefined) {
+  if (!value) return "-";
+  if (typeof value === "string") {
+    const match = value.match(DATE_ONLY_PATTERN);
+    if (match) return `${match[3]}/${match[2]}/${match[1]}`;
+  }
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return "-";
+  return `${String(date.getUTCDate()).padStart(2, "0")}/${String(date.getUTCMonth() + 1).padStart(2, "0")}/${date.getUTCFullYear()}`;
+}
+
+export function toDateOnlyInputValue(date: Date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
+export function getRecentDateRange(days: number, today = new Date()) {
+  const to = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  const from = new Date(to);
+  from.setDate(from.getDate() - Math.max(0, days - 1));
+  return { from: toDateOnlyInputValue(from), to: toDateOnlyInputValue(to) };
+}
+
 function fromPartsAsLocalDate(year: number, month: number, day: number) {
   // Use noon to avoid timezone edge cases moving the date to the previous day.
   const date = new Date(year, month - 1, day, 12, 0, 0, 0);

@@ -17,7 +17,7 @@ export const rutasListQuery = defineListQuery<Prisma.RouteWhereInput>({
   searchFields: [],
   filters: [
     { kind: "string", param: "messengerId", field: "messengerId", sentinel: false },
-    { kind: "day", param: "date", field: "fecha" },
+    { kind: "dateRange", field: "fecha", fromParam: "from", toParam: "to" },
   ],
   sort: {
     keys: {},

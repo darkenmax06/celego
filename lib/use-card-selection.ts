@@ -35,8 +35,9 @@ export type UseCardSelection = {
  */
 const STORAGE_KEY = "cards:selection";
 
-export function useCardSelection(): UseCardSelection {
-  const [ids, setIds] = usePersistentState<string[]>(STORAGE_KEY, []);
+/** `storageKey` isolates independent selections (e.g. `/llamadas/asignar` vs `/tarjetas`). */
+export function useCardSelection(storageKey: string = STORAGE_KEY): UseCardSelection {
+  const [ids, setIds] = usePersistentState<string[]>(storageKey, []);
 
   const idSet = useMemo(() => new Set(ids), [ids]);
 
