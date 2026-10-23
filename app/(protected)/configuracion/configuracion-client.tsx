@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 import toast from "react-hot-toast";
 import { RecountDeliveries } from "@/components/config/recount-deliveries";
 import { UserManagement } from "@/components/config/user-management";
@@ -31,6 +31,25 @@ export default function ConfiguracionClient() {
   const [whatsappText, setWhatsappText] = useState("");
   const [savingTemplate, setSavingTemplate] = useState(false);
   const [variables, setVariables] = useState<Array<{ key: string; label: string }>>([]);
+  // Calls overhaul: click-to-insert variables into the last focused template.
+  const scriptRef = useRef<HTMLTextAreaElement>(null);
+  const whatsappRef = useRef<HTMLTextAreaElement>(null);
+  const [activeTemplate, setActiveTemplate] = useState<"SCRIPT" | "WHATSAPP">("SCRIPT");
+
+  function insertVariable(key: string) {
+    const isScript = activeTemplate === "SCRIPT";
+    const textarea = isScript ? scriptRef.current : whatsappRef.current;
+    const current = isScript ? scriptText : whatsappText;
+    const start = textarea?.selectionStart ?? current.length;
+    const end = textarea?.selectionEnd ?? current.length;
+    const next = `${current.slice(0, start)}${key}${current.slice(end)}`;
+    if (isScript) setScriptText(next);
+    else setWhatsappText(next);
+    requestAnimationFrame(() => {
+      textarea?.focus();
+      textarea?.setSelectionRange(start + key.length, start + key.length);
+    });
+  }
 
   async function loadAll() {
     try {
@@ -238,7 +257,9 @@ export default function ConfiguracionClient() {
                 Texto guía que verá el operador en la columna 3 del wizard para comunicarse vía llamada.
               </p>
               <textarea
+                ref={scriptRef}
                 value={scriptText}
+                onFocus={() => setActiveTemplate("SCRIPT")}
                 onChange={(e) => setScriptText(e.target.value)}
                 rows={7}
                 className="w-full rounded-xl border border-slate-300 p-3 text-xs leading-relaxed text-slate-800 focus:border-blue-500 focus:outline-hidden font-mono"
@@ -251,7 +272,9 @@ export default function ConfiguracionClient() {
                 Formato con negritas y emojis que se copiará directamente para enviar por WhatsApp.
               </p>
               <textarea
+                ref={whatsappRef}
                 value={whatsappText}
+                onFocus={() => setActiveTemplate("WHATSAPP")}
                 onChange={(e) => setWhatsappText(e.target.value)}
                 rows={7}
                 className="w-full rounded-xl border border-slate-300 p-3 text-xs leading-relaxed text-slate-800 focus:border-blue-500 focus:outline-hidden font-mono"
@@ -262,19 +285,25 @@ export default function ConfiguracionClient() {
             {/* Panel de variables disponibles */}
             <Panel className="xl:col-span-2" title="Variables Dinámicas Disponibles">
               <p className="mb-3 text-xs text-slate-600">
-                Puedes insertar cualquiera de estas etiquetas en tus textos. Se reemplazarán automáticamente con la información de cada cliente en el wizard:
+                Puedes insertar cualquiera de estas etiquetas en tus textos. Se reemplazarán automáticamente con la información de cada cliente en el wizard.
+                Haz clic en una variable para insertarla en{" "}
+                <strong>{activeTemplate === "SCRIPT" ? "el speech de llamada" : "la plantilla de WhatsApp"}</strong>{" "}
+                (en la posición del cursor).
               </p>
               <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
                 {variables.map((v) => (
-                  <div
+                  <button
+                    type="button"
                     key={v.key}
-                    className="flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50/80 px-3 py-2 text-xs"
+                    onClick={() => insertVariable(v.key)}
+                    title={`Insertar ${v.key}`}
+                    className="flex items-center justify-between gap-2 rounded-xl border border-slate-200 bg-slate-50/80 px-3 py-2 text-left text-xs transition hover:border-blue-300 hover:bg-blue-50/60"
                   >
                     <span className="font-medium text-slate-700">{v.label}</span>
                     <code className="rounded bg-white px-2 py-0.5 font-mono font-bold text-blue-700 border border-slate-200">
                       {v.key}
                     </code>
-                  </div>
+                  </button>
                 ))}
               </div>
 

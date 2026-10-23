@@ -133,7 +133,13 @@ export async function GET(request: NextRequest) {
   // `status` keeps its free-string + "ALL" sentinel semantics and `date` stays a
   // SINGLE param expanded to [start, start + 1 day). No search, no sort: the
   // route never had either.
-  const query = compile(lotesListQuery, request.nextUrl.searchParams);
+  const params = new URLSearchParams(request.nextUrl.searchParams);
+  const legacyDate = params.get("date");
+  if (legacyDate && !params.has("from") && !params.has("to")) {
+    params.set("from", legacyDate);
+    params.set("to", legacyDate);
+  }
+  const query = compile(lotesListQuery, params);
   const where: Prisma.LotWhereInput = query.where;
 
   const [lots, total] = await Promise.all([

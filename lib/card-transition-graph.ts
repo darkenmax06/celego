@@ -68,6 +68,11 @@ const ALLOWED_EDGES: readonly CardTransitionEdge[] = [
   { from: "EN_PROCESO_DE_RETORNO", to: "RETORNADA" },
   { from: "EN_PROCESO_DE_RETORNO", to: "DEVUELTA_TIENDA" },
   { from: "EN_PROCESO_DE_RETORNO", to: "EN_RUTA" },
+  // Calls overhaul: debit counterpart, set when an operator requests a
+  // return from a call. SHADOW-only, never enforced.
+  { from: "EN_RUTA", to: "TD_EN_PROCESO_DE_RETORNO" },
+  { from: "TD_EN_PROCESO_DE_RETORNO", to: "TD_DEVUELTO_NO_LOCALIZADO" },
+  { from: "TD_EN_PROCESO_DE_RETORNO", to: "EN_RUTA" },
 ];
 
 function edgeKey(from: GraphCardStatus | null, to: GraphCardStatus): string {

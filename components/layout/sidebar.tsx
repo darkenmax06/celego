@@ -22,6 +22,8 @@ import {
   Smartphone,
   ShieldCheck,
   FileWarning,
+  ClipboardList,
+  Headset,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { type ModuleName } from "@/lib/constants";
@@ -31,6 +33,8 @@ const NAV_ITEMS: Array<{
   label: string;
   href: string;
   icon: React.ComponentType<{ className?: string }>;
+  /** Optional heading rendered before the first item of a section. */
+  section?: string;
 }> = [
   { module: "dashboard", label: "Dashboard", href: "/dashboard", icon: ChartArea },
   { module: "tarjetas", label: "Tarjetas", href: "/tarjetas", icon: CreditCard },
@@ -42,7 +46,11 @@ const NAV_ITEMS: Array<{
   { module: "rutas", label: "Rutas", href: "/rutas", icon: Route },
   { module: "flota", label: "Flota", href: "/flota", icon: Smartphone },
   { module: "piloto_movil", label: "Piloto movil", href: "/piloto-movil", icon: ShieldCheck },
-  { module: "operativo", label: "Operativo", href: "/operativo", icon: Phone },
+  { module: "operativo", label: "Operativo", href: "/operativo", icon: Phone, section: "Llamadas" },
+  // Calls overhaul: "Llamadas" group (ADMIN/OPERADOR via the `operativo` ACL).
+  // Both routes are delivered by calls-overhaul slice 2.
+  { module: "operativo", label: "Asignar gestiones", href: "/llamadas/asignar", icon: ClipboardList, section: "Llamadas" },
+  { module: "operativo", label: "Mis gestiones", href: "/llamadas/mis-gestiones", icon: Headset, section: "Llamadas" },
   { module: "contratos_pendientes", label: "Contratos pendientes", href: "/contratos-pendientes", icon: FileWarning },
   { module: "redaccion", label: "Redaccion", href: "/redaccion", icon: FileText },
   { module: "mensajeros", label: "Mensajeros", href: "/mensajeros", icon: Bike },
@@ -74,24 +82,34 @@ export function Sidebar({
       </div>
 
       <nav className="min-h-0 flex-1 space-y-1 overflow-y-auto pr-1">
-        {visibleItems.map((item) => {
+        {visibleItems.map((item, index) => {
           const Icon = item.icon;
           const active = pathname === item.href;
+          const previousSection = visibleItems[index - 1]?.section;
+          const startsSection = item.section && previousSection !== item.section;
+          const endsSection = !item.section && previousSection;
           return (
-            <Link
-              key={item.href}
-              href={item.href}
-              aria-current={active ? "page" : undefined}
-              className={cn(
-                "flex items-center gap-3 rounded-xl px-3 py-2 text-sm transition",
-                active
-                  ? "bg-white/15 text-white shadow-[inset_0_0_0_1px_rgba(255,255,255,0.1)]"
-                  : "text-slate-200/90 hover:bg-white/10 hover:text-white",
-              )}
-            >
-              <Icon className="h-4 w-4" />
-              <span>{item.label}</span>
-            </Link>
+            <div key={item.href}>
+              {endsSection ? <hr className="mx-3 my-2 border-white/10" /> : null}
+              {startsSection ? (
+                <p className="px-3 pb-1 pt-3 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                  {item.section}
+                </p>
+              ) : null}
+              <Link
+                href={item.href}
+                aria-current={active ? "page" : undefined}
+                className={cn(
+                  "flex items-center gap-3 rounded-xl px-3 py-2 text-sm transition",
+                  active
+                    ? "bg-white/15 text-white shadow-[inset_0_0_0_1px_rgba(255,255,255,0.1)]"
+                    : "text-slate-200/90 hover:bg-white/10 hover:text-white",
+                )}
+              >
+                <Icon className="h-4 w-4" />
+                <span>{item.label}</span>
+              </Link>
+            </div>
           );
         })}
       </nav>

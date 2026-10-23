@@ -33,10 +33,12 @@ export const slaVencidasListQuery = defineListQuery<Prisma.CardWhereInput>({
   searchFields: ["tc", "customer.cedula", "customer.nombre", "provincia", "zona"],
   filters: [
     { kind: "string", param: "messengerId", field: "currentMessengerId" },
-    { kind: "string", param: "provincia", field: "provincia" },
-    { kind: "string", param: "zona", field: "zona" },
+    // Calls overhaul: multi-select facets (a single value compiles to the same
+    // bare-value clause as the former "string" / "enum" kinds).
+    { kind: "stringList", param: "provincia", field: "provincia" },
+    { kind: "stringList", param: "zona", field: "zona" },
     {
-      kind: "enum",
+      kind: "enumList",
       param: "status",
       field: "status",
       values: Object.values(CardStatus).filter((s) => !SLA_CLOSED_STATUSES.includes(s)),

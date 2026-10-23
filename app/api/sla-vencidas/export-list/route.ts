@@ -9,6 +9,7 @@ import { dateRangesToParams } from "@/lib/date-range-params";
 import { ListQueryValidationError } from "@/lib/list-query";
 import { compileCardDateRangeWhere } from "@/lib/list-query/card-date-range";
 import { isUpcomingWithinWarning, serializeSlaCard, slaWhereWithDates, type SlaTab } from "../shared";
+import { buildAsignadoWhere } from "@/lib/call-assignment";
 
 const COLUMN_LABELS = {
   producto: "Producto", identificador: "Identificador", numeroTarjeta: "Numero tarjeta", numeroSolicitud: "Numero solicitud",
@@ -32,6 +33,8 @@ const payloadSchema = z.object({
     .default({}),
   columns: z.array(z.enum(Object.keys(COLUMN_LABELS) as [ColumnKey, ...ColumnKey[]])).min(1).max(24),
   format: z.enum(["csv", "xlsx", "pdf"]),
+  /** Calls overhaul: ME | SIN_ASIGNAR | userId. */
+  asignado: z.string().max(64).optional(),
 });
 
 function formatDate(value: string | null) {
@@ -63,7 +66,11 @@ export async function POST(request: Request) {
   const [config, cards] = await Promise.all([
     prisma.sLAConfig.findUnique({ where: { id: "default" }, select: { warningBusinessDays: true } }),
     prisma.card.findMany({
-      where: slaWhereWithDates(filters, dateClauses),
+      where: (() => {
+        const base = slaWhereWithDates(filters, dateClauses);
+        const asignadoWhere = buildAsignadoWhere(input.asignado, auth.session.user.id);
+        return asignadoWhere ? { AND: [base, asignadoWhere] } : base;
+      })(),
       select: {
         id: true, tc: true, requestNumber: true, productType: true, status: true, slaDueDate: true, dispatchDate: true,
         provincia: true, zona: true, urgent: true, isAdditional: true, additionalIndex: true,

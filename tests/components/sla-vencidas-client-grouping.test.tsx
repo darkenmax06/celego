@@ -10,6 +10,16 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 let capturedOnFilterChange: ((next: Record<string, string>) => void) | null = null;
 let capturedGroupByOptions: { field: string; label: string }[] = [];
 
+
+// Calls overhaul: list filters live in the URL and tiles navigate to the call
+// detail screen, so the client needs the router, pathname and search params.
+const navigation = vi.hoisted(() => ({ push: vi.fn(), replace: vi.fn() }));
+vi.mock("next/navigation", () => ({
+  useSearchParams: () => new URLSearchParams(),
+  useRouter: () => navigation,
+  usePathname: () => "/sla-vencidas",
+}));
+
 vi.mock("@/components/filters/filter-bar", () => ({
   groupByLevelLabel: (token: string, options: { field: string; label: string }[]) =>
     options.find((option) => option.field === token)?.label ?? token,

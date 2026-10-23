@@ -13,6 +13,8 @@ import type { GroupByConfig } from "@/components/filters/filter-bar";
  */
 vi.mock("next/navigation", () => ({
   useSearchParams: () => new URLSearchParams(),
+  useRouter: () => ({ replace: vi.fn(), push: vi.fn() }),
+  usePathname: () => "/tarjetas",
 }));
 
 let capturedGroupByOptions: GroupByConfig[] = [];

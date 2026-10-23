@@ -1,3 +1,5 @@
+import { normalizeCustomerId } from "./customer-id";
+
 export const DISPATCH_ORIGINS = ["TORRE_POPULAR", "CENTRO_ACOPIO", "BPD_DEBITO"] as const;
 export type DispatchOrigin = (typeof DISPATCH_ORIGINS)[number];
 
@@ -35,9 +37,9 @@ export function normalizeDispatchIdentity(input: {
   dispatchDate: Date;
 }) {
   const tc = digits(input.tc);
-  const cedula = digits(input.cedula);
+  const cedula = normalizeCustomerId(input.cedula);
   if (!/^\d{15,19}$/.test(tc) || /^0+$/.test(tc)) throw new Error("INVALID_TC");
-  if (!/^\d{9,13}$/.test(cedula) || /^0+$/.test(cedula)) throw new Error("INVALID_CEDULA");
+  if (!cedula) throw new Error("INVALID_CEDULA");
   return { tc, cedula, date: utcDay(input.dispatchDate), origin: input.origin };
 }
 

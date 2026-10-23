@@ -115,7 +115,7 @@ export function ManualCardModal({ onClose, onCreated }: Props) {
           </label>
           <label className={LABEL}>
             Cédula
-            <input required inputMode="numeric" value={form.cedula} onChange={(e) => set("cedula", e.target.value)} className={FIELD} placeholder="9 a 13 dígitos" />
+            <input required value={form.cedula} onChange={(e) => set("cedula", e.target.value)} className={FIELD} placeholder="Cédula (9 a 13 dígitos) o pasaporte" />
           </label>
           <label className={`${LABEL} sm:col-span-2`}>
             Nombre del cliente

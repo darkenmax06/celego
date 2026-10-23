@@ -50,9 +50,9 @@ describe("evaluateEdge", () => {
 });
 
 describe("listAllowedEdges", () => {
-  it("exposes exactly the 13 defensively-minimal edges documented above (8 pre-existing + 5 new advisory), no more", () => {
+  it("exposes exactly the 16 defensively-minimal edges documented above (8 pre-existing + 5 credit advisory + 3 debit advisory), no more", () => {
     const edges = listAllowedEdges();
-    expect(edges).toHaveLength(13);
+    expect(edges).toHaveLength(16);
     expect(edges).toEqual(
       expect.arrayContaining([
         { from: "EN_RUTA", to: "EN_RUTA" },
@@ -68,6 +68,9 @@ describe("listAllowedEdges", () => {
         { from: "EN_PROCESO_DE_RETORNO", to: "RETORNADA" },
         { from: "EN_PROCESO_DE_RETORNO", to: "DEVUELTA_TIENDA" },
         { from: "EN_PROCESO_DE_RETORNO", to: "EN_RUTA" },
+        { from: "EN_RUTA", to: "TD_EN_PROCESO_DE_RETORNO" },
+        { from: "TD_EN_PROCESO_DE_RETORNO", to: "TD_DEVUELTO_NO_LOCALIZADO" },
+        { from: "TD_EN_PROCESO_DE_RETORNO", to: "EN_RUTA" },
       ]),
     );
   });

@@ -26,7 +26,8 @@ import { Download, Layers, Plus, UserMinus, X } from "lucide-react";
  * EXACTLY one real group id (not `SIN_GRUPO`) — removal targets one group.
  *
  * Group actions are optional so views without card groups (e.g. Actualizacion
- * masiva) can reuse the bar for other bulk actions such as "Exportar".
+ * masiva) can reuse the bar for other bulk actions such as "Exportar", and
+ * `actions` adds view-specific buttons (e.g. call assignment).
  */
 export type SelectedCardEntry = {
   id: string;

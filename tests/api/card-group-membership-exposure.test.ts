@@ -96,6 +96,9 @@ function cardFixture(groupIds: string[]): Record<string, unknown> {
     currentMessenger: null,
     contacts: [],
     urgentCases: [],
+    // Calls overhaul: SLA vencidas selects the call assignment and the attempt count.
+    callAssignment: null,
+    _count: { contacts: 0 },
     groupMemberships: groupIds.map((groupId) => ({ groupId })),
   };
 }

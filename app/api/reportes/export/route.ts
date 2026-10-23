@@ -15,7 +15,8 @@ import {
   type ReassignmentEvidence,
   type RouteAssignmentEvidence,
 } from "@/lib/assigned-messenger";
-import { dedupeBillingCardsByCustomerAndDispatchDate } from "@/lib/billing";
+import { MissingBillingTariffError } from "@/lib/billing";
+import { loadBillingReport } from "@/lib/billing-report";
 import { getCardIdentifier } from "@/lib/card-identifier";
 import { formatDateEs } from "@/lib/date";
 import { displayText } from "@/lib/display";
@@ -40,23 +41,6 @@ function utcDateKey(value: Date) {
   return `${year}-${month}-${day}`;
 }
 
-function resolveCentsPerCard(
-  count: number,
-  baseCents: number,
-  ranges: Array<{ minQty: number; maxQty: number | null; centsPerCard: number }>,
-) {
-  const match = ranges.find(
-    (range) => count >= range.minQty && (range.maxQty == null || count <= range.maxQty),
-  );
-  return match?.centsPerCard ?? baseCents;
-}
-
-function parseFxRate(raw: string | null) {
-  if (!raw) return 1;
-  const parsed = Number(raw);
-  if (!Number.isFinite(parsed) || parsed <= 0) return 1;
-  return parsed;
-}
 
 function parseProductType(raw: string | null) {
   if (raw === CardProductType.CREDITO || raw === CardProductType.DEBITO) {
@@ -817,120 +801,31 @@ export async function GET(request: NextRequest) {
     const from = request.nextUrl.searchParams.get("from");
     const to = request.nextUrl.searchParams.get("to");
     const zone = request.nextUrl.searchParams.get("zona");
-    const fxRate = parseFxRate(request.nextUrl.searchParams.get("fxRate"));
-    const dispatchDate =
-      from || to
-        ? {
-            ...(from ? { gte: new Date(from) } : {}),
-            ...(to
-              ? (() => {
-                  const end = new Date(to);
-                  end.setHours(23, 59, 59, 999);
-                  return { lte: end };
-                })()
-              : {}),
-          }
-        : undefined;
-
-    const [cards, tariffs] = await Promise.all([
-      prisma.card.findMany({
-      where: {
-        status: CardStatus.ENTREGADA,
-        productType: CardProductType.CREDITO,
-        ...(zone && zone !== "ALL"
-          ? {
-              OR: [
-                { reassignedZone: zone },
-                { reassignedZone: null, zona: zone },
-              ],
-            }
-          : {}),
-        ...(dispatchDate ? { dispatchDate } : {}),
-      },
-      select: {
-        id: true,
-        zona: true,
-        provincia: true,
-        reassignedProvince: true,
-        reassignedZone: true,
-        isRemote: true,
-        isAdditional: true,
-        dispatchDate: true,
-        customer: {
-          select: {
-            cedula: true,
-          },
-        },
-      },
-      take: 5000,
-      orderBy: { dispatchDate: "desc" },
-      }),
-      prisma.zoneTariff.findMany({ include: { ranges: true } }),
-    ]);
-
-    const billableCards = dedupeBillingCardsByCustomerAndDispatchDate(
-      cards.map((card) => ({
-        id: card.id,
-        zona: resolveBillableZone(card),
-        isRemote: card.isRemote,
-        isAdditional: card.isAdditional,
-        dispatchDate: card.dispatchDate,
-        customerCedula: card.customer.cedula,
-      })),
-    );
-
-    const grouped = new Map<string, number>();
-    billableCards.forEach((card) => {
-      grouped.set(card.zona, (grouped.get(card.zona) ?? 0) + 1);
-    });
-    const additionalByZone = new Map<string, number>();
-    cards.forEach((card) => {
-      if (!card.isAdditional) return;
-      const billableZone = resolveBillableZone(card);
-      additionalByZone.set(billableZone, (additionalByZone.get(billableZone) ?? 0) + 1);
-    });
-
-    const tariffMap = new Map(tariffs.map((tariff) => [tariff.zona, tariff]));
-
-    rows = Array.from(grouped.entries()).map(([zona, count]) => {
-      const tariff = tariffMap.get(zona);
-      const centsPerCard = resolveCentsPerCard(
-        count,
-        tariff?.baseCents ?? 0,
-        tariff?.ranges ?? [],
-      );
-      const totalUsdCents = centsPerCard * count;
-      const totalDopCents = Math.round(totalUsdCents * fxRate);
-      return {
-        zona,
-        entregas: count,
-        adicionalesExcluidas: additionalByZone.get(zona) ?? 0,
+    const fxRate = Number(request.nextUrl.searchParams.get("fxRate") ?? 1);
+    if (!Number.isFinite(fxRate) || fxRate <= 0) {
+      return NextResponse.json({ error: "Tasa USD invalida" }, { status: 400 });
+    }
+    const fromDate = from ? new Date(from) : null;
+    const toDate = to ? new Date(to) : null;
+    if ((fromDate && Number.isNaN(fromDate.getTime())) || (toDate && Number.isNaN(toDate.getTime())) || (fromDate && toDate && fromDate > toDate)) {
+      return NextResponse.json({ error: "Rango de fechas invalido" }, { status: 400 });
+    }
+    toDate?.setUTCHours(23, 59, 59, 999);
+    try {
+      const report = await loadBillingReport(fromDate, toDate, fxRate, zone);
+      rows = report.items.map((item) => ({
+        producto: item.productType === "DEBITO" ? "Débito" : "Crédito",
+        zona: item.zona,
+        entregas: item.qty,
+        adicionalesExcluidas: item.additionalExcluded,
         tasaDolar: fxRate.toFixed(4),
-        tarifaPorTarjetaUSD: fromCents(centsPerCard),
-        totalUSD: fromCents(totalUsdCents),
-        totalDOP: fromCents(totalDopCents),
-      };
-    });
-
-    const remoteCount = billableCards.filter((card) => card.isRemote).length;
-    if (remoteCount > 0) {
-      const remoteTariff = tariffMap.get("REMOTA");
-      const remoteSurchargeCents = resolveCentsPerCard(
-        remoteCount,
-        remoteTariff?.baseCents ?? 0,
-        remoteTariff?.ranges ?? [],
-      );
-      const totalUsdCents = remoteSurchargeCents * remoteCount;
-      const totalDopCents = Math.round(totalUsdCents * fxRate);
-      rows.push({
-        zona: "REMOTA",
-        entregas: remoteCount,
-        adicionalesExcluidas: cards.filter((card) => card.isAdditional && card.isRemote).length,
-        tasaDolar: fxRate.toFixed(4),
-        tarifaPorTarjetaUSD: fromCents(remoteSurchargeCents),
-        totalUSD: fromCents(totalUsdCents),
-        totalDOP: fromCents(totalDopCents),
-      });
+        tarifaPorTarjetaUSD: fromCents(item.unitUsdCents),
+        totalUSD: fromCents(item.totalUsdCents),
+        totalDOP: fromCents(item.totalDopCents),
+      }));
+    } catch (error) {
+      if (error instanceof MissingBillingTariffError) return NextResponse.json({ error: error.message }, { status: 409 });
+      throw error;
     }
   } else if (type === "redaccion") {
     const origin = request.nextUrl.searchParams.get("origin");

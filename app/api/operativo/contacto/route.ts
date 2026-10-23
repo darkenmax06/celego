@@ -1,11 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import { CardStatus, Prisma, SLAExtensionRequestStatus } from "@prisma/client";
+import { CardProductType, CardStatus, Prisma, SLAExtensionRequestStatus } from "@prisma/client";
 import { z } from "zod";
 import { requireApiSession } from "@/lib/api-session";
 import { prisma } from "@/lib/prisma";
-import { addBusinessDaysStrict, remainingBusinessDays } from "@/lib/sla";
+import { addBusinessDaysStrict } from "@/lib/sla";
 import { resolveZone } from "@/lib/zone-map";
-import { normalizeText } from "@/lib/utils";
 import { buildListEnvelope, compile, ListQueryValidationError } from "@/lib/list-query";
 import { compileCardDateRangeWhere } from "@/lib/list-query/card-date-range";
 import { operativoContactoListQuery } from "@/lib/list-query/descriptors/operativo-contacto";
@@ -17,51 +16,24 @@ import {
   urgencyIntervalMinutes,
   urgencyLevelLabel,
 } from "@/lib/urgent-alerts";
-
-type PhoneState = {
-  num: string;
-  principal: boolean;
-  funciona: boolean;
-  comentario?: string;
-};
-
-type OperativoCardInput = {
-  id: string;
-  tc: string;
-  requestNumber: string | null;
-  externalReference: string | null;
-  zona: string;
-  provincia: string;
-  dispatchDate: Date | null;
-  deliveryType: string | null;
-  emissionType: string | null;
-  status: CardStatus;
-  urgent: boolean;
-  slaDueDate: Date | null;
-  metadata: Prisma.JsonValue | null;
-  customer: {
-    nombre: string;
-    cedula: string;
-    direccionRaw: string | null;
-    telefonosRaw: string | null;
-  };
-  currentMessenger?: {
-    nombre: string;
-  } | null;
-  contacts: Array<{
-    comentario: string | null;
-    contactado: boolean;
-    telefonosUsados: string | null;
-  }>;
-  groupMemberships: Array<{ groupId: string }>;
-};
-
-type ActiveUrgentCaseSnapshot = {
-  id: string;
-  level: number;
-  lastNotifiedAt: Date | null;
-  nextNotificationAt: Date | null;
-};
+import {
+  asRecord,
+  mapCardToOperativeRow,
+  matchesStatusFilter,
+  normalizePhones,
+  parseMetadataPhones,
+  splitPhonesFromRaw,
+  splitTextChunks,
+  type ActiveUrgentCaseSnapshot,
+} from "@/lib/operativo-row";
+import { applyCardTransition } from "@/lib/card-transition";
+import { ASIGNADO_PARAM, buildAsignadoWhere, CALL_ASSIGNMENT_SELECT } from "@/lib/call-assignment";
+import {
+  PHONE_CALL_STATES,
+  resolveContactResultado,
+  resolveReturnStatus,
+  validateNoContactPhones,
+} from "@/lib/contact-call";
 
 const phoneSchema = z.object({
   num: z.string().min(3).max(32),
@@ -83,215 +55,35 @@ const postSchema = z.object({
   motivoRetorno: z.string().max(500).optional().nullable(),
   trasladoProvincia: z.string().max(100).optional().nullable(),
   trasladoMotivo: z.string().max(500).optional().nullable(),
+  telefonosDetalle: z
+    .array(
+      z.object({
+        numero: z.string().trim().min(1).max(32),
+        estado: z.enum(PHONE_CALL_STATES).optional().nullable(),
+        nota: z.string().max(500).optional().nullable(),
+      }),
+    )
+    .max(20)
+    .optional(),
+  motivoNoContacto: z.string().max(500).optional().nullable(),
 });
 
-function asRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {};
-}
+/** `contactoEstado` facet value -> legacy `gestion` filter of the activos tab. */
+const GESTION_BY_CONTACTO_ESTADO: Record<string, string> = {
+  CONTACTADA: "contactadas",
+  NO_CONTACTADA: "no-contactadas",
+  TRASLADO_SOLICITADO: "traslados",
+  RETORNO_SOLICITADO: "retorno",
+};
 
-function splitTextChunks(raw: string | null | undefined) {
-  if (!raw) return [];
-  return raw
-    .split(/[\n;|]+/g)
-    .map((item) => item.trim())
-    .filter(Boolean);
-}
-
-function splitPhonesFromRaw(raw: string | null | undefined) {
-  if (!raw) return [];
-  const numbers = raw.match(/\d{7,}/g) ?? [];
-  return [...new Set(numbers)];
-}
-
-function normalizeStatusKey(value: string) {
-  return normalizeText(value).replace(/[\s-]+/g, "_");
-}
-
-function matchesStatusFilter(status: string, filter: string | null) {
-  if (!filter || filter === "ALL") return true;
-  return normalizeStatusKey(status) === normalizeStatusKey(filter);
-}
-
-function parseCardStatusFilter(filter: string | null) {
-  if (!filter || filter === "ALL") return "ALL" as const;
-  if ((Object.values(CardStatus) as string[]).includes(filter)) {
-    return filter as CardStatus;
-  }
-  return null;
-}
-
-function normalizePhoneValue(raw: string) {
-  const trimmed = raw.trim();
-  if (!trimmed) return "";
-  const compact = trimmed.replace(/[^\d+]/g, "");
-  return compact || trimmed;
-}
-
-function normalizePhones(
-  rawPhones: Array<{ num: string; principal?: boolean; funciona?: boolean; comentario?: string }>,
-): PhoneState[] {
-  const deduped: PhoneState[] = [];
-  const seen = new Set<string>();
-
-  for (const item of rawPhones) {
-    const num = normalizePhoneValue(item.num);
-    if (!num) continue;
-
-    const key = num.replace(/\D/g, "") || num.toUpperCase();
-    if (seen.has(key)) continue;
-
-    seen.add(key);
-    deduped.push({
-      num,
-      principal: Boolean(item.principal),
-      funciona: Boolean(item.funciona),
-      comentario: item.comentario?.trim() || "",
-    });
-  }
-
-  if (!deduped.length) return deduped;
-
-  let principalFound = false;
-  for (let index = 0; index < deduped.length; index += 1) {
-    if (deduped[index].principal && !principalFound) {
-      principalFound = true;
-      continue;
-    }
-    deduped[index].principal = false;
-  }
-
-  if (!principalFound) {
-    deduped[0].principal = true;
-  }
-
-  return deduped;
-}
-
-function phonesSignature(phones: PhoneState[]) {
-  return phones
-    .map(
-      (phone) =>
-        `${phone.num}|${phone.principal ? 1 : 0}|${phone.funciona ? 1 : 0}|${phone.comentario || ""}`,
-    )
-    .join(";");
-}
-
-function parseMetadataPhones(metadata: Record<string, unknown>): PhoneState[] {
-  const raw = metadata.telefonos;
-  if (!Array.isArray(raw)) return [];
-
-  const parsed: PhoneState[] = [];
-  for (const item of raw) {
-    if (typeof item === "string") {
-      parsed.push({ num: item, principal: false, funciona: false, comentario: "" });
-    } else if (item && typeof item === "object") {
-      const obj = asRecord(item);
-      if (typeof obj.num === "string") {
-        parsed.push({
-          num: obj.num,
-          principal: Boolean(obj.principal),
-          funciona: Boolean(obj.funciona),
-          comentario: typeof obj.comentario === "string" ? obj.comentario : "",
-        });
-      }
-    }
-  }
-
-  return normalizePhones(parsed);
-}
-
-function mapCardToOperativeRow(
-  card: OperativoCardInput,
-  activeUrgentCase?: ActiveUrgentCaseSnapshot | null,
-) {
-  const root = asRecord(card.metadata);
-  const operativo = asRecord(root.operativo);
-  const latestContact = card.contacts[0] ?? null;
-
-  const metaPhones = parseMetadataPhones(operativo);
-  const fallbackPhones = normalizePhones(
-    splitPhonesFromRaw(card.customer.telefonosRaw).map((num, index) => ({
-      num,
-      principal: index === 0,
-      funciona: false,
-      comentario: "",
-    })),
-  );
-  const contactPhones =
-    metaPhones.length > 0
-      ? metaPhones
-      : latestContact?.telefonosUsados
-        ? normalizePhones(
-            latestContact.telefonosUsados.split(/[,\n;]+/g).map((num, index) => ({
-              num,
-              principal: index === 0,
-              funciona: false,
-              comentario: "",
-            })),
-          )
-        : fallbackPhones;
-
-  const contactado =
-    typeof operativo.contactado === "boolean"
-      ? operativo.contactado
-      : (latestContact?.contactado ?? false);
-
-  const comentarioContacto =
-    typeof operativo.comentarioContacto === "string"
-      ? operativo.comentarioContacto
-      : (latestContact?.comentario ?? "");
-
-  const presinto = typeof root.presinto === "string" ? root.presinto : null;
-  const level = activeUrgentCase ? clampUrgencyLevel(activeUrgentCase.level) : card.urgent ? 3 : null;
-  const intervalMinutes = level ? urgencyIntervalMinutes(level) : null;
-
-  return {
-    id: card.id,
-    cardId: card.id,
-    urgentCaseId: activeUrgentCase?.id ?? null,
-    tc: card.tc,
-    requestNumber: card.requestNumber ?? (typeof root.solicitud === "string" ? root.solicitud : null),
-    nombre: card.customer.nombre,
-    cedula: card.customer.cedula,
-    provincia: card.provincia,
-    zona: card.zona,
-    status: card.status,
-    urgent: card.urgent,
-    urgentLevel: level,
-    urgentLabel: level ? urgencyLevelLabel(level) : null,
-    urgentIntervalMinutes: intervalMinutes,
-    urgentNextNotificationAt: activeUrgentCase?.nextNotificationAt?.toISOString() ?? null,
-    urgentLastNotificationAt: activeUrgentCase?.lastNotifiedAt?.toISOString() ?? null,
-    remaining: card.slaDueDate ? remainingBusinessDays(new Date(), card.slaDueDate) : null,
-    presinto,
-    fechaDespacho: card.dispatchDate?.toISOString() ?? null,
-    slaDueDate: card.slaDueDate?.toISOString() ?? null,
-    tipoEmision: card.emissionType,
-    tipoEntrega: card.deliveryType,
-    direcciones: splitTextChunks(card.customer.direccionRaw),
-    refs: splitTextChunks(card.externalReference),
-    mensajero: card.currentMessenger?.nombre ?? "Sin asignar",
-    telefonos: contactPhones,
-    comentarioContacto,
-    contactado,
-    canalContacto: (typeof operativo.canalContacto === "string" ? operativo.canalContacto : null) as
-      | "WHATSAPP"
-      | "LLAMADA_DIRECTA"
-      | null,
-    nuevaDireccion: contactado && typeof operativo.nuevaDireccion === "string" ? operativo.nuevaDireccion : null,
-    fechaPreferenciaEntrega:
-      typeof operativo.fechaPreferenciaEntrega === "string" ? operativo.fechaPreferenciaEntrega : null,
-    solicitudRetorno: Boolean(operativo.solicitudRetorno),
-    motivoRetorno: typeof operativo.motivoRetorno === "string" ? operativo.motivoRetorno : null,
-    traslado: asRecord(operativo.traslado),
-    hasAttempt: card.contacts.length > 0 || Boolean(operativo.updatedAt) || Boolean(operativo.comentarioContacto),
-    // Every tab maps its cards through here, so the three include blocks all
-    // surface group membership under the same field name.
-    groupIds: card.groupMemberships.map((membership) => membership.groupId),
-    readOnly: false,
-  };
+/** Parses `YYYY-MM-DD` (or any ISO string) into a UTC date; invalid / empty -> null. */
+function parseDateOnly(value: string | null): Date | null {
+  if (!value?.trim()) return null;
+  const match = value.trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  const date = match
+    ? new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])))
+    : new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
 }
 
 export async function GET(request: NextRequest) {
@@ -317,7 +109,12 @@ export async function GET(request: NextRequest) {
   const zona = request.nextUrl.searchParams.get("zona");
   const statusFilter = request.nextUrl.searchParams.get("status");
   const canalContacto = request.nextUrl.searchParams.get("canalContacto");
-  const gestion = request.nextUrl.searchParams.get("gestion");
+  // Calls overhaul: the shared "llamadas" facet set sends `contactoEstado`
+  // (same values as SLA vencidas); it maps onto this route's `gestion`.
+  const gestion =
+    request.nextUrl.searchParams.get("gestion") ??
+    GESTION_BY_CONTACTO_ESTADO[request.nextUrl.searchParams.get("contactoEstado") ?? ""] ??
+    null;
   const urgentParam = request.nextUrl.searchParams.get("urgent");
   const q = request.nextUrl.searchParams.get("q")?.trim();
   const daysRaw = Number(request.nextUrl.searchParams.get("days") ?? 3);
@@ -337,6 +134,22 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: error.message }, { status: 400 });
     }
     throw error;
+  }
+  // Calls overhaul: `asignado` (ME | SIN_ASIGNAR | userId), compiled once like the group clause.
+  const asignadoWhere = buildAsignadoWhere(
+    request.nextUrl.searchParams.get(ASIGNADO_PARAM),
+    auth.session.user.id,
+  );
+
+  // Calls overhaul: `productType` / `messengerId` facets, shared by every tab.
+  const productTypeParam = request.nextUrl.searchParams.get("productType");
+  const messengerIdParam = request.nextUrl.searchParams.get("messengerId");
+  const facetWhere: Prisma.CardWhereInput[] = [];
+  if (productTypeParam === CardProductType.CREDITO || productTypeParam === CardProductType.DEBITO) {
+    facetWhere.push({ productType: productTypeParam });
+  }
+  if (messengerIdParam && messengerIdParam !== "ALL") {
+    facetWhere.push({ currentMessengerId: messengerIdParam });
   }
 
   const provinciaList = provincia && provincia !== "ALL"
@@ -399,6 +212,10 @@ export async function GET(request: NextRequest) {
       andClauses.push(groupWhere);
     }
     andClauses.push(...dateClauses);
+    if (asignadoWhere) {
+      andClauses.push(asignadoWhere);
+    }
+    andClauses.push(...facetWhere);
     andClauses.push({ OR: [{ slaDueDate: null }, { slaDueDate: { lte: maxDueDate } }] });
 
     const where: Prisma.CardWhereInput = { AND: andClauses };
@@ -411,7 +228,9 @@ export async function GET(request: NextRequest) {
         where,
         include: {
           customer: true,
-          currentMessenger: { select: { nombre: true } },
+          currentMessenger: { select: { nombre: true, telefono: true } },
+          callAssignment: CALL_ASSIGNMENT_SELECT,
+          _count: { select: { contacts: true } },
           contacts: {
             orderBy: { createdAt: "desc" },
             take: 1,
@@ -506,6 +325,8 @@ export async function GET(request: NextRequest) {
           : {},
         groupWhere ?? {},
         ...dateClauses,
+        asignadoWhere ?? {},
+        ...facetWhere,
       ],
     };
 
@@ -513,7 +334,9 @@ export async function GET(request: NextRequest) {
       where,
       include: {
         customer: true,
-        currentMessenger: { select: { nombre: true } },
+        currentMessenger: { select: { nombre: true, telefono: true } },
+        callAssignment: CALL_ASSIGNMENT_SELECT,
+        _count: { select: { contacts: true } },
         contacts: {
           orderBy: { createdAt: "desc" },
           take: 5,
@@ -614,6 +437,8 @@ export async function GET(request: NextRequest) {
         : []),
       ...(groupWhere ? [groupWhere] : []),
       ...dateClauses,
+      ...(asignadoWhere ? [asignadoWhere] : []),
+      ...facetWhere,
     ],
   };
 
@@ -622,7 +447,9 @@ export async function GET(request: NextRequest) {
       where,
       include: {
         customer: true,
-        currentMessenger: { select: { nombre: true } },
+        currentMessenger: { select: { nombre: true, telefono: true } },
+        callAssignment: CALL_ASSIGNMENT_SELECT,
+        _count: { select: { contacts: true } },
         contacts: {
           orderBy: { createdAt: "desc" },
           take: 1,
@@ -726,6 +553,9 @@ export async function GET(request: NextRequest) {
     direcciones: splitTextChunks(item.direccion),
     refs: [],
     mensajero: "Sin asignar",
+    mensajeroTelefono: null,
+    asignadoA: null,
+    attempts: 0,
     telefonos: normalizePhones(
       splitPhonesFromRaw(item.telefono).map((num, index) => ({
         num,
@@ -784,9 +614,24 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Payload inválido" }, { status: 400 });
   }
 
+  const resultado = resolveContactResultado({
+    contactado: parsed.data.contactado,
+    solicitudRetorno: parsed.data.solicitudRetorno,
+    traslado: Boolean(parsed.data.trasladoProvincia),
+  });
+  if (resultado === "NO_CONTACTADA") {
+    const phoneError = validateNoContactPhones(parsed.data.telefonosDetalle);
+    if (phoneError) {
+      return NextResponse.json({ error: phoneError }, { status: 400 });
+    }
+  }
+
   const card = await prisma.card.findUnique({
     where: { id: parsed.data.cardId },
-    include: { customer: true },
+    include: {
+      customer: true,
+      currentMessenger: { select: { nombre: true, telefono: true } },
+    },
   });
   if (!card) {
     return NextResponse.json({ error: "Tarjeta no encontrada" }, { status: 404 });
@@ -874,24 +719,77 @@ export async function POST(request: Request) {
     updatedAt: new Date().toISOString(),
   };
 
-  await prisma.card.update({
-    where: { id: card.id },
-    data: {
-      metadata: {
-        ...metadataRoot,
-        operativo: nextOperativo,
-      } as Prisma.InputJsonValue,
-    },
-  });
+  const nextMetadata = {
+    ...metadataRoot,
+    operativo: nextOperativo,
+  } as Prisma.InputJsonValue;
 
-  const contact = await prisma.contactLog.create({
-    data: {
-      cardId: parsed.data.cardId,
-      userId: auth.session.user.id,
-      telefonosUsados: usedPhones,
-      comentario: comentario || (contactado ? "Contacto exitoso" : "Intento de contacto"),
-      contactado,
-    },
+  // Calls overhaul: a return requested from a call parks the card in the
+  // product-specific "return in progress" status (credit / debit).
+  const returnStatus = parsed.data.solicitudRetorno
+    ? resolveReturnStatus(card.productType, card.status)
+    : null;
+  const fechaPreferenciaEntrega = parseDateOnly(
+    typeof nextOperativo.fechaPreferenciaEntrega === "string" ? nextOperativo.fechaPreferenciaEntrega : null,
+  );
+  const canalContacto =
+    typeof nextOperativo.canalContacto === "string" ? nextOperativo.canalContacto : null;
+  const nuevaDireccion = parsed.data.nuevaDireccion?.trim() || null;
+
+  const contact = await prisma.$transaction(async (tx) => {
+    if (returnStatus) {
+      const motivo = parsed.data.motivoRetorno?.trim();
+      await applyCardTransition({
+        tx,
+        card,
+        nextStatus: returnStatus,
+        byUserId: auth.session.user.id,
+        note: `Retorno solicitado desde gestión de llamada${motivo ? `: ${motivo}` : ""}`,
+        returnReason: motivo || card.returnReason,
+        data: { metadata: nextMetadata },
+      });
+    } else {
+      await tx.card.update({
+        where: { id: card.id },
+        data: { metadata: nextMetadata },
+      });
+    }
+
+    return tx.contactLog.create({
+      data: {
+        cardId: parsed.data.cardId,
+        userId: auth.session.user.id,
+        telefonosUsados: usedPhones,
+        comentario: comentario || (contactado ? "Contacto exitoso" : "Intento de contacto"),
+        contactado,
+        resultado,
+        canalContacto,
+        telefonosDetalle: parsed.data.telefonosDetalle
+          ? (parsed.data.telefonosDetalle.map((phone) => ({
+              numero: phone.numero,
+              estado: phone.estado ?? null,
+              nota: phone.nota?.trim() || null,
+            })) as Prisma.InputJsonValue)
+          : Prisma.JsonNull,
+        motivoNoContacto: parsed.data.motivoNoContacto?.trim() || null,
+        nuevaDireccion,
+        fechaPreferenciaEntrega,
+        snapshot: {
+          nombre: card.customer.nombre,
+          cedula: card.customer.cedula,
+          tc: card.tc,
+          productType: card.productType,
+          provincia: card.provincia,
+          zona: card.zona,
+          direccion: card.customer.direccionRaw,
+          status: card.status,
+          statusDespues: returnStatus ?? card.status,
+          mensajero: card.currentMessenger?.nombre ?? null,
+          mensajeroTelefono: card.currentMessenger?.telefono ?? null,
+          operador: auth.session.user.name ?? null,
+        } as Prisma.InputJsonValue,
+      },
+    });
   });
 
   return NextResponse.json(
@@ -907,6 +805,8 @@ export async function POST(request: Request) {
         fechaPreferenciaEntrega: nextOperativo.fechaPreferenciaEntrega,
         solicitudRetorno: nextOperativo.solicitudRetorno,
         traslado: nextOperativo.traslado,
+        resultado,
+        status: returnStatus ?? card.status,
       },
     },
     { status: 201 },

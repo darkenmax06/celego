@@ -1,12 +1,19 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { usePathname, useRouter } from "next/navigation";
 import { PhoneCall } from "lucide-react";
 import { PageHeader } from "@/components/ui/page-header";
 import { Panel } from "@/components/ui/panel";
 import { StatusBadge } from "@/components/ui/status-badge";
+import { ContactStateBadge } from "@/components/cards/contact-state-badge";
+import { CardTile } from "@/components/cards/card-tile";
+import { CardTileGrid } from "@/components/cards/card-tile-grid";
 import { usePersistentState } from "@/lib/use-persistent-state";
-import { FilterBar, groupByLevelLabel } from "@/components/filters/filter-bar";
+import { useCardListFilters } from "@/lib/use-card-list-filters";
+import { groupByLevelLabel, type ViewType } from "@/components/filters/filter-bar";
+import { CardFilterBar } from "@/components/filters/card-filter-bar";
+import { AssignedToMeChip } from "@/components/filters/assigned-to-me-chip";
 import { NestedGroupList, useCollapsedGroups, type GroupSelection } from "@/components/grouping/nested-group-list";
 import { dateRangeFilterBarProps } from "@/components/filters/date-range-filter";
 import {
@@ -42,16 +49,8 @@ import {
   useResizableColumns,
   ResizableHeader,
 } from "@/components/ui/use-resizable-columns";
-import {
-  OperativeContactWizard,
-  type PhoneState,
-  type OperativeWizardCard,
-} from "@/components/operativo/operative-contact-wizard";
-
-type MessengerOption = {
-  id: string;
-  nombre: string;
-};
+import { callItemFromSlaRow, callItemGroupKey, type CallListItem } from "@/lib/llamadas/call-list-item";
+import { callDetailHref, writeNavContext } from "@/lib/llamadas/nav-context";
 
 type Row = {
   id: string;
@@ -83,6 +82,8 @@ type Row = {
   metadata?: unknown;
   /** Ids of the CardGroups this card belongs to. Names resolve via useCardGroups. */
   groupIds?: string[];
+  asignadoA?: { id: string; name: string } | null;
+  attempts?: number | null;
 };
 
 type PaginationMeta = {
@@ -94,7 +95,6 @@ type PaginationMeta = {
 
 type Payload = {
   filters: { messengerId: string };
-  messengers: MessengerOption[];
   total: number;
   rows: Row[];
   pagination?: PaginationMeta;
@@ -169,9 +169,25 @@ const SLA_GROUP_BY_OPTIONS = [
   { field: "provincia", label: "Provincia" },
   { field: "zona", label: "Zona" },
   { field: "status", label: "Status" },
+  { field: "asignado", label: "Asignado a" },
+  { field: "canalContacto", label: "Canal de contacto" },
   { field: CARD_GROUP_BY_FIELD, label: "Grupo" },
   ...cardDateGroupOptions(["slaDueDate", "dispatchDate", "fechaPreferenciaEntrega"]),
 ];
+
+const SLA_ENDPOINT = "/api/sla-vencidas";
+const DEFAULT_FILTERS = { messengerId: "ALL", page: "1", pageSize: "100" };
+/** Tiles are the default; the column table stays available as the alternate view. */
+const SLA_VIEWS: ViewType[] = ["cards", "list"];
+
+/** Query params of the list WITHOUT `page` / `pageSize` / `groupBy`. */
+function buildListParams(filters: Record<string, string>) {
+  const params: Record<string, string> = {};
+  Object.entries(filters).forEach(([k, v]) => {
+    if (v && v !== "ALL" && k !== "page" && k !== "pageSize" && k !== "groupBy") params[k] = v;
+  });
+  return params;
+}
 
 /** Only the date range params, for the exports that must honour the list filters. */
 function dateParamsOf(filters: Record<string, string>) {
@@ -206,6 +222,9 @@ function getSlaGroupKey(row: Row, groupBy: string): { key: string; label: string
       return { key: row.status || "SIN_ESTADO", label: row.status || "Sin Estado" };
     case "tipoTarjeta":
       return { key: row.tipoTarjeta || "SIN_TIPO", label: row.tipoTarjeta || "Sin Tipo" };
+    case "asignado":
+    case "canalContacto":
+      return callItemGroupKey(callItemFromSlaRow(row), groupBy);
     case "adicional":
       return row.adicional
         ? { key: `ADIC_${row.adicionalNumero}`, label: `Adicional ${row.adicionalNumero}` }
@@ -227,13 +246,14 @@ type SlaVencidasClientProps = {
 
 export default function SlaVencidasClient({ role }: SlaVencidasClientProps) {
   const canManageGroups = role === "ADMIN" || role === "OPERADOR";
-  const [filters, setFilters] = useState<Record<string, string>>({
-    messengerId: "ALL",
-    page: "1",
-    pageSize: "100",
-  });
+  const router = useRouter();
+  const pathname = usePathname();
+  const { filters, setFilters, resetFilters } = useCardListFilters({ defaults: DEFAULT_FILTERS });
+  const [viewMode, setViewMode] = useState<ViewType>("cards");
   const cardGroups = useCardGroups();
-  const [messengers, setMessengers] = useState<MessengerOption[]>([]);
+  // The page already owns the card groups (it reloads them after a group
+  // action), so the filter bar reuses them instead of fetching its own copy.
+  const facetSources = useMemo(() => ({ groups: cardGroups.groups }), [cardGroups.groups]);
   const [rows, setRows] = useState<Row[]>([]);
   const [pagination, setPagination] = useState<PaginationMeta>({
     page: 1,
@@ -275,21 +295,6 @@ export default function SlaVencidasClient({ role }: SlaVencidasClientProps) {
     }
     return map;
   }, [rows]);
-
-  // Wizard state for SLA Vencidas
-  const [selectedCardId, setSelectedCardId] = useState<string | null>(null);
-  const [provincesList, setProvinciasList] = useState<string[]>([]);
-
-  useEffect(() => {
-    fetch("/api/config/provincias", { cache: "no-store" })
-      .then((res) => res.json())
-      .then((data) => {
-        if (data.provincias) {
-          setProvinciasList(data.provincias.map((p: { nombre: string }) => p.nombre).sort());
-        }
-      })
-      .catch(() => {});
-  }, []);
 
   /**
    * The off-filter count can only be answered by the database - the browser
@@ -362,7 +367,7 @@ export default function SlaVencidasClient({ role }: SlaVencidasClientProps) {
     });
 
     const query = params.toString();
-    const res = await fetch(`/api/sla-vencidas${query ? `?${query}` : ""}`, { cache: "no-store" });
+    const res = await fetch(`${SLA_ENDPOINT}${query ? `?${query}` : ""}`, { cache: "no-store" });
     const json = (await res.json().catch(() => ({ error: "No se pudo cargar SLA vencidas" }))) as
       | Payload
       | { error: string };
@@ -373,7 +378,6 @@ export default function SlaVencidasClient({ role }: SlaVencidasClientProps) {
       return;
     }
 
-    setMessengers(json.messengers ?? []);
     setRows(json.rows ?? []);
     if (json.pagination) {
       setPagination(json.pagination);
@@ -391,6 +395,7 @@ export default function SlaVencidasClient({ role }: SlaVencidasClientProps) {
 
   useEffect(() => {
     void loadData(filters);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filters]);
 
   const groupLevels = useMemo(() => parseGroupByLevels(filters.groupBy), [filters.groupBy]);
@@ -423,77 +428,65 @@ export default function SlaVencidasClient({ role }: SlaVencidasClientProps) {
       }
     : undefined;
 
-  // Selected card for OperativeContactWizard
-  const selectedIndex = selectedCardId ? rows.findIndex((r) => r.id === selectedCardId) : -1;
-  const currentRow = selectedIndex >= 0 ? rows[selectedIndex] : null;
+  const items = useMemo(() => rows.map(callItemFromSlaRow), [rows]);
+  const itemsById = useMemo(() => new Map(items.map((item) => [item.id, item])), [items]);
 
-  const currentWizardCard: OperativeWizardCard | null = useMemo(() => {
-    if (!currentRow) return null;
-    const rawPhones = (currentRow.telefonos || "")
-      .split(/[\n,;]+/g)
-      .map((p) => p.trim())
-      .filter(Boolean);
+  /** Stores the visible order (for prev/next on the detail screen) and opens it. */
+  const openCallDetail = useCallback(
+    (cardId: string, options: { llamar?: boolean } = {}) => {
+      // Grouping by "Grupo" fans a card out into several buckets; keep its first position only.
+      const visible = groupedRows ? groupedRows.flatMap((group) => group.rows) : rows;
+      writeNavContext({
+        ids: [...new Set(visible.map((row) => row.id))],
+        originUrl: `${pathname}${typeof window !== "undefined" ? window.location.search : ""}`,
+        originLabel: "Vencimientos",
+        source: {
+          endpoint: SLA_ENDPOINT,
+          params: buildListParams(filters),
+          listKey: "rows",
+          idKey: "id",
+          pageSize: pagination.pageSize,
+          total: pagination.total,
+          totalPages: pagination.totalPages,
+          firstPage: pagination.page,
+          lastPage: pagination.page,
+        },
+      });
+      router.push(callDetailHref(cardId, options));
+    },
+    [groupedRows, rows, pathname, filters, pagination, router],
+  );
 
-    const phones: PhoneState[] = rawPhones.length
-      ? rawPhones.map((num, i) => ({
-          num,
-          principal: i === 0,
-          funciona: false,
-          comentario: "",
-        }))
-      : [{ num: "", principal: true, funciona: false, comentario: "" }];
+  const renderTile = (item: CallListItem) => (
+    <CardTile
+      data={item}
+      onOpen={() => openCallDetail(item.id)}
+      selection={
+        canManageGroups
+          ? { checked: cardSelection.isSelected(item.id), onToggle: () => cardSelection.toggle(item.id) }
+          : undefined
+      }
+      actions={
+        <button
+          type="button"
+          onClick={() => openCallDetail(item.id, { llamar: true })}
+          className="rounded-lg bg-[#0f2544] px-2.5 py-1 text-xs font-bold text-white hover:bg-slate-800"
+        >
+          Llamar
+        </button>
+      }
+    />
+  );
 
-    return {
-      id: currentRow.id,
-      cardId: currentRow.id,
-      tc: currentRow.tc,
-      nombre: currentRow.nombre,
-      cedula: currentRow.cedula,
-      provincia: currentRow.provincia,
-      zona: currentRow.zona,
-      status: currentRow.status,
-      fechaDespacho: currentRow.dispatchDate,
-      tipoEmision: currentRow.tipoTarjeta,
-      direcciones: currentRow.direccion ? [currentRow.direccion] : [],
-      refs: [],
-      mensajero: currentRow.mensajero || "Sin asignar",
-      telefonos: phones,
-      remaining: -currentRow.diasVencidos,
-      readOnly: false,
-    };
-  }, [currentRow]);
-
-  async function saveContactFromWizard(payload: {
-    telefonos: PhoneState[];
-    comentario: string;
-    contactado: boolean;
-    canalContacto?: "WHATSAPP" | "LLAMADA_DIRECTA" | null;
-    nuevaDireccion?: string | null;
-    fechaPreferenciaEntrega?: string | null;
-    solicitudRetorno?: boolean;
-    motivoRetorno?: string | null;
-    trasladoProvincia?: string | null;
-    trasladoMotivo?: string | null;
-  }) {
-    if (!currentRow) return "No hay tarjeta seleccionada";
-
-    const res = await fetch("/api/operativo/contacto", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        cardId: currentRow.id,
-        ...payload,
-      }),
-    });
-
-    const data = await res.json();
-    if (!res.ok) {
-      return data.error ?? "No se pudo registrar contacto";
-    }
-
-    await loadData();
-    return null;
-  }
+  const renderTileGrid = (gridRows: Row[]) => (
+    <CardTileGrid
+      items={gridRows.map((row) => itemsById.get(row.id) ?? callItemFromSlaRow(row))}
+      getKey={(item) => item.id}
+      renderItem={renderTile}
+      loading={loading}
+      emptyMessage={loading ? "Cargando..." : "No hay tarjetas SLA vencidas para este filtro."}
+    />
+  );
 
   async function exportJpgZip() {
     const params = new URLSearchParams(dateParamsOf(filters));
@@ -552,7 +545,7 @@ export default function SlaVencidasClient({ role }: SlaVencidasClientProps) {
   const renderSlaRow = (row: Row) => (
     <tr
       key={row.id}
-      onClick={() => setSelectedCardId(row.id)}
+      onClick={() => openCallDetail(row.id)}
       className="cursor-pointer border-t border-slate-100 align-top hover:bg-blue-50/50 transition-colors"
     >
       {canManageGroups ? (
@@ -584,23 +577,12 @@ export default function SlaVencidasClient({ role }: SlaVencidasClientProps) {
       ) : null}
       {exportColumns.includes("contactoEstado" as ExportColumnKey) ? (
         <td className="px-3 py-2.5 truncate">
-          {row.solicitudRetorno || row.contactoEstado === "RETORNO_SOLICITADO" ? (
-            <span className="inline-flex items-center gap-1 rounded-md bg-rose-50 border border-rose-200 px-2 py-0.5 text-[11px] font-bold text-rose-700">
-              ⚠ Retorno
-            </span>
-          ) : row.traslado || row.contactoEstado === "TRASLADO_SOLICITADO" ? (
-            <span className="inline-flex items-center gap-1 rounded-md bg-indigo-50 border border-indigo-200 px-2 py-0.5 text-[11px] font-bold text-indigo-700">
-              ✈ Traslado
-            </span>
-          ) : row.contactado || row.contactoEstado === "CONTACTADA" ? (
-            <span className="inline-flex items-center gap-1 rounded-md bg-emerald-50 border border-emerald-200 px-2 py-0.5 text-[11px] font-bold text-emerald-700">
-              ✓ Contactada {row.canalContacto ? `(${row.canalContacto})` : ""}
-            </span>
-          ) : (
-            <span className="inline-flex items-center gap-1 rounded-md bg-slate-100 border border-slate-200 px-2 py-0.5 text-[11px] font-medium text-slate-500">
-              ○ No contactada
-            </span>
-          )}
+          {(() => {
+            const item = itemsById.get(row.id);
+            return item?.contactoEstado ? (
+              <ContactStateBadge value={item.contactoEstado} canal={item.canalContacto} className="text-[11px]" />
+            ) : null;
+          })()}
         </td>
       ) : null}
       {exportColumns.includes("mensajero") ? (
@@ -657,62 +639,35 @@ export default function SlaVencidasClient({ role }: SlaVencidasClientProps) {
     <div className="flex flex-col gap-5">
       <PageHeader
         title="Tarjetas con SLA vencidas"
-        subtitle="Haz clic en cualquier tarjeta para abrir el Wizard de contacto en 3 columnas, gestionar llamadas, traslados o retornos"
+        subtitle="Haz clic en cualquier tarjeta para abrir su gestión de llamadas: historial, contacto, traslados o retornos"
       />
 
-      <FilterBar
-        resource="sla-vencidas"
-        sectionKey="sla-vencidas"
-        filters={filters}
-        onFilterChange={(next) =>
-          setFilters({ ...normalizeDateRangeFilters(next), page: "1", pageSize: filters.pageSize || "100" })
-        }
-        onReset={() => setFilters({ messengerId: "ALL", page: "1", pageSize: "100" })}
-        searchPlaceholder="Buscar por TC, cédula, nombre, provincia o zona..."
-        facets={[
-          {
-            field: "contactoEstado",
-            label: "Gestión Contacto",
-            options: [
-              { label: "Contactadas", value: "CONTACTADA" },
-              { label: "No contactadas / Pendientes", value: "NO_CONTACTADA" },
-              { label: "Retorno solicitado", value: "RETORNO_SOLICITADO" },
-              { label: "Traslado solicitado", value: "TRASLADO_SOLICITADO" },
-            ],
-          },
-          {
-            field: "productType",
-            label: "Producto",
-            options: [
-              { label: "Crédito", value: "CREDITO" },
-              { label: "Débito", value: "DEBITO" },
-            ],
-          },
-          {
-            field: "messengerId",
-            label: "Mensajero",
-            options: messengers.map((m) => ({ label: m.nombre, value: m.id })),
-          },
-          { field: "provincia", label: "Provincia" },
-          { field: "zona", label: "Zona" },
-          { field: "status", label: "Status" },
-          {
-            field: "grupo",
-            label: "Grupo",
-            multi: true,
-            options: [
-              ...cardGroups.groups.map((group) => ({ label: group.name, value: group.id })),
-              { label: "Sin grupo", value: "SIN_GRUPO" },
-            ],
-          },
-        ]}
-        groupByOptions={SLA_GROUP_BY_OPTIONS}
-        {...dateRangeFilterBarProps({
-          fields: SLA_DATE_FILTER_FIELDS,
-          filters,
-          onChange: (next) => setFilters({ ...next, page: "1" }),
-        })}
-      />
+      <div className="space-y-2">
+        <div className="flex justify-end">
+          <AssignedToMeChip filters={filters} setFilters={setFilters} />
+        </div>
+        <CardFilterBar
+          preset="llamadas"
+          resource="sla-vencidas"
+          sectionKey="sla-vencidas"
+          filters={filters}
+          onFilterChange={(next) =>
+            setFilters({ ...normalizeDateRangeFilters(next), page: "1", pageSize: filters.pageSize || "100" })
+          }
+          onReset={resetFilters}
+          searchPlaceholder="Buscar por TC, cédula, nombre, provincia o zona..."
+          sources={facetSources}
+          groupByOptions={SLA_GROUP_BY_OPTIONS}
+          allowedViews={SLA_VIEWS}
+          currentView={viewMode}
+          onViewChange={setViewMode}
+          {...dateRangeFilterBarProps({
+            fields: SLA_DATE_FILTER_FIELDS,
+            filters,
+            onChange: (next) => setFilters({ ...next, page: "1" }),
+          })}
+        />
+      </div>
 
       <Panel>
         <div className="flex flex-wrap items-center justify-between gap-3">
@@ -768,13 +723,30 @@ export default function SlaVencidasClient({ role }: SlaVencidasClientProps) {
             ) : null}
             {isGroupByGrupo ? <CardGroupFanoutNote /> : null}
           </div>
-          <TableColumnSelector
-            columns={EXPORT_COLUMNS}
-            visibleColumns={exportColumns}
-            onChange={setExportColumns}
-          />
+          {viewMode === "list" ? (
+            <TableColumnSelector
+              columns={EXPORT_COLUMNS}
+              visibleColumns={exportColumns}
+              onChange={setExportColumns}
+            />
+          ) : null}
         </div>
 
+        {viewMode !== "list" ? (
+          groupedRows ? (
+            <NestedGroupList
+              groups={groupedRows}
+              variant="blocks"
+              isCollapsed={collapsedGroups.isCollapsed}
+              onToggle={collapsedGroups.toggle}
+              selection={groupSelection}
+              countLabel={groupCountLabel}
+              renderRows={(groupRows) => renderTileGrid(groupRows)}
+            />
+          ) : (
+            renderTileGrid(rows)
+          )
+        ) : (
         <div className="overflow-x-auto rounded-xl border border-slate-200">
           {(() => {
             const visibleHeaderCount = [
@@ -940,6 +912,7 @@ export default function SlaVencidasClient({ role }: SlaVencidasClientProps) {
             );
           })()}
         </div>
+        )}
 
         {pagination.totalPages > 1 || pagination.total > 10 ? (
           <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-4 text-xs text-slate-600">
@@ -1014,27 +987,6 @@ export default function SlaVencidasClient({ role }: SlaVencidasClientProps) {
         />
       ) : null}
 
-      {/* OPERATIVE WIZARD ON SLA VENCIDAS */}
-      {selectedIndex >= 0 && currentWizardCard ? (
-        <OperativeContactWizard
-          card={currentWizardCard}
-          index={selectedIndex}
-          total={rows.length}
-          provincesList={provincesList}
-          onClose={() => setSelectedCardId(null)}
-          onPrev={() => setSelectedCardId(rows[Math.max(selectedIndex - 1, 0)]?.id ?? null)}
-          onNext={() =>
-            setSelectedCardId(rows[Math.min(selectedIndex + 1, rows.length - 1)]?.id ?? null)
-          }
-          onSave={saveContactFromWizard}
-          canManageGroups={canManageGroups}
-          cardGroups={cardGroups.groups}
-          onGroupsChanged={() => {
-            void cardGroups.reload();
-            void loadData(filters);
-          }}
-        />
-      ) : null}
     </div>
   );
 }

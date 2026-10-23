@@ -50,10 +50,12 @@ describe("rutas GET", () => {
     await getRutas(req("/api/rutas?date=2026-08-29&messengerId=msg-1"));
 
     const args = firstCallArg(prisma.route.findMany);
-    const where = args.where as { fecha: { gte: Date; lt: Date }; messengerId: string };
+    // The legacy single `date` param is mapped onto the `from`/`to` range, so
+    // it still selects exactly that UTC day (inclusive end of day).
+    const where = args.where as { fecha: { gte: Date; lte: Date }; messengerId: string };
     expect(where.messengerId).toBe("msg-1");
     expect(where.fecha.gte.toISOString()).toBe("2026-08-29T00:00:00.000Z");
-    expect(where.fecha.lt.getTime() - where.fecha.gte.getTime()).toBe(DAY_MS);
+    expect(where.fecha.lte.getTime() - where.fecha.gte.getTime()).toBe(DAY_MS - 1);
     expect(args.orderBy).toEqual([{ fecha: "desc" }, { createdAt: "desc" }]);
     expect(args.include).toEqual({
       messenger: true,
