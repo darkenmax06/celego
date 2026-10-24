@@ -15,7 +15,13 @@ import { CallAssignModal } from "@/components/llamadas/call-assign-modal";
 import { useCardSelection } from "@/lib/use-card-selection";
 import { usePersistentState } from "@/lib/use-persistent-state";
 import type { CardTileData } from "@/lib/cards/card-tile-data";
-import { ASIGNADO_ME, buildCardFacets, pruneStatusesForProduct, type CardFacetKey } from "@/lib/filters/card-facets";
+import {
+  ASIGNADO_ME,
+  buildCardFacets,
+  OPEN_CARD_STATUS_VALUES,
+  pruneStatusesForProduct,
+  type CardFacetKey,
+} from "@/lib/filters/card-facets";
 import { filterAssignCards } from "@/lib/llamadas/assign-filters";
 
 /**
@@ -35,6 +41,12 @@ type ModalMode = "assign" | "unassign";
 
 const ASSIGN_VIEWS: ViewType[] = ["cards", "list"];
 const ASSIGN_FACET_KEYS: CardFacetKey[] = ["asignado", "productType", "status", "provincia", "zona"];
+const OPEN_STATUSES = new Set<string>(OPEN_CARD_STATUS_VALUES);
+
+/** Delivered and returned cards need no more calls, so they never enter (or stay in) the list. */
+function isCallable(card: OperationalCard) {
+  return OPEN_STATUSES.has(card.status);
+}
 
 function toTileData(card: AssignCard): CardTileData {
   return {
@@ -58,9 +70,11 @@ export default function AsignarGestionesClient() {
   const [modalIds, setModalIds] = useState<string[]>([]);
   const [filters, setFilters] = useState<Record<string, string>>({});
   const [viewMode, setViewMode] = useState<ViewType>("cards");
+  const [skippedClosed, setSkippedClosed] = useState(0);
   const { operadores } = useCardFacetSources(ASSIGN_FACET_KEYS);
 
-  const visibleCards = useMemo(() => filterAssignCards(cards, filters), [cards, filters]);
+  const callableCards = useMemo(() => cards.filter(isCallable), [cards]);
+  const visibleCards = useMemo(() => filterAssignCards(callableCards, filters), [callableCards, filters]);
   const facets = useMemo(() => {
     // Provinces come from the pasted cards. "Asignadas a mí" is left out:
     // this screen assigns work to others and does not know the session user.
@@ -76,7 +90,9 @@ export default function AsignarGestionesClient() {
     [],
   );
 
-  function addCards(incoming: OperationalCard[]) {
+  function addCards(found: OperationalCard[]) {
+    const incoming = found.filter(isCallable);
+    setSkippedClosed(found.length - incoming.length);
     setCards((current) => {
       const known = new Set(current.map((card) => card.id));
       const fresh = incoming.filter((card) => !known.has(card.id));
@@ -120,7 +136,7 @@ export default function AsignarGestionesClient() {
   }
 
   const allSelected = visibleCards.length > 0 && visibleCards.every((card) => selection.isSelected(card.id));
-  const emptyMessage = cards.length
+  const emptyMessage = callableCards.length
     ? "Ninguna tarjeta de la lista coincide con los filtros."
     : "Aún no hay tarjetas. Pega una lista de TC o cédulas arriba.";
   const removeButton = (card: AssignCard) => (
@@ -158,7 +174,10 @@ export default function AsignarGestionesClient() {
         <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
           <h2 className="font-display text-lg font-semibold text-slate-900">
             Tarjetas en la lista (
-            {visibleCards.length === cards.length ? cards.length : `${visibleCards.length} de ${cards.length}`})
+            {visibleCards.length === callableCards.length
+              ? callableCards.length
+              : `${visibleCards.length} de ${callableCards.length}`}
+            )
           </h2>
           <div className="flex flex-wrap gap-2">
             <button
@@ -181,6 +200,14 @@ export default function AsignarGestionesClient() {
             </button>
           </div>
         </div>
+
+        {skippedClosed ? (
+          <p className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800">
+            {skippedClosed === 1
+              ? "1 tarjeta no se agregó porque ya está entregada o retornada."
+              : `${skippedClosed} tarjetas no se agregaron porque ya están entregadas o retornadas.`}
+          </p>
+        ) : null}
 
         <FilterBar
           className="mb-4"

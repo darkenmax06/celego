@@ -6,6 +6,7 @@ import { prisma } from "@/lib/prisma";
 import { buildListEnvelope } from "@/lib/list-query";
 import { CALL_ASSIGNMENT_SELECT } from "@/lib/call-assignment";
 import { mapCardToOperativeRow } from "@/lib/operativo-row";
+import { SLA_CLOSED_STATUSES } from "@/lib/list-query/descriptors/sla-vencidas";
 
 const MAX_CARDS = 1000;
 
@@ -44,6 +45,8 @@ export async function GET(request: NextRequest) {
   const where: Prisma.CardWhereInput = {
     AND: [
       { callAssignment: assignedToId ? { is: { assignedToId } } : { isNot: null } },
+      // Delivered and returned cards need no more calls, same as operativo and SLA vencidas.
+      { status: { notIn: [...SLA_CLOSED_STATUSES] } },
       q
         ? {
             OR: [
