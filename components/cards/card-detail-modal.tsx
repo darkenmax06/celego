@@ -377,6 +377,7 @@ export function CardDetailModal({ cardId, onClose, onUpdated }: Props) {
       provincia: card.provincia,
       zona: card.zona,
       status: card.status,
+      productType: card.productType ?? null,
       urgent: card.urgent,
       remaining: null,
       presinto: null,
