@@ -603,6 +603,12 @@ export function OperativeContactWizard({
                 </span>
               </p>
               <div className="grid grid-cols-2 gap-2 pt-1">
+                <div className="col-span-2">
+                  <span className="text-slate-500 text-[11px]">Tipo de producto:</span>
+                  <p className="font-bold text-slate-900">
+                    {card.productType === "DEBITO" ? "Débito" : card.productType === "CREDITO" ? "Crédito" : "—"}
+                  </p>
+                </div>
                 <div>
                   <span className="text-slate-500 text-[11px]">Solicitud / TC:</span>
                   <p className="font-mono font-bold text-slate-900">{card.requestNumber || card.tc}</p>
