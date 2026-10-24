@@ -91,6 +91,9 @@ export function mapPinitExportStatus(pinitStatus: string | null | undefined): Ca
   if (/^123\b/.test(s) || s.includes("devuelto a origen") || s.includes("retornado")) {
     return CardStatus.TD_DEVUELTO_NO_LOCALIZADO;
   }
+  if (/^335\b/.test(s) || s.includes("no cobertura") || s.includes("fuera de cobertura")) {
+    return CardStatus.TD_ZONA_FUERA_COBERTURA;
+  }
   if (s.includes("310") || s.includes("intentados no entregados") || s.includes("no entregad")) {
     return CardStatus.NO_LOCALIZADO;
   }

@@ -14,6 +14,7 @@ describe("debit pinit export parser", () => {
     expect(mapPinitExportStatus("310 - Intentados no entregados")).toBe(CardStatus.NO_LOCALIZADO);
     expect(mapPinitExportStatus("207 - En espera para salir de nuevo a ruta")).toBe(CardStatus.NO_LOCALIZADO);
     expect(mapPinitExportStatus("123 - Retornado / Devuelto a origen")).toBe(CardStatus.TD_DEVUELTO_NO_LOCALIZADO);
+    expect(mapPinitExportStatus("335 - Zona de NO cobertura")).toBe(CardStatus.TD_ZONA_FUERA_COBERTURA);
     expect(mapPinitExportStatus("109 - primer contacto de agendamiento")).toBeNull();
   });
 
