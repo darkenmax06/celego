@@ -26,6 +26,8 @@ export type CardFacetKey =
 
 export type CardFacetSources = {
   provincias?: readonly string[];
+  /** Deactivated provinces: listed last so their existing cards stay filterable. */
+  inactiveProvincias?: readonly string[];
   groups?: ReadonlyArray<{ id: string; name: string }>;
   messengers?: ReadonlyArray<{ id: string; nombre: string }>;
   operadores?: ReadonlyArray<{ id: string; name: string }>;
@@ -120,7 +122,10 @@ const FACET_BUILDERS: Record<CardFacetKey, (sources: CardFacetSources) => FacetC
     field: "provincia",
     label: "Provincia",
     multi: true,
-    options: (sources.provincias ?? []).map((value) => ({ label: value, value })),
+    options: [
+      ...(sources.provincias ?? []).map((value) => ({ label: value, value })),
+      ...(sources.inactiveProvincias ?? []).map((value) => ({ label: `${value} (inactiva)`, value })),
+    ],
   }),
   zona: () => ({
     field: "zona",
