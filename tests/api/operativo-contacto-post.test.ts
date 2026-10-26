@@ -95,6 +95,17 @@ describe("POST /api/operativo/contacto - contacted-call rule", () => {
     expect((await res.json()).error).toBe(CONTACTED_CALL_PHONE_REQUIRED_MESSAGE);
   });
 
+  it("validates the raw phone so an extension is not counted as digits", async () => {
+    const res = await post({
+      contactado: true,
+      canalContacto: "WHATSAPP",
+      telefonos: [{ num: "123 ext 4567", funciona: true }],
+    });
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toBe(CONTACTED_CALL_PHONE_REQUIRED_MESSAGE);
+    expect(prismaMock.$transaction).not.toHaveBeenCalled();
+  });
+
   it("rejects a missing channel after the phone check passes", async () => {
     const res = await post({ contactado: true, telefonos: [workingPhone] });
     expect(res.status).toBe(400);

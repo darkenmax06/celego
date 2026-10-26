@@ -657,21 +657,22 @@ export async function POST(request: Request) {
   const previousOperativo = asRecord(metadataRoot.operativo);
   const previousPhones = parseMetadataPhones(previousOperativo);
 
-  const normalizedPhones = normalizePhones(
+  const sourcePhones =
     parsed.data.telefonos && parsed.data.telefonos.length > 0
       ? parsed.data.telefonos
       : previousPhones.length > 0
         ? previousPhones
-        : fallbackPhones,
-  );
+        : fallbackPhones;
+  const normalizedPhones = normalizePhones(sourcePhones);
   const comentario = parsed.data.comentario?.trim() ?? "";
   const contactado = parsed.data.contactado;
 
   // Contacted calls (CONTACTADA, RETORNO, TRASLADO) need a working phone and a
   // channel. Validated before any write so a rejected call leaves no records.
+  // Raw values are validated: normalization keeps extension digits ("123 ext 4567").
   if (contactado) {
     const contactedError = validateContactedCall({
-      phones: normalizedPhones,
+      phones: sourcePhones,
       canalContacto: parsed.data.canalContacto,
       telefonosExplicitEmpty: false,
     });
