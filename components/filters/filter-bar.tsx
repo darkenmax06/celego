@@ -69,6 +69,17 @@ export type SavedFilterItem = {
   isDefault: boolean;
 };
 
+/** Removable chip contributed by a menu section (domain-neutral extension point). */
+export type FilterMenuChip = { key: string; label: string; onRemove: () => void };
+
+/** Extra section rendered in the "Filtros" column; the consumer owns its content and keyboard handling. */
+export type FilterMenuSection = {
+  id: string;
+  title: string;
+  render: () => ReactNode;
+  chips?: FilterMenuChip[];
+};
+
 export type FilterBarProps = {
   resource: string;
   sectionKey: string;
@@ -94,6 +105,10 @@ export type FilterBarProps = {
   chipRemovalKeys?: (key: string) => string[] | undefined;
   /** Extra controls rendered inside the "Filtros" column of the dropdown menu. */
   filterMenuExtra?: ReactNode;
+  /** Extension sections rendered after `filterMenuExtra`; their chips precede the filter chips. */
+  menuSections?: FilterMenuSection[];
+  /** Called exactly once by "clear all" so consumers can reset the state behind `menuSections`. */
+  onResetExtensions?: () => void;
 };
 
 export function FilterBar({
@@ -112,6 +127,8 @@ export function FilterBar({
   chipLabel,
   chipRemovalKeys,
   filterMenuExtra,
+  menuSections = [],
+  onResetExtensions,
 }: FilterBarProps) {
   const [searchVal, setSearchVal] = useState(filters.q || "");
   const [isMenuOpen, setIsMenuOpen] = useState(false);
@@ -253,6 +270,7 @@ export function FilterBar({
   const handleClearAll = () => {
     setSearchVal("");
     if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);
+    onResetExtensions?.();
     if (onReset) {
       onReset();
     } else {
@@ -386,6 +404,9 @@ export function FilterBar({
       v && v !== "ALL" && k !== "page" && k !== "pageSize" && k !== "q" && chipLabel?.(k, v) !== null,
   );
 
+  const sectionChips = menuSections.flatMap((section) => section.chips ?? []);
+  const hasChips = activeChips.length > 0 || sectionChips.length > 0;
+
   return (
     <div className={cn("relative flex items-center justify-between gap-3", className)}>
       {/* Odoo Unified Search & Filter Container */}
@@ -395,6 +416,25 @@ export function FilterBar({
       >
         <div className="flex flex-1 flex-wrap items-center gap-1.5 px-3 py-1.5">
           <Search className="h-4 w-4 shrink-0 text-slate-400" />
+
+          {/* Extension section chips come first */}
+          {sectionChips.map((chip) => (
+            <span
+              key={`section:${chip.key}`}
+              className="inline-flex items-center gap-1 rounded-md bg-indigo-50 px-2 py-0.5 text-xs font-semibold text-indigo-800 shadow-xs ring-1 ring-indigo-200 animate-in fade-in zoom-in-95"
+            >
+              <Filter className="h-3 w-3" />
+              <span>{chip.label}</span>
+              <button
+                type="button"
+                onClick={chip.onRemove}
+                className="rounded-sm p-0.5 hover:bg-black/10"
+                title={`Quitar ${chip.label}`}
+              >
+                <X className="h-3 w-3" />
+              </button>
+            </span>
+          ))}
 
           {/* Active Filter Chips embedded directly in search bar (Odoo Style) */}
           {activeChips.map(([key, val]) => {
@@ -462,14 +502,14 @@ export function FilterBar({
             type="text"
             value={searchVal}
             onChange={(e) => handleSearchChange(e.target.value)}
-            placeholder={activeChips.length > 0 ? "Agregar criterio..." : searchPlaceholder}
+            placeholder={hasChips ? "Agregar criterio..." : searchPlaceholder}
             className="min-w-[140px] flex-1 bg-transparent py-1 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none"
           />
         </div>
 
         {/* Action icons on right of search input */}
         <div className="flex items-center border-l border-slate-200">
-          {searchVal || activeChips.length > 0 ? (
+          {searchVal || hasChips ? (
             <button
               type="button"
               onClick={handleClearAll}
@@ -584,6 +624,13 @@ export function FilterBar({
                 })}
 
                 {filterMenuExtra ? <div className="pt-2">{filterMenuExtra}</div> : null}
+
+                {menuSections.map((section) => (
+                  <div key={section.id} className="pt-2" data-filter-menu-section={section.id}>
+                    <div className="py-1 text-[11px] font-semibold text-slate-500">{section.title}</div>
+                    {section.render()}
+                  </div>
+                ))}
 
                 {/* Agregar filtro personalizado */}
                 <div className="pt-2">
