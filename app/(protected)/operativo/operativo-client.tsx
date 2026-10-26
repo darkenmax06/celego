@@ -43,26 +43,13 @@ import { CardTileGrid } from "@/components/cards/card-tile-grid";
 import { CardListTable } from "@/components/cards/card-list-table";
 import { callItemFromOperativoRow, callItemGroupKey, type CallListItem } from "@/lib/llamadas/call-list-item";
 import { callDetailHref, writeNavContext } from "@/lib/llamadas/nav-context";
+import { UserMinus, UserPlus } from "lucide-react";
 import {
-  Phone,
-  AlertTriangle,
-  Send,
-  CheckCircle2,
-  Clock,
-  FileSpreadsheet,
-  RotateCcw,
-  UserMinus,
-  UserPlus,
-} from "lucide-react";
-
-type OperativeTab =
-  | "activos"
-  | "contactadas"
-  | "no-contactadas"
-  | "urgentes"
-  | "traslados"
-  | "retorno"
-  | "extensiones-sla";
+  buildCallTabsSection,
+  DEFAULT_OPERATIVE_TAB,
+  type OperativeTab,
+} from "@/components/operativo/call-tabs-section";
+import { CallTabsDropdown } from "@/components/operativo/call-tabs-dropdown";
 
 type PaginationMeta = { page: number; pageSize: number; total: number; totalPages: number };
 /** Operativo API row (`lib/operativo-row.ts`): the wizard card plus the calls-overhaul list fields. */
@@ -512,95 +499,14 @@ export default function OperativoClient({ role }: OperativoClientProps) {
         subtitle={`${pagination.total} tarjetas registradas en esta vista`}
       />
 
-      <Panel>
-        {/* TAB BUTTONS BAR */}
+      {/* FILTERBAR: BUSCADOR, FACETAS, VISTAS Y AGRUPACIONES (ODOO STYLE) */}
+      <div className="space-y-2">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <div className="flex flex-wrap items-center gap-2">
-            <button
-              onClick={() => setTab("activos")}
-              className={`flex items-center gap-1.5 rounded-xl border px-3.5 py-2 text-xs font-bold transition-all ${
-                tab === "activos"
-                  ? "border-blue-700 bg-blue-50 text-blue-700 shadow-2xs"
-                  : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
-              }`}
-            >
-              <Phone className="h-3.5 w-3.5" />
-              Tarjetas Activas (Por llamar)
-            </button>
-
-            <button
-              onClick={() => setTab("contactadas")}
-              className={`flex items-center gap-1.5 rounded-xl border px-3.5 py-2 text-xs font-bold transition-all ${
-                tab === "contactadas"
-                  ? "border-emerald-600 bg-emerald-50 text-emerald-700 shadow-2xs"
-                  : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
-              }`}
-            >
-              <CheckCircle2 className="h-3.5 w-3.5" />
-              Contactadas
-            </button>
-
-            <button
-              onClick={() => setTab("no-contactadas")}
-              className={`flex items-center gap-1.5 rounded-xl border-2 px-3.5 py-2 text-xs font-bold transition-all ${
-                tab === "no-contactadas"
-                  ? "border-amber-500 bg-amber-100 text-amber-800 shadow-2xs"
-                  : "border border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
-              }`}
-            >
-              <Clock className="h-3.5 w-3.5" />
-              No Contactadas (Intentos)
-            </button>
-
-            <button
-              onClick={() => setTab("urgentes")}
-              className={`flex items-center gap-1.5 rounded-xl border px-3.5 py-2 text-xs font-bold transition-all ${
-                tab === "urgentes"
-                  ? "border-rose-600 bg-rose-50 text-rose-700 shadow-2xs"
-                  : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
-              }`}
-            >
-              <AlertTriangle className="h-3.5 w-3.5" />
-              Casos Urgentes
-            </button>
-
-            <button
-              onClick={() => setTab("traslados")}
-              className={`flex items-center gap-1.5 rounded-xl border px-3.5 py-2 text-xs font-bold transition-all ${
-                tab === "traslados"
-                  ? "border-indigo-600 bg-indigo-50 text-indigo-700 shadow-2xs"
-                  : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
-              }`}
-            >
-              <Send className="h-3.5 w-3.5" />
-              Traslados (Cambio Prov.)
-            </button>
-
-            <button
-              onClick={() => setTab("retorno")}
-              className={`flex items-center gap-1.5 rounded-xl border px-3.5 py-2 text-xs font-bold transition-all ${
-                tab === "retorno"
-                  ? "border-red-600 bg-red-50 text-red-700 shadow-2xs"
-                  : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
-              }`}
-            >
-              <RotateCcw className="h-3.5 w-3.5" />
-              Solicitudes de Retorno
-            </button>
-
-            <button
-              onClick={() => setTab("extensiones-sla")}
-              className={`flex items-center gap-1.5 rounded-xl border px-3.5 py-2 text-xs font-bold transition-all ${
-                tab === "extensiones-sla"
-                  ? "border-[#0f2544] bg-[#0f2544] text-white shadow-2xs"
-                  : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
-              }`}
-            >
-              <FileSpreadsheet className="h-3.5 w-3.5" />
-              Extensiones SLA (Banco)
-            </button>
-          </div>
-
+          {tab === "extensiones-sla" ? (
+            <CallTabsDropdown tab={tab} onTabChange={setTab} />
+          ) : (
+            <AssignedToMeChip filters={filters} setFilters={setFilters} />
+          )}
           <button
             onClick={() => setShowReport(true)}
             className="flex items-center gap-1.5 rounded-xl bg-slate-900 px-3.5 py-2 text-xs font-bold text-white hover:bg-slate-800 shadow-2xs"
@@ -608,14 +514,7 @@ export default function OperativoClient({ role }: OperativoClientProps) {
             Reporte de Contactos
           </button>
         </div>
-      </Panel>
-
-      {/* FILTERBAR: BUSCADOR, FACETAS Y AGRUPACIONES (ODOO STYLE) */}
-      {tab !== "extensiones-sla" ? (
-        <div className="space-y-2">
-          <div className="flex justify-end">
-            <AssignedToMeChip filters={filters} setFilters={setFilters} />
-          </div>
+        {tab !== "extensiones-sla" ? (
           <CardFilterBar
             preset="llamadas"
             resource="operativo"
@@ -632,14 +531,16 @@ export default function OperativoClient({ role }: OperativoClientProps) {
             allowedViews={OPERATIVO_VIEWS}
             currentView={viewMode}
             onViewChange={setViewMode}
+            menuSections={[buildCallTabsSection(tab, setTab)]}
+            onResetExtensions={() => setTab(DEFAULT_OPERATIVE_TAB)}
             {...dateRangeFilterBarProps({
               fields: OPERATIVO_DATE_FILTER_FIELDS,
               filters,
               onChange: (next) => setFilters({ ...next, page: "1" }),
             })}
           />
-        </div>
-      ) : null}
+        ) : null}
+      </div>
 
       {/* URGENT NOTIFICATIONS PANEL */}
       {urgentNotifications.length ? (
