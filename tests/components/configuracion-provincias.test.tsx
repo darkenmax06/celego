@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { toast } = vi.hoisted(() => ({
@@ -54,17 +54,31 @@ describe("Configuracion provinces", () => {
     expect(screen.getByRole("button", { name: "Activar Samaná" })).toBeInTheDocument();
   });
 
-  it("does not delete when the confirmation is cancelled", async () => {
-    vi.spyOn(window, "confirm").mockReturnValue(false);
+  it("asks for confirmation in an in-app dialog and does not delete when cancelled", async () => {
+    const nativeConfirm = vi.spyOn(window, "confirm");
     render(<ConfiguracionClient />);
     fireEvent.click(await screen.findByRole("button", { name: "Eliminar Santiago" }));
+    const dialog = await screen.findByRole("alertdialog", { name: "Eliminar provincia" });
+    expect(dialog).toHaveTextContent('¿Eliminar la provincia "Santiago"? Esta acción no se puede deshacer.');
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancelar" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument());
+    expect(nativeConfirm).not.toHaveBeenCalled();
+    expect(fetchMock.mock.calls.some(([, init]) => init?.method === "DELETE")).toBe(false);
+  });
+
+  it("closes the dialog with Escape without deleting", async () => {
+    render(<ConfiguracionClient />);
+    fireEvent.click(await screen.findByRole("button", { name: "Eliminar Santiago" }));
+    const dialog = await screen.findByRole("alertdialog");
+    fireEvent.keyDown(dialog, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument());
     expect(fetchMock.mock.calls.some(([, init]) => init?.method === "DELETE")).toBe(false);
   });
 
   it("deletes after confirmation", async () => {
-    vi.spyOn(window, "confirm").mockReturnValue(true);
     render(<ConfiguracionClient />);
     fireEvent.click(await screen.findByRole("button", { name: "Eliminar Santiago" }));
+    fireEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Eliminar" }));
     await waitFor(() =>
       expect(fetchMock).toHaveBeenCalledWith(
         "/api/config/provincias?id=p1",
@@ -75,7 +89,6 @@ describe("Configuracion provinces", () => {
   });
 
   it("shows the API error message when deletion is blocked", async () => {
-    vi.spyOn(window, "confirm").mockReturnValue(true);
     fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
       if (init?.method === "DELETE") {
         return json({ error: "No se puede eliminar. Desactívala en su lugar.", references: ["Card.provincia"] }, 409);
@@ -84,6 +97,7 @@ describe("Configuracion provinces", () => {
     });
     render(<ConfiguracionClient />);
     fireEvent.click(await screen.findByRole("button", { name: "Eliminar Santiago" }));
+    fireEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Eliminar" }));
     await waitFor(() =>
       expect(toast.error).toHaveBeenCalledWith("No se puede eliminar. Desactívala en su lugar."),
     );
