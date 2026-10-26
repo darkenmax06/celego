@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useRef } from "react";
+import { type KeyboardEvent, useEffect, useId, useRef } from "react";
 import { AlertTriangle } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -27,11 +27,30 @@ export function ConfirmDialog({
 }) {
   const titleId = useId();
   const messageId = useId();
+  const dialogRef = useRef<HTMLDivElement>(null);
   const cancelRef = useRef<HTMLButtonElement>(null);
 
+  // Focus Cancel on open (a stray Enter must not confirm) and hand focus back on close.
   useEffect(() => {
-    if (open) cancelRef.current?.focus();
+    if (!open) return;
+    const previouslyFocused = document.activeElement as HTMLElement | null;
+    cancelRef.current?.focus();
+    return () => previouslyFocused?.focus();
   }, [open]);
+
+  function trapTab(event: KeyboardEvent) {
+    const focusable = dialogRef.current?.querySelectorAll<HTMLElement>("button:not([disabled])");
+    if (!focusable?.length) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  }
 
   if (!open) return null;
 
@@ -43,6 +62,7 @@ export function ConfirmDialog({
       }}
     >
       <div
+        ref={dialogRef}
         role="alertdialog"
         aria-modal="true"
         aria-labelledby={titleId}
@@ -51,6 +71,7 @@ export function ConfirmDialog({
         onClick={(event) => event.stopPropagation()}
         onKeyDown={(event) => {
           if (event.key === "Escape" && !busy) onCancel();
+          if (event.key === "Tab") trapTab(event);
         }}
       >
         <div className="flex items-start gap-3">
