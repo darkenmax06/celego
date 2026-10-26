@@ -119,6 +119,17 @@ describe("DELETE /api/config/provincias", () => {
     expect(prismaMock.provinceConfig.delete).not.toHaveBeenCalled();
   });
 
+  it("blocks deletion when cards reference the province through an import alias", async () => {
+    prismaMock.provinceConfig.findUnique.mockResolvedValue({ id: "p1", nombre: "Distrito Nacional" });
+    prismaMock.card.findMany.mockImplementation((async (args: { select: Record<string, boolean> }) =>
+      args.select.provincia ? [{ provincia: "DN" }] : []) as never);
+
+    const response = await DELETE(deleteReq("p1"));
+    expect(response.status).toBe(409);
+    expect((await response.json()).references).toContain("Card.provincia");
+    expect(prismaMock.provinceConfig.delete).not.toHaveBeenCalled();
+  });
+
   it("does not block on other provinces' values", async () => {
     prismaMock.card.findMany.mockImplementation(async () => [{ provincia: "SANTIAGO" }]);
     expect((await DELETE(deleteReq("p1"))).status).toBe(200);

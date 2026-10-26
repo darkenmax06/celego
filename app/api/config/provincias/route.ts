@@ -3,6 +3,7 @@ import { z } from "zod";
 import { requireApiSession } from "@/lib/api-session";
 import { prisma } from "@/lib/prisma";
 import { normalizeText } from "@/lib/utils";
+import { resolveProvinceAlias } from "@/lib/zone-map";
 
 const bodySchema = z.object({
   nombre: z.string().min(2),
@@ -104,7 +105,12 @@ export async function DELETE(request: Request) {
   );
   const references = results
     .filter(({ values }) =>
-      values.some((value) => typeof value === "string" && normalizeText(value) === target),
+      // Imports store raw names ("DN"), so aliases count as references too.
+      values.some(
+        (value) =>
+          typeof value === "string" &&
+          (normalizeText(value) === target || normalizeText(resolveProvinceAlias(value)) === target),
+      ),
     )
     .map(({ label }) => label);
 
