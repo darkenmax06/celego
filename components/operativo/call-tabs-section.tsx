@@ -82,6 +82,8 @@ export function buildCallTabsSection(
   return {
     id: "vista",
     title: "Vista",
+    // The view switch is the primary control of this screen: keep it above the facets.
+    placement: "start",
     render: () => <CallTabsList tab={tab} onSelect={setTab} />,
     chips:
       tab === DEFAULT_OPERATIVE_TAB

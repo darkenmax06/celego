@@ -49,6 +49,22 @@ describe("FilterBar menuSections", () => {
     expect(extra.compareDocumentPosition(section) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
+  it("renders start-placed sections before the facet list and end-placed ones after it", () => {
+    setup({
+      facets: [{ field: "estado", label: "Estado" }],
+      menuSections: [
+        { id: "abajo", title: "Abajo", render: () => <button type="button">Sección final</button> },
+        { id: "vista", title: "Vista", placement: "start", render: () => <button type="button">Opción de vista</button> },
+      ],
+    });
+    openMenu();
+    const facet = screen.getByRole("button", { name: /Estado/ });
+    const start = screen.getByText("Opción de vista");
+    const end = screen.getByText("Sección final");
+    expect(start.compareDocumentPosition(facet) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(facet.compareDocumentPosition(end) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
   it("renders section chips before filter chips and removes via the chip onRemove", () => {
     const onRemove = vi.fn();
     setup({

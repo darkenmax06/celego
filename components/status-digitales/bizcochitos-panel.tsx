@@ -2,6 +2,7 @@
 
 import { CakeSlice, Download, FileClock, RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Panel } from "@/components/ui/panel";
 
 type Batch = {
@@ -48,6 +49,7 @@ export function BizcochitosPanel() {
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
+  const [confirmingGenerate, setConfirmingGenerate] = useState(false);
   const [busyBatch, setBusyBatch] = useState<string | null>(null);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
@@ -73,15 +75,8 @@ export function BizcochitosPanel() {
   }, [loadData]);
 
   async function generate() {
+    setConfirmingGenerate(false);
     if (!data?.pendingCount || generating) return;
-    if (
-      !window.confirm(
-        `Se generara un Bizcochito con ${data.pendingCount} entrega(s) digital(es) pendiente(s). ¿Continuar?`,
-      )
-    ) {
-      return;
-    }
-
     setGenerating(true);
     setError("");
     setMessage("");
@@ -155,7 +150,7 @@ export function BizcochitosPanel() {
           </div>
           <button
             type="button"
-            onClick={() => void generate()}
+            onClick={() => setConfirmingGenerate(true)}
             disabled={generating || loading || !data?.pendingCount}
             className="inline-flex items-center justify-center gap-2 rounded-xl bg-[#0f2544] px-5 py-3 text-sm font-semibold text-white transition hover:bg-[#17355d] disabled:cursor-not-allowed disabled:opacity-50"
           >
@@ -267,6 +262,17 @@ export function BizcochitosPanel() {
           </div>
         ) : null}
       </Panel>
+
+      <ConfirmDialog
+        open={confirmingGenerate}
+        title="Generar Bizcochito"
+        message={`Se generará un Bizcochito con ${data?.pendingCount ?? 0} entrega(s) digital(es) pendiente(s). ¿Continuar?`}
+        confirmLabel="Generar"
+        tone="default"
+        busy={generating}
+        onCancel={() => setConfirmingGenerate(false)}
+        onConfirm={() => void generate()}
+      />
     </div>
   );
 }

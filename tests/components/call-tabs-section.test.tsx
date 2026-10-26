@@ -70,6 +70,24 @@ describe("buildCallTabsSection with the real FilterBar", () => {
     }
   });
 
+  it("places the Vista section at the top of the filters column, before the facets", () => {
+    expect(buildCallTabsSection("activos", vi.fn()).placement).toBe("start");
+    render(
+      <FilterBar
+        resource="operativo"
+        sectionKey="test"
+        filters={{}}
+        onFilterChange={vi.fn()}
+        facets={[{ field: "days", label: "Días SLA" }]}
+        menuSections={[buildCallTabsSection("activos", vi.fn())]}
+      />,
+    );
+    openMenu();
+    const vista = screen.getByRole("button", { name: "Contactadas" });
+    const facet = screen.getByRole("button", { name: /Días SLA/ });
+    expect(vista.compareDocumentPosition(facet) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
   it("switches tab on click and reflects pressed state", () => {
     const onTab = vi.fn();
     render(<Harness onTab={onTab} />);
