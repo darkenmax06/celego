@@ -6,7 +6,8 @@
  * always what wa.me needs.
  */
 
-const EXTENSION_MARKER = /\b(ext|x)\.?\s*\d*/i;
+// No leading word boundary: extensions are often glued to the number ("8095551234x12").
+const EXTENSION_MARKER = /(?:ext\.?|x)\s*\d+/i;
 
 /** Digits of a phone, ignoring any extension (`ext 12`, `x12`). */
 export function phoneDigits(raw: string): string {
@@ -15,10 +16,14 @@ export function phoneDigits(raw: string): string {
   return base.replace(/\D/g, "");
 }
 
-/** `000-000-0000` for exactly 10 digits; otherwise the bare digits (or the trimmed raw value). */
+/**
+ * `000-000-0000` for 10 digits (an 11-digit number with country code 1 drops it first);
+ * otherwise the bare digits (or the trimmed raw value).
+ */
 export function formatPhoneDisplay(raw: string): string {
-  const digits = phoneDigits(raw);
-  if (!digits) return raw.trim();
+  const allDigits = phoneDigits(raw);
+  if (!allDigits) return raw.trim();
+  const digits = allDigits.length === 11 && allDigits.startsWith("1") ? allDigits.slice(1) : allDigits;
   if (digits.length === 10) {
     return `${digits.slice(0, 3)}-${digits.slice(3, 6)}-${digits.slice(6)}`;
   }

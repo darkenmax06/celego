@@ -12,6 +12,11 @@ describe("phoneDigits", () => {
     expect(phoneDigits("809-555-1234 Ext. 7")).toBe("8095551234");
   });
 
+  it("drops extensions attached to the number", () => {
+    expect(phoneDigits("8095551234x12")).toBe("8095551234");
+    expect(phoneDigits("8095551234ext12")).toBe("8095551234");
+  });
+
   it("returns an empty string for empty input", () => {
     expect(phoneDigits("")).toBe("");
   });
@@ -22,9 +27,18 @@ describe("formatPhoneDisplay", () => {
     expect(formatPhoneDisplay("8095551234")).toBe("809-555-1234");
   });
 
+  it("drops the leading country code 1 of 11-digit numbers", () => {
+    expect(formatPhoneDisplay("+1 809 555 1234")).toBe("809-555-1234");
+    expect(formatPhoneDisplay("18095551234")).toBe("809-555-1234");
+  });
+
+  it("formats numbers with an attached extension", () => {
+    expect(formatPhoneDisplay("8095551234x12")).toBe("809-555-1234");
+  });
+
   it("shows bare digits for other lengths", () => {
     expect(formatPhoneDisplay("5551234")).toBe("5551234");
-    expect(formatPhoneDisplay("+1 809 555 1234")).toBe("18095551234");
+    expect(formatPhoneDisplay("+34 600 123 456")).toBe("34600123456");
   });
 
   it("falls back to the trimmed raw value when there are no digits", () => {
