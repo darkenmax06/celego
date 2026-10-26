@@ -193,6 +193,37 @@ export default function ConfiguracionClient() {
     await loadAll();
   }
 
+  async function toggleProvincia(provincia: Provincia) {
+    const response = await fetch("/api/config/provincias", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: provincia.id, active: !provincia.active }),
+    });
+    const json = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      failure(json.error ?? "No se pudo actualizar la provincia");
+      return;
+    }
+    success(provincia.active ? "Provincia desactivada" : "Provincia activada");
+    await loadAll();
+  }
+
+  async function deleteProvincia(provincia: Provincia) {
+    if (!window.confirm(`¿Eliminar la provincia "${provincia.nombre}"? Esta acción no se puede deshacer.`)) {
+      return;
+    }
+    const response = await fetch(`/api/config/provincias?id=${encodeURIComponent(provincia.id)}`, {
+      method: "DELETE",
+    });
+    const json = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      failure(json.error ?? "No se pudo eliminar la provincia");
+      return;
+    }
+    success("Provincia eliminada");
+    await loadAll();
+  }
+
   return (
     <div>
       <PageHeader
@@ -509,6 +540,24 @@ export default function ConfiguracionClient() {
                       </span>
                     </div>
                     <p className="mt-1 text-slate-500">Zona: {provincia.zona}</p>
+                    <div className="mt-2 flex gap-2">
+                      <button
+                        type="button"
+                        aria-label={`${provincia.active ? "Desactivar" : "Activar"} ${provincia.nombre}`}
+                        onClick={() => void toggleProvincia(provincia)}
+                        className="rounded-lg border border-slate-300 px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                      >
+                        {provincia.active ? "Desactivar" : "Activar"}
+                      </button>
+                      <button
+                        type="button"
+                        aria-label={`Eliminar ${provincia.nombre}`}
+                        onClick={() => void deleteProvincia(provincia)}
+                        className="rounded-lg border border-rose-200 px-2 py-1 text-xs font-semibold text-rose-700 hover:bg-rose-50"
+                      >
+                        Eliminar
+                      </button>
+                    </div>
                   </div>
                 ))}
               </div>
