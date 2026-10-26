@@ -110,6 +110,8 @@ describe("OperativeContactWizard — no contact confirmation", () => {
 
   it("sends telefonosDetalle when marking as contacted", async () => {
     const onSave = renderWizard();
+    fireEvent.click(screen.getAllByRole("checkbox")[0]);
+    fireEvent.click(screen.getByRole("button", { name: "WhatsApp", pressed: false }));
     fireEvent.click(screen.getByRole("button", { name: /Marcar Contactada/ }));
 
     await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));

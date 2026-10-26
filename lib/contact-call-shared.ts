@@ -7,6 +7,8 @@
  * API keeps a single import path.
  */
 
+import { phoneDigits } from "@/lib/phone";
+
 export const PHONE_CALL_STATES = [
   "CONTESTA",
   "NO_CONTESTA",
@@ -79,6 +81,43 @@ export function validateNoContactPhones(
   const list = (phones ?? []).filter((phone) => phone.numero?.trim());
   if (list.length === 0) return NO_CONTACT_PHONES_REQUIRED_MESSAGE;
   return findIncompleteNoContactPhones(list).length ? NO_CONTACT_PHONE_DETAIL_MESSAGE : null;
+}
+
+export const CONTACTED_CALL_PHONE_REQUIRED_MESSAGE =
+  "Debe marcar al menos un número válido que funcione para registrar la llamada como contactada";
+export const CONTACTED_CALL_CHANNEL_REQUIRED_MESSAGE =
+  "Debe seleccionar el canal de contacto para registrar la llamada como contactada";
+
+const MIN_VALID_PHONE_DIGITS = 7;
+
+/**
+ * Validates the prerequisites to register a call as contacted: at least one
+ * deduplicated phone that works (>= 7 digits) and a non-empty channel. The
+ * phone check comes first. Returns `null` when valid, or the Spanish message.
+ */
+export function validateContactedCall(input: {
+  phones: Array<{ num: string; funciona?: boolean }> | null | undefined;
+  canalContacto: string | null | undefined;
+  telefonosExplicitEmpty: boolean;
+}): string | null {
+  if (input.telefonosExplicitEmpty) return CONTACTED_CALL_PHONE_REQUIRED_MESSAGE;
+
+  // Mirror `normalizePhones` deduplication: first occurrence of a number wins.
+  const seen = new Set<string>();
+  let hasWorkingPhone = false;
+  for (const phone of input.phones ?? []) {
+    const compact = phone.num.trim().replace(/[^\d+]/g, "") || phone.num.trim();
+    if (!compact) continue;
+    const key = compact.replace(/\D/g, "") || compact.toUpperCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const digits = phoneDigits(phone.num);
+    if (phone.funciona && digits.length >= MIN_VALID_PHONE_DIGITS) hasWorkingPhone = true;
+  }
+  if (!hasWorkingPhone) return CONTACTED_CALL_PHONE_REQUIRED_MESSAGE;
+
+  if (!input.canalContacto?.trim()) return CONTACTED_CALL_CHANNEL_REQUIRED_MESSAGE;
+  return null;
 }
 
 /** Derives the stored `ContactLog.resultado` from the POST flags. Return wins over transfer. */

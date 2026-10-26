@@ -91,7 +91,10 @@ const provinceAliases = [
   ["COMENDADOR",                               "Elias Pina"],
 ] as const;
 
+const aliasToProvince = new Map<string, string>();
+
 for (const [alias, canonical] of provinceAliases) {
+  aliasToProvince.set(normalizeText(alias), canonical);
   const zone = provinceToZone.get(normalizeText(canonical));
   if (zone) {
     provinceToZone.set(normalizeText(alias), zone);
@@ -101,4 +104,9 @@ for (const [alias, canonical] of provinceAliases) {
 export function resolveZone(provinceRaw: string, fallback = "Metro") {
   const key = normalizeText(provinceRaw);
   return provinceToZone.get(key) ?? fallback;
+}
+
+/** Canonical province name for a raw value, resolving the same aliases as resolveZone. */
+export function resolveProvinceAlias(provinceRaw: string) {
+  return aliasToProvince.get(normalizeText(provinceRaw)) ?? provinceRaw;
 }

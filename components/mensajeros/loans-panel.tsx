@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { formatCurrencyDOP, toCents } from "@/lib/money";
 import { buildLoanSchedule, LoanScheduleError } from "@/lib/payroll/loan-schedule";
 
@@ -47,6 +48,7 @@ export function LoansPanel({ messengerId }: { messengerId: string }) {
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
+  const [loanToCancel, setLoanToCancel] = useState<Loan | null>(null);
 
   const load = useCallback(async () => {
     const res = await fetch(`/api/mensajeros/prestamos?messengerId=${messengerId}`, { cache: "no-store" });
@@ -201,11 +203,7 @@ export function LoansPanel({ messengerId }: { messengerId: string }) {
             </div>
             {loan.status === "ACTIVO" ? (
               <button
-                onClick={() => {
-                  if (window.confirm("Cancelar el prestamo elimina las cuotas que faltan. Las ya aplicadas se conservan. ¿Continuar?")) {
-                    void patch({ action: "CANCEL", loanId: loan.id }, "Prestamo cancelado");
-                  }
-                }}
+                onClick={() => setLoanToCancel(loan)}
                 className="rounded-lg border border-rose-200 px-3 py-1.5 text-xs font-semibold text-rose-700"
               >
                 Cancelar prestamo
@@ -256,6 +254,20 @@ export function LoansPanel({ messengerId }: { messengerId: string }) {
           </table>
         </article>
       ))}
+
+      <ConfirmDialog
+        open={loanToCancel !== null}
+        title="Cancelar préstamo"
+        message="Cancelar el préstamo elimina las cuotas que faltan. Las ya aplicadas se conservan. ¿Continuar?"
+        confirmLabel="Cancelar préstamo"
+        cancelLabel="Volver"
+        onCancel={() => setLoanToCancel(null)}
+        onConfirm={() => {
+          if (!loanToCancel) return;
+          setLoanToCancel(null);
+          void patch({ action: "CANCEL", loanId: loanToCancel.id }, "Prestamo cancelado");
+        }}
+      />
     </div>
   );
 }

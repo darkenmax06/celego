@@ -5,6 +5,7 @@ import toast from "react-hot-toast";
 import { RecountDeliveries } from "@/components/config/recount-deliveries";
 import { UserManagement } from "@/components/config/user-management";
 import { PageHeader } from "@/components/ui/page-header";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Panel } from "@/components/ui/panel";
 import { usePersistentState } from "@/lib/use-persistent-state";
 
@@ -22,6 +23,8 @@ export default function ConfiguracionClient() {
   const [exportConfig, setExportConfig] = useState<DebitConsolidadoExportConfig | null>(null);
   const [motivos, setMotivos] = useState<Motivo[]>([]);
   const [provincias, setProvincias] = useState<Provincia[]>([]);
+  const [provinciaToDelete, setProvinciaToDelete] = useState<Provincia | null>(null);
+  const [deletingProvincia, setDeletingProvincia] = useState(false);
   const [newMotivo, setNewMotivo] = usePersistentState("config:new-return-reason", "");
   const [newProvincia, setNewProvincia] = usePersistentState("config:new-province", "");
   const [newZona, setNewZona] = usePersistentState("config:new-zone", "Metro");
@@ -191,6 +194,40 @@ export default function ConfiguracionClient() {
     setNewProvincia("");
     success("Provincia agregada");
     await loadAll();
+  }
+
+  async function toggleProvincia(provincia: Provincia) {
+    const response = await fetch("/api/config/provincias", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: provincia.id, active: !provincia.active }),
+    });
+    const json = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      failure(json.error ?? "No se pudo actualizar la provincia");
+      return;
+    }
+    success(provincia.active ? "Provincia desactivada" : "Provincia activada");
+    await loadAll();
+  }
+
+  async function deleteProvincia(provincia: Provincia) {
+    setDeletingProvincia(true);
+    try {
+      const response = await fetch(`/api/config/provincias?id=${encodeURIComponent(provincia.id)}`, {
+        method: "DELETE",
+      });
+      const json = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        failure(json.error ?? "No se pudo eliminar la provincia");
+        return;
+      }
+      success("Provincia eliminada");
+      await loadAll();
+    } finally {
+      setDeletingProvincia(false);
+      setProvinciaToDelete(null);
+    }
   }
 
   return (
@@ -509,6 +546,24 @@ export default function ConfiguracionClient() {
                       </span>
                     </div>
                     <p className="mt-1 text-slate-500">Zona: {provincia.zona}</p>
+                    <div className="mt-2 flex gap-2">
+                      <button
+                        type="button"
+                        aria-label={`${provincia.active ? "Desactivar" : "Activar"} ${provincia.nombre}`}
+                        onClick={() => void toggleProvincia(provincia)}
+                        className="rounded-lg border border-slate-300 px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                      >
+                        {provincia.active ? "Desactivar" : "Activar"}
+                      </button>
+                      <button
+                        type="button"
+                        aria-label={`Eliminar ${provincia.nombre}`}
+                        onClick={() => setProvinciaToDelete(provincia)}
+                        className="rounded-lg border border-rose-200 px-2 py-1 text-xs font-semibold text-rose-700 hover:bg-rose-50"
+                      >
+                        Eliminar
+                      </button>
+                    </div>
                   </div>
                 ))}
               </div>
@@ -517,6 +572,18 @@ export default function ConfiguracionClient() {
 
         </>
       )}
+
+      <ConfirmDialog
+        open={provinciaToDelete !== null}
+        title="Eliminar provincia"
+        message={`¿Eliminar la provincia "${provinciaToDelete?.nombre ?? ""}"? Esta acción no se puede deshacer.`}
+        confirmLabel="Eliminar"
+        busy={deletingProvincia}
+        onCancel={() => setProvinciaToDelete(null)}
+        onConfirm={() => {
+          if (provinciaToDelete) void deleteProvincia(provinciaToDelete);
+        }}
+      />
     </div>
   );
 }

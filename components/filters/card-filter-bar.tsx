@@ -53,17 +53,26 @@ export function useCardFacetSources(keys: readonly CardFacetKey[]): CardFacetSou
   const { provincias: needProvincias, messengers: needMessengers, operadores: needOperadores } = needs;
   const cardGroups = useCardGroups();
   const [provincias, setProvincias] = useState<string[]>([]);
+  const [inactiveProvincias, setInactiveProvincias] = useState<string[]>([]);
   const [messengers, setMessengers] = useState<Array<{ id: string; nombre: string }>>([]);
   const [operadores, setOperadores] = useState<Array<{ id: string; name: string }>>([]);
 
   useEffect(() => {
     let alive = true;
     if (needProvincias) {
-      void fetchJson<{ provincias?: Array<{ nombre: string }> }>("/api/config/provincias").then((data) => {
-        if (alive && Array.isArray(data?.provincias)) {
-          setProvincias(data.provincias.map((item) => item.nombre).sort());
-        }
-      });
+      void fetchJson<{ provincias?: Array<{ nombre: string; active?: boolean }> }>("/api/config/provincias").then(
+        (data) => {
+          if (alive && Array.isArray(data?.provincias)) {
+            const names = (active: boolean) =>
+              data.provincias!
+                .filter((item) => (item.active !== false) === active)
+                .map((item) => item.nombre)
+                .sort();
+            setProvincias(names(true));
+            setInactiveProvincias(names(false));
+          }
+        },
+      );
     }
     if (needMessengers) {
       void fetchJson<{ messengers?: Array<{ id: string; nombre: string; activo?: boolean }> }>("/api/mensajeros").then(
@@ -90,8 +99,8 @@ export function useCardFacetSources(keys: readonly CardFacetKey[]): CardFacetSou
 
   const groups = needs.groups ? cardGroups.groups : undefined;
   return useMemo(
-    () => ({ provincias, messengers, operadores, groups }),
-    [provincias, messengers, operadores, groups],
+    () => ({ provincias, inactiveProvincias, messengers, operadores, groups }),
+    [provincias, inactiveProvincias, messengers, operadores, groups],
   );
 }
 

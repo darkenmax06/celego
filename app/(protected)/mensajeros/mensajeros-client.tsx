@@ -9,6 +9,7 @@ import { GeneralPeriods } from "@/components/mensajeros/general-periods";
 import { LoansPanel } from "@/components/mensajeros/loans-panel";
 import { PayrollPanel } from "@/components/mensajeros/payroll-panel";
 import { usePersistentState } from "@/lib/use-persistent-state";
+import { copyTextToClipboard } from "@/lib/clipboard";
 
 type Messenger = {
   id: string;
@@ -107,27 +108,6 @@ function calcTotalCents(counts: Counts, rates: Record<MessengerServiceType, numb
 
 function recordSignature(date: string, counts: Counts) {
   return `${date}|${counts.NORMAL}|${counts.REMOTA}|${counts.RECOGIDA}|${counts.MANDADO}`;
-}
-
-async function copyTextToClipboard(value: string) {
-  if (navigator.clipboard?.writeText) {
-    await navigator.clipboard.writeText(value);
-    return;
-  }
-
-  const textarea = document.createElement("textarea");
-  textarea.value = value;
-  textarea.setAttribute("readonly", "true");
-  textarea.style.position = "fixed";
-  textarea.style.opacity = "0";
-  document.body.appendChild(textarea);
-  textarea.select();
-  const copied = document.execCommand("copy");
-  document.body.removeChild(textarea);
-
-  if (!copied) {
-    throw new Error("Clipboard no disponible");
-  }
 }
 
 function initials(name: string) {
@@ -796,11 +776,10 @@ function MessengerModal({
   }
 
   async function copyMessengerId() {
-    try {
-      await copyTextToClipboard(messenger.id);
+    if (await copyTextToClipboard(messenger.id)) {
       setCopiedMessengerId(true);
       setFeedback("Messenger ID copiado. Pegalo en Expo Go para iniciar sesion.");
-    } catch {
+    } else {
       setFeedback("No se pudo copiar automaticamente. Selecciona el ID y copialo manualmente.");
     }
   }
