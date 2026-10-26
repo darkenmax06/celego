@@ -13,7 +13,9 @@ import {
   DEFAULT_WHATSAPP_TEXT,
   renderContactTemplate,
 } from "@/lib/contact-template";
-import type { PhoneCallDetail } from "@/lib/contact-call-shared";
+import { validateContactedCall, type PhoneCallDetail } from "@/lib/contact-call-shared";
+import { copyTextToClipboard } from "@/lib/clipboard";
+import { buildWhatsAppUrl, formatPhoneDisplay, toWhatsAppNumber } from "@/lib/phone";
 
 export type PhoneState = {
   num: string;
@@ -114,14 +116,6 @@ type Props = {
   onGroupsChanged?: () => void;
 };
 
-function formatPhoneDisplay(num: string) {
-  const digits = num.replace(/\D/g, "");
-  if (digits.length === 10) {
-    return `(${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`;
-  }
-  return num;
-}
-
 /** Phones worth sending (the API requires at least 3 characters). */
 function usablePhones(phones: PhoneState[]) {
   return phones.filter((phone) => phone.num && phone.num.trim().length >= 3);
@@ -177,7 +171,7 @@ export function OperativeContactWizard({
   const [scriptTemplate, setScriptTemplate] = useState(DEFAULT_SCRIPT_TEXT);
   const [whatsappTemplate, setWhatsappTemplate] = useState(DEFAULT_WHATSAPP_TEXT);
   const [scriptTab, setScriptTab] = useState<"SPEECH" | "WHATSAPP">("SPEECH");
-  const [copied, setCopied] = useState(false);
+  const [copyStatus, setCopyStatus] = useState<"idle" | "ok" | "error">("idle");
 
   // Modals inside wizard
   const [showTransferModal, setShowTransferModal] = useState(false);
@@ -267,9 +261,9 @@ export function OperativeContactWizard({
     return telefonos.find((t) => t.principal)?.num || telefonos[0]?.num || null;
   }, [telefonos]);
 
-  const resolvedText = useMemo(() => {
-    const activeTemplate = scriptTab === "WHATSAPP" ? whatsappTemplate : scriptTemplate;
-    const context = buildContactTemplateContext({
+  const templateContext = useMemo(
+    () =>
+      buildContactTemplateContext({
       nombre: card.nombre,
       cedula: card.cedula,
       tc: card.tc,
@@ -288,20 +282,33 @@ export function OperativeContactWizard({
       slaDueDate: card.slaDueDate,
       productType: card.productType,
       grupos: card.grupos,
-    });
-    return renderContactTemplate(activeTemplate, context);
-  }, [
-    scriptTab,
-    scriptTemplate,
-    whatsappTemplate,
-    card,
-    nuevaDireccion,
-    principalPhone,
-    telefonos,
-    operatorName,
-    canalContacto,
-    fechaPreferencia,
-  ]);
+      }),
+    [card, nuevaDireccion, principalPhone, telefonos, operatorName, canalContacto, fechaPreferencia],
+  );
+
+  const resolvedText = useMemo(
+    () => renderContactTemplate(scriptTab === "WHATSAPP" ? whatsappTemplate : scriptTemplate, templateContext),
+    [scriptTab, scriptTemplate, whatsappTemplate, templateContext],
+  );
+
+  // Always the WhatsApp template, whichever tab is active.
+  const whatsappText = useMemo(
+    () => renderContactTemplate(whatsappTemplate, templateContext),
+    [whatsappTemplate, templateContext],
+  );
+
+  const whatsappTargets = useMemo(
+    () =>
+      telefonos
+        .filter((phone) => phone.num.trim())
+        .map((phone) => ({ num: phone.num, target: toWhatsAppNumber(phone.num) })),
+    [telefonos],
+  );
+
+  const contactedBlockReason = useMemo(
+    () => validateContactedCall({ phones: telefonos, canalContacto, telefonosExplicitEmpty: false }),
+    [telefonos, canalContacto],
+  );
 
   const phoneEstadoChange = useCallback((phoneIdx: number, estado: string) => {
     setTelefonos((prev) => prev.map((t, idx) => (idx === phoneIdx ? { ...t, estado } : t)));
@@ -326,13 +333,9 @@ export function OperativeContactWizard({
   });
 
   const handleCopyText = async () => {
-    try {
-      await navigator.clipboard.writeText(resolvedText);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch {
-      setFeedback("No se pudo copiar automáticamente");
-    }
+    const ok = await copyTextToClipboard(resolvedText);
+    setCopyStatus(ok ? "ok" : "error");
+    setTimeout(() => setCopyStatus("idle"), 2500);
   };
 
   // Phone list handlers
@@ -456,7 +459,7 @@ export function OperativeContactWizard({
       onClick={onClose}
     >
       <div
-        className="relative flex h-[95vh] w-full max-w-7xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl border border-slate-200"
+        className="relative flex h-[95vh] w-full max-w-[110rem] flex-col overflow-hidden rounded-2xl bg-white shadow-2xl border border-slate-200"
         onClick={(e) => e.stopPropagation()}
       >
         {/* TOP BAR / HEADER */}
@@ -534,7 +537,7 @@ export function OperativeContactWizard({
         </div>
 
         {/* 3 COLUMNS CONTENT BODY - CENTER COLUMN EXPANDED FOR COMFORT */}
-        <div className="grid flex-1 grid-cols-1 lg:grid-cols-[1fr_1.35fr_1fr] gap-0 overflow-y-auto divide-y lg:divide-y-0 lg:divide-x divide-slate-200 bg-slate-100/40 pb-20">
+        <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[1fr_1.35fr_1fr] gap-0 overflow-y-auto divide-y lg:divide-y-0 lg:divide-x divide-slate-200 bg-slate-100/40">
           {/* ================= COLUMN 1: RELEVANCIA CLIENTE & LOGISTICA ================= */}
           <div className="flex flex-col gap-4 p-5 overflow-y-auto bg-white">
             <div className="flex items-center gap-2 pb-2 border-b border-slate-100">
@@ -602,6 +605,20 @@ export function OperativeContactWizard({
                   {card.status}
                 </span>
               </p>
+              <div data-testid="client-phones" className="rounded-lg bg-white/70 p-2">
+                <span className="text-slate-500 text-[11px]">Teléfonos del cliente:</span>
+                <ul className="mt-1.5 space-y-1">
+                  {telefonos
+                    .filter((phone) => phone.num.trim())
+                    .map((phone, idx) => (
+                      <li key={idx} className="flex items-center gap-2 font-mono text-base font-bold text-slate-900">
+                        <Phone className="h-4 w-4 text-indigo-600" />
+                        <span>{formatPhoneDisplay(phone.num)}</span>
+                        {phone.principal ? <span className="text-amber-500">★</span> : null}
+                      </li>
+                    ))}
+                </ul>
+              </div>
               <div className="grid grid-cols-2 gap-2 pt-1">
                 <div className="col-span-2">
                   <span className="text-slate-500 text-[11px]">Tipo de producto:</span>
@@ -799,7 +816,8 @@ export function OperativeContactWizard({
               <div className="grid grid-cols-2 gap-3">
                 <button
                   type="button"
-                  onClick={() => setCanalContacto("WHATSAPP")}
+                  aria-pressed={canalContacto === "WHATSAPP"}
+                  onClick={() => setCanalContacto((prev) => (prev === "WHATSAPP" ? null : "WHATSAPP"))}
                   className={`flex items-center justify-center gap-2 rounded-xl border py-2.5 px-4 text-xs font-bold transition-all ${
                     canalContacto === "WHATSAPP"
                       ? "border-emerald-600 bg-emerald-600 text-white shadow-sm ring-2 ring-emerald-600/20"
@@ -811,7 +829,10 @@ export function OperativeContactWizard({
                 </button>
                 <button
                   type="button"
-                  onClick={() => setCanalContacto("LLAMADA_DIRECTA")}
+                  aria-pressed={canalContacto === "LLAMADA_DIRECTA"}
+                  onClick={() =>
+                    setCanalContacto((prev) => (prev === "LLAMADA_DIRECTA" ? null : "LLAMADA_DIRECTA"))
+                  }
                   className={`flex items-center justify-center gap-2 rounded-xl border py-2.5 px-4 text-xs font-bold transition-all ${
                     canalContacto === "LLAMADA_DIRECTA"
                       ? "border-blue-600 bg-blue-600 text-white shadow-sm ring-2 ring-blue-600/20"
@@ -914,10 +935,15 @@ export function OperativeContactWizard({
                   onClick={handleCopyText}
                   className="flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-bold text-slate-700 hover:bg-slate-100 active:scale-95 transition-all shadow-2xs"
                 >
-                  {copied ? (
+                  {copyStatus === "ok" ? (
                     <>
                       <Check className="h-3.5 w-3.5 text-emerald-600" />
-                      <span className="text-emerald-700">Copiado!</span>
+                      <span className="text-emerald-700">¡Copiado!</span>
+                    </>
+                  ) : copyStatus === "error" ? (
+                    <>
+                      <X className="h-3.5 w-3.5 text-rose-600" />
+                      <span className="text-rose-700">No se pudo copiar el mensaje</span>
                     </>
                   ) : (
                     <>
@@ -932,6 +958,45 @@ export function OperativeContactWizard({
                 {resolvedText}
               </div>
 
+              {scriptTab === "WHATSAPP" ? (
+                <div className="mt-3 space-y-1.5 border-t border-slate-200 pt-2" data-testid="whatsapp-contacts">
+                  <p className="text-[11px] font-bold uppercase tracking-wide text-slate-600">
+                    Enviar por WhatsApp
+                  </p>
+                  {whatsappTargets.length === 0 ? (
+                    <p className="text-[11px] text-slate-500">Sin teléfonos para contactar</p>
+                  ) : null}
+                  {whatsappTargets.map(({ num, target }, idx) => (
+                    <div key={idx} className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                      <span className="font-mono font-semibold text-slate-800">{formatPhoneDisplay(num)}</span>
+                      {target.ok ? (
+                        <a
+                          href={buildWhatsAppUrl(target.number, whatsappText)}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="flex items-center gap-1 rounded-lg bg-emerald-600 px-3 py-1 text-xs font-bold text-white hover:bg-emerald-700"
+                        >
+                          <MessageSquare className="h-3.5 w-3.5" />
+                          Contactar
+                        </a>
+                      ) : (
+                        <span className="flex items-center gap-2">
+                          <span className="text-[11px] text-rose-700">{target.reason}</span>
+                          <button
+                            type="button"
+                            disabled
+                            title={target.reason}
+                            className="rounded-lg bg-slate-200 px-3 py-1 text-xs font-bold text-slate-500 opacity-60"
+                          >
+                            Contactar
+                          </button>
+                        </span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+
               <div className="mt-3 pt-2 border-t border-slate-200 text-[11px] text-slate-500 flex items-center justify-between">
                 <span>💡 Puedes modificar esta plantilla en Configuración.</span>
                 <span className="font-mono text-slate-400">TC {card.tc}</span>
@@ -941,7 +1006,7 @@ export function OperativeContactWizard({
         </div>
 
         {/* ================= FIXED BOTTOM ACTION BAR ================= */}
-        <div className="absolute bottom-0 inset-x-0 z-20 flex flex-wrap items-center justify-between border-t border-slate-200 bg-white/95 backdrop-blur-md px-6 py-3 shadow-lg gap-3">
+        <div className="relative z-20 flex shrink-0 flex-wrap items-center justify-between border-t border-slate-200 bg-white/95 backdrop-blur-md px-6 py-3 shadow-lg gap-3">
           <div className="flex items-center gap-3">
             {feedback ? (
               <span
@@ -1027,10 +1092,16 @@ export function OperativeContactWizard({
             </button>
 
             {/* Marcar Contactada */}
+            {contactedBlockReason ? (
+              <span className="max-w-xs text-[11px] font-semibold text-amber-700" role="status">
+                {contactedBlockReason}
+              </span>
+            ) : null}
             <button
               type="button"
               onClick={handleSaveContacted}
-              disabled={saving}
+              disabled={saving || contactedBlockReason !== null}
+              title={contactedBlockReason ?? undefined}
               className="rounded-xl bg-emerald-700 px-5 py-2 text-xs font-bold text-white hover:bg-emerald-800 shadow-sm transition-all disabled:opacity-50 flex items-center gap-1.5"
             >
               <Check className="h-4 w-4" />

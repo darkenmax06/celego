@@ -69,6 +69,19 @@ export type SavedFilterItem = {
   isDefault: boolean;
 };
 
+/** Removable chip contributed by a menu section (domain-neutral extension point). */
+export type FilterMenuChip = { key: string; label: string; onRemove: () => void };
+
+/** Extra section rendered in the "Filtros" column; the consumer owns its content and keyboard handling. */
+export type FilterMenuSection = {
+  id: string;
+  title: string;
+  render: () => ReactNode;
+  chips?: FilterMenuChip[];
+  /** `"start"` renders the section above the facet list; `"end"` (default) after `filterMenuExtra`. */
+  placement?: "start" | "end";
+};
+
 export type FilterBarProps = {
   resource: string;
   sectionKey: string;
@@ -94,6 +107,10 @@ export type FilterBarProps = {
   chipRemovalKeys?: (key: string) => string[] | undefined;
   /** Extra controls rendered inside the "Filtros" column of the dropdown menu. */
   filterMenuExtra?: ReactNode;
+  /** Extension sections of the "Filtros" column (see `placement`); their chips precede the filter chips. */
+  menuSections?: FilterMenuSection[];
+  /** Called exactly once by "clear all" so consumers can reset the state behind `menuSections`. */
+  onResetExtensions?: () => void;
 };
 
 export function FilterBar({
@@ -112,6 +129,8 @@ export function FilterBar({
   chipLabel,
   chipRemovalKeys,
   filterMenuExtra,
+  menuSections = [],
+  onResetExtensions,
 }: FilterBarProps) {
   const [searchVal, setSearchVal] = useState(filters.q || "");
   const [isMenuOpen, setIsMenuOpen] = useState(false);
@@ -253,6 +272,7 @@ export function FilterBar({
   const handleClearAll = () => {
     setSearchVal("");
     if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);
+    onResetExtensions?.();
     if (onReset) {
       onReset();
     } else {
@@ -386,6 +406,17 @@ export function FilterBar({
       v && v !== "ALL" && k !== "page" && k !== "pageSize" && k !== "q" && chipLabel?.(k, v) !== null,
   );
 
+  const sectionChips = menuSections.flatMap((section) => section.chips ?? []);
+  const startSections = menuSections.filter((section) => section.placement === "start");
+  const endSections = menuSections.filter((section) => section.placement !== "start");
+  const renderSection = (section: FilterMenuSection) => (
+    <div key={section.id} className="pt-2" data-filter-menu-section={section.id}>
+      <div className="py-1 text-[11px] font-semibold text-slate-500">{section.title}</div>
+      {section.render()}
+    </div>
+  );
+  const hasChips = activeChips.length > 0 || sectionChips.length > 0;
+
   return (
     <div className={cn("relative flex items-center justify-between gap-3", className)}>
       {/* Odoo Unified Search & Filter Container */}
@@ -395,6 +426,25 @@ export function FilterBar({
       >
         <div className="flex flex-1 flex-wrap items-center gap-1.5 px-3 py-1.5">
           <Search className="h-4 w-4 shrink-0 text-slate-400" />
+
+          {/* Extension section chips come first */}
+          {sectionChips.map((chip) => (
+            <span
+              key={`section:${chip.key}`}
+              className="inline-flex items-center gap-1 rounded-md bg-indigo-50 px-2 py-0.5 text-xs font-semibold text-indigo-800 shadow-xs ring-1 ring-indigo-200 animate-in fade-in zoom-in-95"
+            >
+              <Filter className="h-3 w-3" />
+              <span>{chip.label}</span>
+              <button
+                type="button"
+                onClick={chip.onRemove}
+                className="rounded-sm p-0.5 hover:bg-black/10"
+                title={`Quitar ${chip.label}`}
+              >
+                <X className="h-3 w-3" />
+              </button>
+            </span>
+          ))}
 
           {/* Active Filter Chips embedded directly in search bar (Odoo Style) */}
           {activeChips.map(([key, val]) => {
@@ -462,14 +512,14 @@ export function FilterBar({
             type="text"
             value={searchVal}
             onChange={(e) => handleSearchChange(e.target.value)}
-            placeholder={activeChips.length > 0 ? "Agregar criterio..." : searchPlaceholder}
+            placeholder={hasChips ? "Agregar criterio..." : searchPlaceholder}
             className="min-w-[140px] flex-1 bg-transparent py-1 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none"
           />
         </div>
 
         {/* Action icons on right of search input */}
         <div className="flex items-center border-l border-slate-200">
-          {searchVal || activeChips.length > 0 ? (
+          {searchVal || hasChips ? (
             <button
               type="button"
               onClick={handleClearAll}
@@ -497,17 +547,22 @@ export function FilterBar({
           </button>
         </div>
 
-        {/* Odoo 3-Column Floating Popover Menu */}
+        {/* Odoo 3-Column Floating Popover Menu (stacked and viewport-capped below md) */}
         {isMenuOpen ? (
-          <div className="absolute left-0 top-full z-50 mt-2 flex w-full min-w-[700px] max-w-4xl rounded-2xl border border-slate-200 bg-white p-4 shadow-2xl ring-1 ring-black/5 animate-in fade-in zoom-in-95 duration-100">
+          <div
+            data-filter-menu-popover
+            className="absolute left-0 top-full z-50 mt-2 flex max-h-[75vh] w-full max-w-[calc(100vw-2rem)] flex-col overflow-y-auto rounded-2xl border border-slate-200 bg-white p-4 shadow-2xl ring-1 ring-black/5 animate-in fade-in zoom-in-95 duration-100 md:max-h-none md:min-w-[700px] md:max-w-4xl md:flex-row md:overflow-visible"
+          >
             {/* Column 1: Filtros */}
-            <div className="flex-1 border-r border-slate-100 pr-4">
+            <div className="border-b border-slate-100 pb-4 md:flex-1 md:border-b-0 md:border-r md:pb-0 md:pr-4">
               <div className="mb-3 flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-slate-800">
                 <Filter className="h-3.5 w-3.5 text-indigo-600" />
                 Filtros
               </div>
 
               <div className="space-y-1 text-xs">
+                {startSections.map(renderSection)}
+
                 {facets.map((facet) => {
                   const currentVal = filters[facet.field];
                   const options =
@@ -585,6 +640,8 @@ export function FilterBar({
 
                 {filterMenuExtra ? <div className="pt-2">{filterMenuExtra}</div> : null}
 
+                {endSections.map(renderSection)}
+
                 {/* Agregar filtro personalizado */}
                 <div className="pt-2">
                   <div className="flex items-center gap-1.5 py-1 text-[11px] font-semibold text-slate-500">
@@ -622,7 +679,7 @@ export function FilterBar({
             </div>
 
             {/* Column 2: Agrupar por */}
-            <div className="flex-1 border-r border-slate-100 px-4">
+            <div className="border-b border-slate-100 py-4 md:flex-1 md:border-b-0 md:border-r md:px-4 md:py-0">
               <div className="mb-3 flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-slate-800">
                 <Layers className="h-3.5 w-3.5 text-emerald-600" />
                 Agrupar por
@@ -782,7 +839,7 @@ export function FilterBar({
             </div>
 
             {/* Column 3: Favoritos */}
-            <div className="flex-1 pl-4">
+            <div className="pt-4 md:flex-1 md:pl-4 md:pt-0">
               <div className="mb-3 flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-slate-800">
                 <Star className="h-3.5 w-3.5 text-amber-500 fill-amber-500" />
                 Favoritos

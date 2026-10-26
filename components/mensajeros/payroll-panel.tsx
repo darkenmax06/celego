@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { formatCurrencyDOP, toCents } from "@/lib/money";
 
 type Period = {
@@ -48,6 +49,7 @@ export function PayrollPanel({ messengerId, onChanged }: { messengerId: string; 
   const [label, setLabel] = useState("");
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
+  const [periodToUnlock, setPeriodToUnlock] = useState<Period | null>(null);
 
   const loadPeriods = useCallback(async () => {
     const res = await fetch(`/api/mensajeros/periodos?messengerId=${messengerId}`, { cache: "no-store" });
@@ -100,7 +102,6 @@ export function PayrollPanel({ messengerId, onChanged }: { messengerId: string; 
 
   async function togglePeriod(period: Period) {
     const unlocking = period.status === "BLOQUEADO";
-    if (unlocking && !window.confirm("Desbloquear permite editar los dias y las cuotas de este periodo. Debe volver a bloquearlo al terminar. ¿Continuar?")) return;
     setBusy(true);
     const res = await fetch("/api/mensajeros/periodos", {
       method: "PATCH",
@@ -229,7 +230,11 @@ export function PayrollPanel({ messengerId, onChanged }: { messengerId: string; 
                   {selected === period.id ? "Ocultar pago" : "Ver pago"}
                 </button>
                 <button
-                  onClick={() => void togglePeriod(period)}
+                  onClick={() => {
+                    // Only unlocking reopens a closed payment, so only it asks first.
+                    if (period.status === "BLOQUEADO") setPeriodToUnlock(period);
+                    else void togglePeriod(period);
+                  }}
                   disabled={busy}
                   className={`rounded-lg px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50 ${period.status === "BLOQUEADO" ? "bg-amber-600" : "bg-[#0f2544]"}`}
                 >
@@ -334,6 +339,21 @@ export function PayrollPanel({ messengerId, onChanged }: { messengerId: string; 
           </div>
         ))}
       </div>
+
+      <ConfirmDialog
+        open={periodToUnlock !== null}
+        title="Desbloquear periodo"
+        message="Desbloquear permite editar los días y las cuotas de este periodo. Debe volver a bloquearlo al terminar. ¿Continuar?"
+        confirmLabel="Desbloquear"
+        tone="default"
+        busy={busy}
+        onCancel={() => setPeriodToUnlock(null)}
+        onConfirm={() => {
+          if (!periodToUnlock) return;
+          setPeriodToUnlock(null);
+          void togglePeriod(periodToUnlock);
+        }}
+      />
     </div>
   );
 }

@@ -2,8 +2,6 @@ import { CardProductType, CardStatus, DispatchOrigin, Prisma } from "@prisma/cli
 import { ZONAS } from "@/lib/constants";
 import { prisma } from "@/lib/prisma";
 import { addBusinessDaysStrict } from "@/lib/sla";
-import { toCardStatus } from "@/lib/card-status";
-import { type ParsedCardRow } from "@/lib/importers/cards";
 import { type NormalizedCardImportRow } from "@/lib/importers/card-normalize";
 import { type ParsedDebitConsolidadoRow } from "@/lib/importers/debit-consolidado";
 import { type ParsedDebitDespachoRow } from "@/lib/importers/debit-despacho";
@@ -13,17 +11,10 @@ import { CUSTOMER_ID_RULE, normalizeCustomerId } from "@/lib/customer-id";
 import { buildSourceRecordKey, canCreateDispatch, DispatchConflictError, nextTcGuardState } from "@/lib/dispatch-origin";
 import { resolveZone } from "@/lib/zone-map";
 import { mergePhoneLists, planCustomerMerge, type CustomerData } from "@/lib/customer-merge";
-import { normalizeText } from "@/lib/utils";
+import { countInactiveProvinceRows, loadInactiveProvinceNames } from "@/lib/inactive-provinces";
 import { recalculateAdditionalCardsForGroups } from "@/lib/card-additional";
 import { applyMessengerReassignment } from "@/lib/route-reassignment";
-import {
-  buildDailyImportCardLookup,
-  resolveOperationalCardLookup,
-} from "@/lib/operational-card-lookup";
-import {
-  applyCardTransition,
-  initialDigitalCycle,
-} from "@/lib/card-transition";
+import { applyCardTransition } from "@/lib/card-transition";
 
 async function getSlaDaysForRow(cedula: string, reference: string) {
   const config = await prisma.sLAConfig.upsert({
@@ -56,138 +47,6 @@ function normalizeZoneCandidate(input: string) {
   if (!value) return null;
   const matched = ZONAS.find((zone) => zone.toUpperCase() === value.toUpperCase());
   return matched ?? null;
-}
-
-export async function upsertCardsFromImport(rows: ParsedCardRow[], byUserId?: string) {
-  const result = {
-    created: 0,
-    updated: 0,
-  };
-
-  const provinceConfigs = await prisma.provinceConfig.findMany({
-    where: { active: true },
-    select: { nombre: true, zona: true },
-  });
-  const provinceToZone = new Map<string, string>();
-  for (const config of provinceConfigs) {
-    provinceToZone.set(normalizeText(config.nombre), config.zona);
-  }
-
-  for (const item of rows) {
-    const provincia = item.provincia || "Santo Domingo";
-    const zoneFromFile = normalizeZoneCandidate(item.zona);
-    const zoneFromProvince =
-      provinceToZone.get(normalizeText(provincia)) ??
-      resolveZone(provincia, zoneFromFile ?? "Metro");
-    const zona = zoneFromProvince || zoneFromFile || "Metro";
-
-    const { customer } = await upsertCustomerPreservingData(prisma, {
-      cedula: item.cedula,
-      nombre: item.nombre,
-      telefonosRaw: item.telefonosRaw,
-      direccionRaw: item.direccionRaw,
-      provincia: provincia,
-      zona: zona,
-    });
-
-    const status = toCardStatus(item.status);
-    const sla = await getSlaDaysForRow(item.cedula, item.externalReference);
-    const baseDate = item.fechaDespacho ?? new Date();
-    const slaDueDate = addBusinessDaysStrict(baseDate, sla.totalDays);
-
-    const existingCandidates = await prisma.card.findMany({
-      where: buildDailyImportCardLookup({
-        tc: item.tc,
-        productType: "CREDITO",
-        customerId: customer.id,
-        dispatchDate: item.fechaDespacho,
-      }),
-    });
-    const resolution = resolveOperationalCardLookup(
-      { kind: "TC", value: item.tc },
-      existingCandidates,
-    );
-    const existing = resolution.kind === "RESUELTA" ? resolution.card : null;
-
-    if (existing) {
-      await prisma.$transaction(async (tx) => {
-        return applyCardTransition({
-          tx,
-          card: existing,
-          nextStatus: status,
-          byUserId,
-          // Re-importing the same daily file re-touches every row regardless
-          // of whether its status actually moved; only log a real transition,
-          // matching persistDebitConsolidadoImport's guard below.
-          note: existing.status !== status ? "Actualizacion por importacion" : undefined,
-          data: {
-            zona,
-            provincia,
-            isRemote: item.isRemote,
-            deliveryType: item.deliveryType,
-            emissionType: item.emissionType,
-            supplier: item.supplier,
-            contractType: item.contractType,
-            externalReference: item.externalReference || null,
-            urgent: existing.urgent,
-            slaDueDate,
-            slaExtensionDays: Math.max(0, sla.totalDays - sla.businessDays),
-            metadata: {
-              tipoEntrega: item.tipoEntrega,
-            } as Prisma.InputJsonValue,
-          },
-        });
-      });
-
-      result.updated += 1;
-      continue;
-    }
-
-    const created = await prisma.card.create({
-      data: {
-        tc: item.tc,
-        customerId: customer.id,
-        zona,
-        provincia,
-        dispatchDate: item.fechaDespacho,
-        deliveryType: item.deliveryType,
-        emissionType: item.emissionType,
-        supplier: item.supplier,
-        contractType: item.contractType,
-        externalReference: item.externalReference || null,
-        status,
-        isRemote: item.isRemote,
-        urgent: false,
-        slaDueDate,
-        slaExtensionDays: Math.max(0, sla.totalDays - sla.businessDays),
-        metadata: {
-          tipoEntrega: item.tipoEntrega,
-        } as Prisma.InputJsonValue,
-        ...initialDigitalCycle(status),
-      },
-    });
-
-    await prisma.cardStatusLog.create({
-      data: {
-        cardId: created.id,
-        fromStatus: null,
-        toStatus: status,
-        note: "Creada por importacion",
-        byUserId,
-      },
-    });
-
-    result.created += 1;
-  }
-
-  await recalculateAdditionalCardsForGroups(
-    rows.map((row) => ({
-      customerCedula: row.cedula,
-      dispatchDate: row.fechaDespacho,
-    })),
-  );
-
-  return result;
 }
 
 type BatchCardUpdateInput = {
@@ -438,6 +297,9 @@ export async function persistNormalizedCardImport(input: {
     const updated = 0;
     const skippedRows: ImportRowIssue[] = [];
     const rejectedRows: ImportRowIssue[] = [...input.rejectedRows];
+    const inactiveProvinces = await loadInactiveProvinceNames(tx);
+    // Inactive provinces are still imported; the stored value of each created card feeds the warning.
+    const createdProvinces: string[] = [];
 
     // Re-processing a batch whose cards were removed replaces its previous row outcomes.
     await tx.cardImportRow.deleteMany({ where: { batchId: input.batchId } });
@@ -531,6 +393,7 @@ export async function persistNormalizedCardImport(input: {
           reason: preserved.length ? `Datos del cliente conservados sin sobrescribir: ${preserved.join(", ")}` : null,
         },
       });
+      createdProvinces.push(card.provincia);
       created += 1;
     }
 
@@ -538,7 +401,8 @@ export async function persistNormalizedCardImport(input: {
       where: { id: input.batchId },
       data: { status: "COMPLETED", rowCount: input.rows.length + input.rejectedRows.length, createdCount: created, updatedCount: updated, skippedCount: skippedRows.length, rejectedCount: rejectedRows.length, completedAt: new Date() },
     });
-    return { created, updated, skipped: skippedRows.length, rejected: rejectedRows.length, rejectedRows, skippedRows };
+    const inactive = countInactiveProvinceRows(createdProvinces, inactiveProvinces);
+    return { created, updated, skipped: skippedRows.length, rejected: rejectedRows.length, rejectedRows, skippedRows, inactiveProvinceRows: inactive.count, inactiveProvinceNames: inactive.names };
   }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
 }
 
@@ -758,7 +622,8 @@ export async function persistDebitConsolidadoImport(input: {
     },
   }).catch(() => undefined);
 
-  return { created, updated, count: input.rows.length };
+  const inactive = countInactiveProvinceRows(input.rows.map((row) => row.provincia), await loadInactiveProvinceNames(prisma));
+  return { created, updated, count: input.rows.length, inactiveProvinceRows: inactive.count, inactiveProvinceNames: inactive.names };
 }
 
 /** Persists batch import from Débito Despacho (new cards). */
@@ -827,7 +692,8 @@ export async function persistDebitDespachoImport(input: {
     },
   }).catch(() => undefined);
 
-  return { created, updated: 0, count: input.rows.length, cards: createdCards };
+  const inactive = countInactiveProvinceRows(input.rows.map((row) => row.provincia), await loadInactiveProvinceNames(prisma));
+  return { created, updated: 0, count: input.rows.length, cards: createdCards, inactiveProvinceRows: inactive.count, inactiveProvinceNames: inactive.names };
 }
 
 /** Updates card status and metadata from Pinit deliveries export. */

@@ -22,13 +22,16 @@ export async function ensureBaseCatalogs() {
   // observes without ever rejecting a write that succeeds today.
   await ensureCardTransitionPolicy();
 
-  for (const p of PROVINCIAS_INICIALES) {
-    await prisma.provinceConfig.upsert({
-      where: { nombre: p.nombre },
-      update: { zona: p.zona },
-      create: { nombre: p.nombre, zona: p.zona },
-    });
-  }
+  // Seed provinces only into an empty table so provinces an admin deleted are
+  // never resurrected on restart. Deleting the last province reseeds the list.
+  await prisma.$transaction(async (tx) => {
+    if ((await tx.provinceConfig.count()) === 0) {
+      await tx.provinceConfig.createMany({
+        data: PROVINCIAS_INICIALES.map((p) => ({ nombre: p.nombre, zona: p.zona })),
+        skipDuplicates: true,
+      });
+    }
+  });
 
   for (const reason of RETURN_REASONS_DEFAULT) {
     await prisma.returnReason.upsert({

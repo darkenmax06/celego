@@ -35,6 +35,8 @@ const NAV_ITEMS: Array<{
   icon: React.ComponentType<{ className?: string }>;
   /** Optional heading rendered before the first item of a section. */
   section?: string;
+  /** Kept in the list (easy to revert) but never rendered. */
+  hidden?: true;
 }> = [
   { module: "dashboard", label: "Dashboard", href: "/dashboard", icon: ChartArea },
   { module: "tarjetas", label: "Tarjetas", href: "/tarjetas", icon: CreditCard },
@@ -44,8 +46,8 @@ const NAV_ITEMS: Array<{
   { module: "rastreo_masivo", label: "Rastreo masivo", href: "/rastreo-masivo", icon: Search },
   { module: "sla_vencidas", label: "Vencimientos", href: "/sla-vencidas", icon: TimerOff },
   { module: "rutas", label: "Rutas", href: "/rutas", icon: Route },
-  { module: "flota", label: "Flota", href: "/flota", icon: Smartphone },
-  { module: "piloto_movil", label: "Piloto movil", href: "/piloto-movil", icon: ShieldCheck },
+  { module: "flota", label: "Flota", href: "/flota", icon: Smartphone, hidden: true },
+  { module: "piloto_movil", label: "Piloto movil", href: "/piloto-movil", icon: ShieldCheck, hidden: true },
   { module: "operativo", label: "Operativo", href: "/operativo", icon: Phone, section: "Llamadas" },
   // Calls overhaul: "Llamadas" group (ADMIN/OPERADOR via the `operativo` ACL).
   // Both routes are delivered by calls-overhaul slice 2.
@@ -69,7 +71,7 @@ export function Sidebar({
   roleLabel: string;
 }) {
   const pathname = usePathname();
-  const visibleItems = NAV_ITEMS.filter((item) => allowedModules.includes(item.module));
+  const visibleItems = NAV_ITEMS.filter((item) => !item.hidden && allowedModules.includes(item.module));
 
   return (
     <aside className="fixed inset-y-0 left-0 z-20 flex w-[230px] flex-col border-r border-slate-800/40 bg-gradient-to-b from-[#0f2544] to-[#0b1d36] px-4 py-6 text-slate-100">

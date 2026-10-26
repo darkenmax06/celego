@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Panel } from "@/components/ui/panel";
 import { formatDay } from "@/components/mensajeros/payroll-panel";
 
@@ -21,6 +22,7 @@ export function GeneralPeriods() {
   const [to, setTo] = useState("");
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
+  const [pending, setPending] = useState<{ action: "lock" | "remove"; period: Period } | null>(null);
 
   const load = useCallback(async () => {
     const res = await fetch("/api/mensajeros/periodos", { cache: "no-store" });
@@ -51,7 +53,6 @@ export function GeneralPeriods() {
   }
 
   async function lockAll(period: Period) {
-    if (!window.confirm(`Bloquear "${period.label}" cierra el pago de todos los mensajeros activos. ¿Continuar?`)) return;
     setBusy(true);
     const res = await fetch("/api/mensajeros/periodos", {
       method: "PATCH",
@@ -65,7 +66,6 @@ export function GeneralPeriods() {
   }
 
   async function remove(period: Period) {
-    if (!window.confirm(`¿Eliminar el periodo "${period.label}"?`)) return;
     const res = await fetch(`/api/mensajeros/periodos?id=${period.id}`, { method: "DELETE" });
     const json = await res.json();
     setMessage(res.ok ? "Periodo eliminado" : (json.error ?? "No se pudo eliminar"));
@@ -108,10 +108,10 @@ export function GeneralPeriods() {
                 </span>
               </span>
               <span className="flex gap-2">
-                <button onClick={() => void lockAll(period)} disabled={busy} className="rounded-lg bg-[#0f2544] px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50">
+                <button onClick={() => setPending({ action: "lock", period })} disabled={busy} className="rounded-lg bg-[#0f2544] px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50">
                   Bloquear a todos
                 </button>
-                <button onClick={() => void remove(period)} className="rounded-lg border border-rose-200 px-3 py-1.5 text-xs font-semibold text-rose-700">
+                <button onClick={() => setPending({ action: "remove", period })} className="rounded-lg border border-rose-200 px-3 py-1.5 text-xs font-semibold text-rose-700">
                   Eliminar
                 </button>
               </span>
@@ -119,6 +119,25 @@ export function GeneralPeriods() {
           ))}
         </ul>
       ) : null}
+
+      <ConfirmDialog
+        open={pending !== null}
+        title={pending?.action === "lock" ? "Bloquear periodo" : "Eliminar periodo"}
+        message={
+          pending?.action === "lock"
+            ? `Bloquear "${pending.period.label}" cierra el pago de todos los mensajeros activos. ¿Continuar?`
+            : `¿Eliminar el periodo "${pending?.period.label ?? ""}"?`
+        }
+        confirmLabel={pending?.action === "lock" ? "Bloquear" : "Eliminar"}
+        tone={pending?.action === "lock" ? "default" : "danger"}
+        busy={busy}
+        onCancel={() => setPending(null)}
+        onConfirm={() => {
+          if (!pending) return;
+          setPending(null);
+          void (pending.action === "lock" ? lockAll(pending.period) : remove(pending.period));
+        }}
+      />
     </Panel>
   );
 }
