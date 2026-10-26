@@ -32,6 +32,8 @@ import {
   PHONE_CALL_STATES,
   resolveContactResultado,
   resolveReturnStatus,
+  CONTACTED_CALL_PHONE_REQUIRED_MESSAGE,
+  validateContactedCall,
   validateNoContactPhones,
 } from "@/lib/contact-call";
 
@@ -626,6 +628,11 @@ export async function POST(request: Request) {
     }
   }
 
+  // An explicit empty list asserts "no phones": reject before touching the DB.
+  if (parsed.data.contactado && parsed.data.telefonos?.length === 0) {
+    return NextResponse.json({ error: CONTACTED_CALL_PHONE_REQUIRED_MESSAGE }, { status: 400 });
+  }
+
   const card = await prisma.card.findUnique({
     where: { id: parsed.data.cardId },
     include: {
@@ -659,6 +666,19 @@ export async function POST(request: Request) {
   );
   const comentario = parsed.data.comentario?.trim() ?? "";
   const contactado = parsed.data.contactado;
+
+  // Contacted calls (CONTACTADA, RETORNO, TRASLADO) need a working phone and a
+  // channel. Validated before any write so a rejected call leaves no records.
+  if (contactado) {
+    const contactedError = validateContactedCall({
+      phones: normalizedPhones,
+      canalContacto: parsed.data.canalContacto,
+      telefonosExplicitEmpty: false,
+    });
+    if (contactedError) {
+      return NextResponse.json({ error: contactedError }, { status: 400 });
+    }
+  }
 
   const usedPhones =
     parsed.data.telefonosUsados?.trim() ||
