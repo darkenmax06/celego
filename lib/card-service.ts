@@ -14,6 +14,7 @@ import { buildSourceRecordKey, canCreateDispatch, DispatchConflictError, nextTcG
 import { resolveZone } from "@/lib/zone-map";
 import { mergePhoneLists, planCustomerMerge, type CustomerData } from "@/lib/customer-merge";
 import { normalizeText } from "@/lib/utils";
+import { countInactiveProvinceRows, loadInactiveProvinceNames } from "@/lib/inactive-provinces";
 import { recalculateAdditionalCardsForGroups } from "@/lib/card-additional";
 import { applyMessengerReassignment } from "@/lib/route-reassignment";
 import {
@@ -438,6 +439,9 @@ export async function persistNormalizedCardImport(input: {
     const updated = 0;
     const skippedRows: ImportRowIssue[] = [];
     const rejectedRows: ImportRowIssue[] = [...input.rejectedRows];
+    const inactiveProvinces = await loadInactiveProvinceNames(tx);
+    // Inactive provinces are still imported; the stored value of each created card feeds the warning.
+    const createdProvinces: string[] = [];
 
     // Re-processing a batch whose cards were removed replaces its previous row outcomes.
     await tx.cardImportRow.deleteMany({ where: { batchId: input.batchId } });
@@ -531,6 +535,7 @@ export async function persistNormalizedCardImport(input: {
           reason: preserved.length ? `Datos del cliente conservados sin sobrescribir: ${preserved.join(", ")}` : null,
         },
       });
+      createdProvinces.push(card.provincia);
       created += 1;
     }
 
@@ -538,7 +543,8 @@ export async function persistNormalizedCardImport(input: {
       where: { id: input.batchId },
       data: { status: "COMPLETED", rowCount: input.rows.length + input.rejectedRows.length, createdCount: created, updatedCount: updated, skippedCount: skippedRows.length, rejectedCount: rejectedRows.length, completedAt: new Date() },
     });
-    return { created, updated, skipped: skippedRows.length, rejected: rejectedRows.length, rejectedRows, skippedRows };
+    const inactive = countInactiveProvinceRows(createdProvinces, inactiveProvinces);
+    return { created, updated, skipped: skippedRows.length, rejected: rejectedRows.length, rejectedRows, skippedRows, inactiveProvinceRows: inactive.count, inactiveProvinceNames: inactive.names };
   }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
 }
 
@@ -758,7 +764,8 @@ export async function persistDebitConsolidadoImport(input: {
     },
   }).catch(() => undefined);
 
-  return { created, updated, count: input.rows.length };
+  const inactive = countInactiveProvinceRows(input.rows.map((row) => row.provincia), await loadInactiveProvinceNames(prisma));
+  return { created, updated, count: input.rows.length, inactiveProvinceRows: inactive.count, inactiveProvinceNames: inactive.names };
 }
 
 /** Persists batch import from Débito Despacho (new cards). */
@@ -827,7 +834,8 @@ export async function persistDebitDespachoImport(input: {
     },
   }).catch(() => undefined);
 
-  return { created, updated: 0, count: input.rows.length, cards: createdCards };
+  const inactive = countInactiveProvinceRows(input.rows.map((row) => row.provincia), await loadInactiveProvinceNames(prisma));
+  return { created, updated: 0, count: input.rows.length, cards: createdCards, inactiveProvinceRows: inactive.count, inactiveProvinceNames: inactive.names };
 }
 
 /** Updates card status and metadata from Pinit deliveries export. */

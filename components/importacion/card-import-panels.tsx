@@ -1,9 +1,10 @@
 "use client";
 
 import { ChangeEvent, useState } from "react";
-import { AlertCircle, CheckCircle2, Download, Loader2 } from "lucide-react";
+import { AlertCircle, AlertTriangle, CheckCircle2, Download, Loader2 } from "lucide-react";
 import { Panel } from "@/components/ui/panel";
 import { notificationFailureMessage, notifyInBrowser } from "@/lib/browser-notifications";
+import { formatInactiveProvinceWarning } from "@/lib/inactive-provinces";
 import { cn } from "@/lib/utils";
 
 type UrgentNotification = {
@@ -25,6 +26,8 @@ type UploadStatus = {
   type: "success" | "error" | "info";
   message: string;
   details?: string;
+  /** Rows imported with a province configured as inactive; shown only when there are some. */
+  warning?: string;
 };
 
 /** One line per row so every rejected, skipped or ignored card says exactly why. */
@@ -92,6 +95,8 @@ export function CardImportPanels() {
         return;
       }
 
+      const warning = formatInactiveProvinceWarning(data.inactiveProvinceRows, data.inactiveProvinceNames) ?? undefined;
+
       // Build rich feedback per endpoint
       if (endpoint === "/api/tarjetas-debito/importar-consolidado") {
         const created = data.created ?? 0;
@@ -101,7 +106,7 @@ export function CardImportPanels() {
           ? `Consolidado Débito ya procesado anteriormente: ${created} creadas, ${updated} actualizadas.`
           : `Consolidado Débito importado con éxito: ${created} tarjetas creadas, ${updated} actualizadas (${total} filas procesadas).`;
         if (data.errors?.length) msg += ` (${data.errors.length} advertencias en filas).`;
-        setUploadStatus({ type: "success", message: msg });
+        setUploadStatus({ type: "success", message: msg, warning });
       } else if (endpoint === "/api/tarjetas-debito/importar-despacho") {
         const created = data.created ?? 0;
         const updated = data.updated ?? 0;
@@ -110,7 +115,7 @@ export function CardImportPanels() {
           ? `Despacho Débito ya procesado anteriormente: ${created} creadas, ${updated} actualizadas.`
           : `Despacho Débito importado con éxito: ${created} nuevas tarjetas creadas, ${updated} actualizadas (${total} filas procesadas).`;
         if (data.errors?.length) msg += ` (${data.errors.length} advertencias en filas).`;
-        setUploadStatus({ type: "success", message: msg });
+        setUploadStatus({ type: "success", message: msg, warning });
       } else if (endpoint === "/api/tarjetas-debito/importar-entregas") {
         const updated = data.updated ?? 0;
         const notFound = data.notFound ?? 0;
@@ -145,6 +150,7 @@ export function CardImportPanels() {
           type: rejected > 0 ? "error" : skipped > 0 ? "info" : "success",
           message: msg,
           details: reasons,
+          warning,
         });
       } else if (endpoint === "/api/importaciones/urgentes") {
         const linked = data.linked ?? 0;
@@ -194,6 +200,12 @@ export function CardImportPanels() {
               <p className="font-semibold">{uploadStatus.message}</p>
               {uploadStatus.details ? (
                 <p className="text-xs opacity-85 mt-1 leading-relaxed whitespace-pre-line">{uploadStatus.details}</p>
+              ) : null}
+              {uploadStatus.warning ? (
+                <p className="mt-2 flex items-center gap-1.5 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-xs font-medium text-amber-800">
+                  <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-amber-600" />
+                  <span>{uploadStatus.warning}</span>
+                </p>
               ) : null}
             </div>
           </div>
