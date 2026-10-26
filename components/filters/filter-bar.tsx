@@ -78,6 +78,8 @@ export type FilterMenuSection = {
   title: string;
   render: () => ReactNode;
   chips?: FilterMenuChip[];
+  /** `"start"` renders the section above the facet list; `"end"` (default) after `filterMenuExtra`. */
+  placement?: "start" | "end";
 };
 
 export type FilterBarProps = {
@@ -105,7 +107,7 @@ export type FilterBarProps = {
   chipRemovalKeys?: (key: string) => string[] | undefined;
   /** Extra controls rendered inside the "Filtros" column of the dropdown menu. */
   filterMenuExtra?: ReactNode;
-  /** Extension sections rendered after `filterMenuExtra`; their chips precede the filter chips. */
+  /** Extension sections of the "Filtros" column (see `placement`); their chips precede the filter chips. */
   menuSections?: FilterMenuSection[];
   /** Called exactly once by "clear all" so consumers can reset the state behind `menuSections`. */
   onResetExtensions?: () => void;
@@ -405,6 +407,14 @@ export function FilterBar({
   );
 
   const sectionChips = menuSections.flatMap((section) => section.chips ?? []);
+  const startSections = menuSections.filter((section) => section.placement === "start");
+  const endSections = menuSections.filter((section) => section.placement !== "start");
+  const renderSection = (section: FilterMenuSection) => (
+    <div key={section.id} className="pt-2" data-filter-menu-section={section.id}>
+      <div className="py-1 text-[11px] font-semibold text-slate-500">{section.title}</div>
+      {section.render()}
+    </div>
+  );
   const hasChips = activeChips.length > 0 || sectionChips.length > 0;
 
   return (
@@ -537,17 +547,22 @@ export function FilterBar({
           </button>
         </div>
 
-        {/* Odoo 3-Column Floating Popover Menu */}
+        {/* Odoo 3-Column Floating Popover Menu (stacked and viewport-capped below md) */}
         {isMenuOpen ? (
-          <div className="absolute left-0 top-full z-50 mt-2 flex w-full min-w-[700px] max-w-4xl rounded-2xl border border-slate-200 bg-white p-4 shadow-2xl ring-1 ring-black/5 animate-in fade-in zoom-in-95 duration-100">
+          <div
+            data-filter-menu-popover
+            className="absolute left-0 top-full z-50 mt-2 flex max-h-[75vh] w-full max-w-[calc(100vw-2rem)] flex-col overflow-y-auto rounded-2xl border border-slate-200 bg-white p-4 shadow-2xl ring-1 ring-black/5 animate-in fade-in zoom-in-95 duration-100 md:max-h-none md:min-w-[700px] md:max-w-4xl md:flex-row md:overflow-visible"
+          >
             {/* Column 1: Filtros */}
-            <div className="flex-1 border-r border-slate-100 pr-4">
+            <div className="border-b border-slate-100 pb-4 md:flex-1 md:border-b-0 md:border-r md:pb-0 md:pr-4">
               <div className="mb-3 flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-slate-800">
                 <Filter className="h-3.5 w-3.5 text-indigo-600" />
                 Filtros
               </div>
 
               <div className="space-y-1 text-xs">
+                {startSections.map(renderSection)}
+
                 {facets.map((facet) => {
                   const currentVal = filters[facet.field];
                   const options =
@@ -625,12 +640,7 @@ export function FilterBar({
 
                 {filterMenuExtra ? <div className="pt-2">{filterMenuExtra}</div> : null}
 
-                {menuSections.map((section) => (
-                  <div key={section.id} className="pt-2" data-filter-menu-section={section.id}>
-                    <div className="py-1 text-[11px] font-semibold text-slate-500">{section.title}</div>
-                    {section.render()}
-                  </div>
-                ))}
+                {endSections.map(renderSection)}
 
                 {/* Agregar filtro personalizado */}
                 <div className="pt-2">
@@ -669,7 +679,7 @@ export function FilterBar({
             </div>
 
             {/* Column 2: Agrupar por */}
-            <div className="flex-1 border-r border-slate-100 px-4">
+            <div className="border-b border-slate-100 py-4 md:flex-1 md:border-b-0 md:border-r md:px-4 md:py-0">
               <div className="mb-3 flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-slate-800">
                 <Layers className="h-3.5 w-3.5 text-emerald-600" />
                 Agrupar por
@@ -829,7 +839,7 @@ export function FilterBar({
             </div>
 
             {/* Column 3: Favoritos */}
-            <div className="flex-1 pl-4">
+            <div className="pt-4 md:flex-1 md:pl-4 md:pt-0">
               <div className="mb-3 flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-slate-800">
                 <Star className="h-3.5 w-3.5 text-amber-500 fill-amber-500" />
                 Favoritos
