@@ -537,6 +537,8 @@ export default function OperativoClient({ role }: OperativoClientProps) {
               fields: OPERATIVO_DATE_FILTER_FIELDS,
               filters,
               onChange: (next) => setFilters({ ...next, page: "1" }),
+              // `days` only scopes the activos branch of the API; elsewhere it is ignored, so no chip.
+              fallbackChipLabel: (key) => (key === "days" && tab !== "activos" ? null : undefined),
             })}
           />
         ) : null}
