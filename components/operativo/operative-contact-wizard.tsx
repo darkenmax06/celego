@@ -537,7 +537,7 @@ export function OperativeContactWizard({
         </div>
 
         {/* 3 COLUMNS CONTENT BODY - CENTER COLUMN EXPANDED FOR COMFORT */}
-        <div className="grid flex-1 grid-cols-1 lg:grid-cols-[1fr_1.35fr_1fr] gap-0 overflow-y-auto divide-y lg:divide-y-0 lg:divide-x divide-slate-200 bg-slate-100/40 pb-20">
+        <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[1fr_1.35fr_1fr] gap-0 overflow-y-auto divide-y lg:divide-y-0 lg:divide-x divide-slate-200 bg-slate-100/40">
           {/* ================= COLUMN 1: RELEVANCIA CLIENTE & LOGISTICA ================= */}
           <div className="flex flex-col gap-4 p-5 overflow-y-auto bg-white">
             <div className="flex items-center gap-2 pb-2 border-b border-slate-100">
@@ -607,12 +607,12 @@ export function OperativeContactWizard({
               </p>
               <div data-testid="client-phones" className="rounded-lg bg-white/70 p-2">
                 <span className="text-slate-500 text-[11px]">Teléfonos del cliente:</span>
-                <ul className="mt-1 space-y-0.5">
+                <ul className="mt-1.5 space-y-1">
                   {telefonos
                     .filter((phone) => phone.num.trim())
                     .map((phone, idx) => (
-                      <li key={idx} className="flex items-center gap-1.5 font-mono font-bold text-slate-900">
-                        <Phone className="h-3 w-3 text-indigo-600" />
+                      <li key={idx} className="flex items-center gap-2 font-mono text-base font-bold text-slate-900">
+                        <Phone className="h-4 w-4 text-indigo-600" />
                         <span>{formatPhoneDisplay(phone.num)}</span>
                         {phone.principal ? <span className="text-amber-500">★</span> : null}
                       </li>
@@ -938,7 +938,7 @@ export function OperativeContactWizard({
                   {copyStatus === "ok" ? (
                     <>
                       <Check className="h-3.5 w-3.5 text-emerald-600" />
-                      <span className="text-emerald-700">Copiado!</span>
+                      <span className="text-emerald-700">¡Copiado!</span>
                     </>
                   ) : copyStatus === "error" ? (
                     <>
@@ -1006,7 +1006,7 @@ export function OperativeContactWizard({
         </div>
 
         {/* ================= FIXED BOTTOM ACTION BAR ================= */}
-        <div className="absolute bottom-0 inset-x-0 z-20 flex flex-wrap items-center justify-between border-t border-slate-200 bg-white/95 backdrop-blur-md px-6 py-3 shadow-lg gap-3">
+        <div className="relative z-20 flex shrink-0 flex-wrap items-center justify-between border-t border-slate-200 bg-white/95 backdrop-blur-md px-6 py-3 shadow-lg gap-3">
           <div className="flex items-center gap-3">
             {feedback ? (
               <span

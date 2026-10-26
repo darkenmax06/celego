@@ -128,7 +128,7 @@ describe("OperativeContactWizard calls UX", () => {
     copyMock.mockResolvedValue(true);
     renderWizard();
     fireEvent.click(screen.getByRole("button", { name: /Copiar mensaje/ }));
-    expect(await screen.findByText("Copiado!")).toBeInTheDocument();
+    expect(await screen.findByText("¡Copiado!")).toBeInTheDocument();
     expect(copyMock).toHaveBeenCalledTimes(1);
   });
 
