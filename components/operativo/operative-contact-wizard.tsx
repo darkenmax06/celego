@@ -459,7 +459,7 @@ export function OperativeContactWizard({
       onClick={onClose}
     >
       <div
-        className="relative flex h-[95vh] w-full max-w-7xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl border border-slate-200"
+        className="relative flex h-[95vh] w-full max-w-[110rem] flex-col overflow-hidden rounded-2xl bg-white shadow-2xl border border-slate-200"
         onClick={(e) => e.stopPropagation()}
       >
         {/* TOP BAR / HEADER */}
