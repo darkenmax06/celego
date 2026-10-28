@@ -4,7 +4,7 @@ import { z } from "zod";
 import { requireApiSession } from "@/lib/api-session";
 import { buildListEnvelope, compile } from "@/lib/list-query";
 import { mensajerosListQuery } from "@/lib/list-query/descriptors/mensajeros";
-import { setMessengerActive } from "@/lib/messenger-lifecycle";
+import { deleteMessenger } from "@/lib/messenger-lifecycle";
 import { prisma } from "@/lib/prisma";
 
 const rateSchema = z.object({
@@ -156,16 +156,32 @@ export async function DELETE(request: Request) {
     return NextResponse.json({ error: "id requerido" }, { status: 400 });
   }
 
-  // Transitional (slice A): archives through the audited helper. A later slice
-  // replaces this with a guarded hard delete.
-  const result = await setMessengerActive(
+  const result = await deleteMessenger(
     id,
-    false,
     { id: auth.session.user.id, email: auth.session.user.email },
     request,
   );
-  if (!result.found) {
+  if (result.status === "not_found") {
     return NextResponse.json({ error: "Mensajero no encontrado" }, { status: 404 });
+  }
+  if (result.status === "history") {
+    const detail = Object.entries(result.counts)
+      .map(([relation, count]) => `${relation}: ${count}`)
+      .join(", ");
+    return NextResponse.json(
+      {
+        error: `No se puede eliminar: tiene historial${detail ? ` (${detail})` : ""}. Use Archivar en su lugar.`,
+        code: "TIENE_HISTORIAL",
+        counts: result.counts,
+      },
+      { status: 409 },
+    );
+  }
+  if (result.status === "concurrent") {
+    return NextResponse.json(
+      { error: "Otra operacion esta en curso para este mensajero. Intente de nuevo.", code: "CONFLICTO_CONCURRENTE" },
+      { status: 409 },
+    );
   }
   return NextResponse.json({ ok: true });
 }

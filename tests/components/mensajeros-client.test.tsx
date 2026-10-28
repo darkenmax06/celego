@@ -151,4 +151,45 @@ describe("MensajerosClient archive lifecycle (R3.3)", () => {
       expect(JSON.parse(patch![1].body)).not.toHaveProperty("activo");
     });
   });
+
+  it("hides Eliminar unless the page grants canDelete", async () => {
+    render(<MensajerosClient />);
+    await screen.findAllByText("Ana Activa");
+    expect(screen.queryByRole("button", { name: "Eliminar" })).not.toBeInTheDocument();
+  });
+
+  it("deletes through a destructive dialog on both tabs", async () => {
+    render(<MensajerosClient canDelete />);
+    await screen.findAllByText("Ana Activa");
+    fireEvent.click(screen.getByRole("button", { name: "Archivados" }));
+    await screen.findByText("Beto Archivado");
+
+    fireEvent.click(screen.getByRole("button", { name: "Eliminar" }));
+    await screen.findByRole("alertdialog");
+    expect(fetchMock.mock.calls.some(([, init]) => init?.method === "DELETE")).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: "Eliminar mensajero" }));
+
+    await waitFor(() => {
+      const del = fetchMock.mock.calls.find(([, init]) => init?.method === "DELETE");
+      expect(JSON.parse(del![1].body)).toEqual({ id: "m2" });
+    });
+    await screen.findByText("Beto Archivado fue eliminado");
+  });
+
+  it("surfaces the 409 history message and suggests Archivar", async () => {
+    const error = "No se puede eliminar: tiene historial (loans: 2). Use Archivar en su lugar.";
+    const base = fetchMock.getMockImplementation() as (url: string, init?: RequestInit) => Promise<unknown>;
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) =>
+      init?.method === "DELETE" ? json({ error, code: "TIENE_HISTORIAL" }, 409) : base(url, init),
+    );
+    render(<MensajerosClient canDelete />);
+    await screen.findAllByText("Ana Activa");
+
+    fireEvent.click(screen.getByRole("button", { name: "Eliminar" }));
+    await screen.findByRole("alertdialog");
+    fireEvent.click(screen.getByRole("button", { name: "Eliminar mensajero" }));
+
+    await screen.findByText(error);
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+  });
 });

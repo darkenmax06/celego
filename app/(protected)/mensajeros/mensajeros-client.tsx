@@ -58,7 +58,7 @@ type Counts = {
 
 type MessengerView = "activos" | "archivados";
 type PendingAction = {
-  type: "archive" | "restore";
+  type: "archive" | "restore" | "delete";
   messenger: Messenger;
   openRoutes: number;
   assignedCards: number;
@@ -128,7 +128,7 @@ function initials(name: string) {
     .toUpperCase();
 }
 
-export default function MensajerosClient() {
+export default function MensajerosClient({ canDelete = false }: { canDelete?: boolean }) {
   const [messengers, setMessengers] = useState<Messenger[]>([]);
   const [provinces, setProvinces] = useState<string[]>([]);
   const [messengerPagination, setMessengerPagination] = useState<PaginationMeta>({
@@ -333,13 +333,18 @@ export default function MensajerosClient() {
   async function confirmPendingAction() {
     if (!pendingAction || lifecycleBusy) return;
     setLifecycleBusy(true);
+    const isDelete = pendingAction.type === "delete";
     let res: Response;
     let json: { error?: string } = {};
     try {
-      res = await fetch("/api/mensajeros/estado", {
-        method: "POST",
+      res = await fetch(isDelete ? "/api/mensajeros" : "/api/mensajeros/estado", {
+        method: isDelete ? "DELETE" : "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: pendingAction.messenger.id, action: pendingAction.type }),
+        body: JSON.stringify(
+          isDelete
+            ? { id: pendingAction.messenger.id }
+            : { id: pendingAction.messenger.id, action: pendingAction.type },
+        ),
       });
       json = await res.json().catch(() => ({}));
     } catch {
@@ -355,7 +360,8 @@ export default function MensajerosClient() {
       return;
     }
     const name = pendingAction.messenger.nombre;
-    setMessage(pendingAction.type === "archive" ? `${name} fue archivado` : `${name} fue restaurado`);
+    const done = { archive: "archivado", restore: "restaurado", delete: "eliminado" }[pendingAction.type];
+    setMessage(`${name} fue ${done}`);
     await loadMessengers(messengerPage, view);
   }
 
@@ -455,7 +461,19 @@ export default function MensajerosClient() {
                   </button>
                 </div>
 
-                <div className="mb-3 flex justify-end">
+                <div className="mb-3 flex justify-end gap-2">
+                  {canDelete ? (
+                    <button
+                      type="button"
+                      disabled={lifecycleBusy}
+                      onClick={() =>
+                        setPendingAction({ type: "delete", messenger, openRoutes: 0, assignedCards: 0 })
+                      }
+                      className="rounded-lg border border-red-300 px-3 py-1 text-xs font-semibold text-red-700 disabled:opacity-60"
+                    >
+                      Eliminar
+                    </button>
+                  ) : null}
                   {view === "archivados" ? (
                     <button
                       type="button"
@@ -620,19 +638,29 @@ export default function MensajerosClient() {
 
       <ConfirmDialog
         open={Boolean(pendingAction)}
-        tone={pendingAction?.type === "archive" ? "danger" : "default"}
+        tone={pendingAction?.type === "restore" ? "default" : "danger"}
         busy={lifecycleBusy}
         title={
-          pendingAction?.type === "archive"
-            ? `Archivar a ${pendingAction.messenger.nombre}`
-            : `Restaurar a ${pendingAction?.messenger.nombre ?? ""}`
+          pendingAction?.type === "delete"
+            ? `Eliminar a ${pendingAction.messenger.nombre}`
+            : pendingAction?.type === "archive"
+              ? `Archivar a ${pendingAction.messenger.nombre}`
+              : `Restaurar a ${pendingAction?.messenger.nombre ?? ""}`
         }
         message={
-          pendingAction?.type === "archive"
+          pendingAction?.type === "delete"
+            ? "Se eliminara de forma permanente. Solo es posible si no tiene historial; si lo tiene, use Archivar."
+            : pendingAction?.type === "archive"
             ? `Tiene ${pendingAction.openRoutes} rutas abiertas y ${pendingAction.assignedCards} tarjetas asignadas. Seguiran asignadas, pero ya no podra recibir nuevas rutas, lotes ni tarjetas, ni iniciar sesion en la app movil.`
             : "Volvera a aparecer en los selectores y podra iniciar sesion en la app movil."
         }
-        confirmLabel={pendingAction?.type === "archive" ? "Archivar mensajero" : "Restaurar mensajero"}
+        confirmLabel={
+          pendingAction?.type === "delete"
+            ? "Eliminar mensajero"
+            : pendingAction?.type === "archive"
+              ? "Archivar mensajero"
+              : "Restaurar mensajero"
+        }
         onConfirm={() => void confirmPendingAction()}
         onCancel={() => setPendingAction(null)}
       />

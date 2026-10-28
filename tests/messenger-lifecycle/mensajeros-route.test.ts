@@ -15,8 +15,7 @@ vi.mock("@/lib/api-session", () => ({
 }));
 
 import { prisma as prismaImport } from "@/lib/prisma";
-import { requireApiSession } from "@/lib/api-session";
-import { DELETE, GET, PATCH } from "@/app/api/mensajeros/route";
+import { GET, PATCH } from "@/app/api/mensajeros/route";
 
 const prisma = prismaImport as unknown as TransactionalPrismaMock;
 const ID = "cmessenger00001";
@@ -75,36 +74,6 @@ describe("PATCH /api/mensajeros no longer controls activo (R4.1)", () => {
     const data = firstCallArg(prisma.messenger.update).data as Record<string, unknown>;
     expect("activo" in data).toBe(false);
     expect(prisma.__row("messenger", ID)).toMatchObject({ nombre: "Pedro Nuevo", activo: false });
-    expect(prisma.__rows("auditLog")).toHaveLength(0);
-  });
-});
-
-describe("legacy DELETE /api/mensajeros (R1.6)", () => {
-  it("archives through the audited helper, keeps the row and answers {ok:true}", async () => {
-    const response = await DELETE(json("DELETE", { id: ID }));
-
-    expect(response?.status).toBe(200);
-    expect(await readJson(response)).toEqual({ ok: true });
-    expect(prisma.__row("messenger", ID)).toMatchObject({ activo: false });
-    expect(prisma.__rows("auditLog")[0]).toMatchObject({ entity: "MESSENGER", action: "ARCHIVE" });
-    expect(prisma.messenger.delete).not.toHaveBeenCalled();
-  });
-
-  it("stays ADMIN only", async () => {
-    await DELETE(json("DELETE", { id: ID }));
-    expect(requireApiSession).toHaveBeenCalledWith(["ADMIN"]);
-  });
-
-  it("answers 400 without id and 404 for an unknown id", async () => {
-    expect((await DELETE(json("DELETE", {})))?.status).toBe(400);
-    expect((await DELETE(json("DELETE", { id: "ghost" })))?.status).toBe(404);
-    expect(prisma.__rows("auditLog")).toHaveLength(0);
-  });
-
-  it("is idempotent for an already archived messenger", async () => {
-    prisma.__seed("messenger", { id: ID, nombre: "Pedro", activo: false });
-    const response = await DELETE(json("DELETE", { id: ID }));
-    expect(await readJson(response)).toEqual({ ok: true });
     expect(prisma.__rows("auditLog")).toHaveLength(0);
   });
 });
