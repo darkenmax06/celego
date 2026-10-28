@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { MessengerServiceType } from "@prisma/client";
 import { formatCurrencyDOP, toCents } from "@/lib/money";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { PageHeader } from "@/components/ui/page-header";
 import { Panel } from "@/components/ui/panel";
 import { GeneralPeriods } from "@/components/mensajeros/general-periods";
@@ -53,6 +54,14 @@ type Counts = {
   REMOTA: number;
   RECOGIDA: number;
   MANDADO: number;
+};
+
+type MessengerView = "activos" | "archivados";
+type PendingAction = {
+  type: "archive" | "restore";
+  messenger: Messenger;
+  openRoutes: number;
+  assignedCards: number;
 };
 
 type PaginationMeta = { page: number; pageSize: number; total: number; totalPages: number };
@@ -148,20 +157,27 @@ export default function MensajerosClient() {
     "mensajeros:selected",
     null,
   );
+  const [view, setView] = usePersistentState<MessengerView>("mensajeros:view", "activos");
+  const [pendingAction, setPendingAction] = useState<PendingAction | null>(null);
+  const [lifecycleBusy, setLifecycleBusy] = useState(false);
+  const loadRequestId = useRef(0);
   const [showNew, setShowNew] = usePersistentState("mensajeros:new-modal", false);
   const [message, setMessage] = useState("");
   const [busyGlobalSaveById, setBusyGlobalSaveById] = useState<Record<string, boolean>>({});
   const [busyGlobalZip, setBusyGlobalZip] = useState(false);
   const globalAutoSaveTimers = useRef<Record<string, ReturnType<typeof setTimeout> | null>>({});
 
-  async function loadMessengers(pageArg = messengerPage) {
+  async function loadMessengers(pageArg = messengerPage, viewArg = view) {
+    // Only the latest request may write state: a slow response for the previous tab or page is dropped.
+    const requestId = ++loadRequestId.current;
     const params = new URLSearchParams({
       page: String(pageArg),
       pageSize: String(messengerPagination.pageSize),
-      onlyActive: "1",
     });
+    params.set(viewArg === "archivados" ? "onlyArchived" : "onlyActive", "1");
     const messengerRes = await fetch(`/api/mensajeros?${params.toString()}`, { cache: "no-store" });
     const messengerJson = await messengerRes.json();
+    if (requestId !== loadRequestId.current) return;
     setMessengers(messengerJson.messengers ?? []);
     if (messengerJson.pagination) {
       setMessengerPagination(messengerJson.pagination as PaginationMeta);
@@ -197,8 +213,9 @@ export default function MensajerosClient() {
   }, []);
 
   useEffect(() => {
-    void loadMessengers(messengerPage);
-  }, [messengerPage]);
+    void loadMessengers(messengerPage, view);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [messengerPage, view]);
 
   useEffect(() => {
     const next: Record<string, Counts> = {};
@@ -291,6 +308,48 @@ export default function MensajerosClient() {
     }, 800);
   }
 
+  function switchView(next: MessengerView) {
+    if (next === view) return;
+    setView(next);
+    setMessengerPage(1);
+  }
+
+  async function requestArchive(messenger: Messenger) {
+    setMessage("");
+    const res = await fetch(`/api/mensajeros/estado?id=${encodeURIComponent(messenger.id)}`, { cache: "no-store" });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      setMessage(json.error ?? "No se pudo consultar el estado del mensajero");
+      return;
+    }
+    setPendingAction({
+      type: "archive",
+      messenger,
+      openRoutes: json.openRoutes ?? 0,
+      assignedCards: json.assignedCards ?? 0,
+    });
+  }
+
+  async function confirmPendingAction() {
+    if (!pendingAction || lifecycleBusy) return;
+    setLifecycleBusy(true);
+    const res = await fetch("/api/mensajeros/estado", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: pendingAction.messenger.id, action: pendingAction.type }),
+    });
+    const json = await res.json().catch(() => ({}));
+    setLifecycleBusy(false);
+    setPendingAction(null);
+    if (!res.ok) {
+      setMessage(json.error ?? "No se pudo actualizar el mensajero");
+      return;
+    }
+    const name = pendingAction.messenger.nombre;
+    setMessage(pendingAction.type === "archive" ? `${name} fue archivado` : `${name} fue restaurado`);
+    await loadMessengers(messengerPage, view);
+  }
+
   async function downloadGlobalReportsZip() {
     if (!globalReportFrom || !globalReportTo) {
       setMessage("Selecciona el rango para generar el ZIP");
@@ -333,7 +392,9 @@ export default function MensajerosClient() {
         <div className="mb-4 flex items-center justify-between">
           <div>
             <p className="text-sm font-semibold text-slate-900">Perfiles de mensajeros</p>
-            <p className="text-xs text-slate-500">{messengerPagination.total} mensajeros activos</p>
+            <p className="text-xs text-slate-500">
+              {messengerPagination.total} mensajeros {view === "archivados" ? "archivados" : "activos"}
+            </p>
           </div>
           <button
             onClick={() => setShowNew(true)}
@@ -341,6 +402,22 @@ export default function MensajerosClient() {
           >
             + Nuevo mensajero
           </button>
+        </div>
+
+        <div className="mb-3 flex gap-2">
+          {(["activos", "archivados"] as const).map((value) => (
+            <button
+              key={value}
+              type="button"
+              aria-pressed={view === value}
+              onClick={() => switchView(value)}
+              className={`rounded-lg px-3 py-1.5 text-xs font-semibold ${
+                view === value ? "bg-blue-700 text-white" : "border border-slate-300 text-slate-600"
+              }`}
+            >
+              {value === "activos" ? "Activos" : "Archivados"}
+            </button>
+          ))}
         </div>
 
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
@@ -369,6 +446,30 @@ export default function MensajerosClient() {
                   </button>
                 </div>
 
+                <div className="mb-3 flex justify-end">
+                  {view === "archivados" ? (
+                    <button
+                      type="button"
+                      disabled={lifecycleBusy}
+                      onClick={() =>
+                        setPendingAction({ type: "restore", messenger, openRoutes: 0, assignedCards: 0 })
+                      }
+                      className="rounded-lg border border-emerald-300 px-3 py-1 text-xs font-semibold text-emerald-700 disabled:opacity-60"
+                    >
+                      Restaurar
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      disabled={lifecycleBusy}
+                      onClick={() => void requestArchive(messenger)}
+                      className="rounded-lg border border-slate-300 px-3 py-1 text-xs font-semibold text-slate-600 disabled:opacity-60"
+                    >
+                      Archivar
+                    </button>
+                  )}
+                </div>
+
                 <div className="grid grid-cols-3 gap-2">
                   <MiniStat label="Entregas hoy" value={todayCounts.NORMAL} />
                   <MiniStat label="Total periodo" value={formatCurrencyDOP(totalCents)} />
@@ -377,7 +478,11 @@ export default function MensajerosClient() {
               </article>
             );
           })}
-          {!messengers.length ? <p className="text-sm text-slate-500">No hay mensajeros registrados.</p> : null}
+          {!messengers.length ? (
+            <p className="text-sm text-slate-500">
+              {view === "archivados" ? "No hay mensajeros archivados." : "No hay mensajeros registrados."}
+            </p>
+          ) : null}
         </div>
         <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-200 px-3 py-2 text-xs text-slate-600">
           <span>
@@ -404,6 +509,7 @@ export default function MensajerosClient() {
         </div>
       </Panel>
 
+      {view === "activos" ? (
       <Panel className="mt-5" title="Registro global del dia">
         <div className="mb-3 flex items-center gap-2">
           <input
@@ -469,6 +575,7 @@ export default function MensajerosClient() {
           </table>
         </div>
       </Panel>
+      ) : null}
 
       <Panel className="mt-5" title="Reportes de mensajeros (imagenes)">
         <div className="flex flex-wrap items-end gap-2">
@@ -501,6 +608,25 @@ export default function MensajerosClient() {
       </Panel>
 
       {message ? <p className="mt-4 text-sm text-emerald-700">{message}</p> : null}
+
+      <ConfirmDialog
+        open={Boolean(pendingAction)}
+        tone={pendingAction?.type === "archive" ? "danger" : "default"}
+        busy={lifecycleBusy}
+        title={
+          pendingAction?.type === "archive"
+            ? `Archivar a ${pendingAction.messenger.nombre}`
+            : `Restaurar a ${pendingAction?.messenger.nombre ?? ""}`
+        }
+        message={
+          pendingAction?.type === "archive"
+            ? `Tiene ${pendingAction.openRoutes} rutas abiertas y ${pendingAction.assignedCards} tarjetas asignadas. Seguiran asignadas, pero ya no podra recibir nuevas rutas, lotes ni tarjetas, ni iniciar sesion en la app movil.`
+            : "Volvera a aparecer en los selectores y podra iniciar sesion en la app movil."
+        }
+        confirmLabel={pendingAction?.type === "archive" ? "Archivar mensajero" : "Restaurar mensajero"}
+        onConfirm={() => void confirmPendingAction()}
+        onCancel={() => setPendingAction(null)}
+      />
 
       {showNew ? (
         <NewMessengerModal
@@ -756,7 +882,6 @@ function MessengerModal({
         telefono: telefono || undefined,
         zonaPrincipal: zona || undefined,
         provinciaTrabajo: provinciaTrabajo || undefined,
-        activo: messenger.activo,
         rates: SERVICE_ORDER.map((service) => ({
           serviceType: service,
           amountCents: toCents(rates[service]),
