@@ -4,6 +4,7 @@ import { z } from "zod";
 import { requireApiSession } from "@/lib/api-session";
 import { buildListEnvelope, compile } from "@/lib/list-query";
 import { lotesListQuery } from "@/lib/list-query/descriptors/lotes";
+import { requireActiveMessenger } from "@/lib/messenger-lifecycle";
 import { prisma } from "@/lib/prisma";
 import {
   findOperationalCardCandidates,
@@ -207,16 +208,15 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "fechaEnvio invalida" }, { status: 400 });
   }
 
-  const [messenger, cards, provinceConfigs, lotNumber] = await Promise.all([
-    prisma.messenger.findUnique({ where: { id: parsed.data.messengerId } }),
+  const guard = await requireActiveMessenger(prisma, parsed.data.messengerId);
+  if ("error" in guard) return guard.error;
+  const { messenger } = guard;
+
+  const [cards, provinceConfigs, lotNumber] = await Promise.all([
     findOperationalCardCandidates(uniqueIdentifiers),
     prisma.provinceConfig.findMany({ where: { active: true }, select: { nombre: true, zona: true } }),
     generateLotNumber(fechaEnvio),
   ]);
-
-  if (!messenger) {
-    return NextResponse.json({ error: "Mensajero no encontrado" }, { status: 404 });
-  }
 
   const provinceToZone = new Map(provinceConfigs.map((row) => [normalizeKey(row.nombre), row.zona]));
   const sentTo = parsed.data.sentTo.trim();
