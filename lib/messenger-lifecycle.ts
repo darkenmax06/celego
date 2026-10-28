@@ -49,6 +49,26 @@ export async function requireActiveMessenger(db: Db, messengerId: string) {
   return { messenger } as const;
 }
 
+/** Thrown inside a write transaction when the target messenger is archived or gone. */
+export const MESSENGER_ARCHIVED = "MESSENGER_ARCHIVED";
+
+/** Archived-messenger response shared by the card-assignment paths. */
+export function archivedMessengerResponse() {
+  return NextResponse.json({ error: MESSENGER_ARCHIVED_MESSAGE }, { status: 409 });
+}
+
+/**
+ * In-transaction guard for assignment writes: throws MESSENGER_ARCHIVED unless
+ * the messenger exists and is active, so the check commits with the write.
+ */
+export async function assertMessengerActive(db: Db, messengerId: string) {
+  const messenger = await db.messenger.findUnique({
+    where: { id: messengerId },
+    select: { activo: true },
+  });
+  if (!messenger?.activo) throw new Error(MESSENGER_ARCHIVED);
+}
+
 export type SetActiveResult =
   | { found: false }
   | ({
