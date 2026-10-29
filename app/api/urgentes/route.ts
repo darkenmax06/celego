@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { requireApiSession } from "@/lib/api-session";
 import { prisma } from "@/lib/prisma";
+import { cardPhoneSearchClause } from "@/lib/customer-phone-search";
 
 /**
  * SDD solicitudes-reclamaciones-urgentes — Phase 3, task 3.3.
@@ -16,6 +17,7 @@ export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const groupId = searchParams.get("groupId");
   const search = searchParams.get("search")?.trim() ?? "";
+  const phoneClause = await cardPhoneSearchClause(search);
   const page = Math.max(1, Number(searchParams.get("page") ?? "1") || 1);
   const pageSize = Math.min(100, Math.max(1, Number(searchParams.get("pageSize") ?? "25") || 25));
 
@@ -28,6 +30,7 @@ export async function GET(request: Request) {
             { tc: { contains: search, mode: "insensitive" as const } },
             { customer: { nombre: { contains: search, mode: "insensitive" as const } } },
             { customer: { cedula: { contains: search, mode: "insensitive" as const } } },
+            ...(phoneClause ? [phoneClause] : []),
           ],
         }
       : {}),
