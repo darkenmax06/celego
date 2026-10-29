@@ -333,13 +333,22 @@ export default function MensajerosClient() {
   async function confirmPendingAction() {
     if (!pendingAction || lifecycleBusy) return;
     setLifecycleBusy(true);
-    const res = await fetch("/api/mensajeros/estado", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id: pendingAction.messenger.id, action: pendingAction.type }),
-    });
-    const json = await res.json().catch(() => ({}));
-    setLifecycleBusy(false);
+    let res: Response;
+    let json: { error?: string } = {};
+    try {
+      res = await fetch("/api/mensajeros/estado", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: pendingAction.messenger.id, action: pendingAction.type }),
+      });
+      json = await res.json().catch(() => ({}));
+    } catch {
+      setPendingAction(null);
+      setMessage("No se pudo actualizar el mensajero");
+      return;
+    } finally {
+      setLifecycleBusy(false);
+    }
     setPendingAction(null);
     if (!res.ok) {
       setMessage(json.error ?? "No se pudo actualizar el mensajero");

@@ -106,6 +106,23 @@ describe("MensajerosClient archive lifecycle (R3.3)", () => {
     await waitFor(() => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument());
   });
 
+  it("closes the dialog and reports an error when the lifecycle request fails", async () => {
+    const base = fetchMock.getMockImplementation() as (url: string, init?: RequestInit) => Promise<unknown>;
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (url === "/api/mensajeros/estado" && init?.method === "POST") throw new TypeError("network down");
+      return base(url, init);
+    });
+    render(<MensajerosClient />);
+    await screen.findAllByText("Ana Activa");
+
+    fireEvent.click(screen.getByRole("button", { name: "Archivar" }));
+    await screen.findByRole("alertdialog");
+    fireEvent.click(screen.getByRole("button", { name: "Archivar mensajero" }));
+
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument());
+    expect(await screen.findByText("No se pudo actualizar el mensajero")).toBeInTheDocument();
+  });
+
   it("restores an archived messenger through the dialog", async () => {
     render(<MensajerosClient />);
     await screen.findAllByText("Ana Activa");

@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { filterActiveMessengers, restorableMessengerId } from "@/lib/active-messengers";
+import { filterActiveMessengers, reconcileMessengerId, restorableMessengerId } from "@/lib/active-messengers";
 
 const active = { id: "a", nombre: "Ana", activo: true };
 const archived = { id: "b", nombre: "Beto", activo: false };
@@ -16,6 +16,13 @@ describe("active messenger helpers (R5.1)", () => {
     expect(restorableMessengerId("b", [active])).toBe("");
     expect(restorableMessengerId("", [active])).toBe("");
   });
+
+  it("reconciles a stale id to the first active messenger, or empty when none", () => {
+    expect(reconcileMessengerId("a", [active])).toBe("a");
+    expect(reconcileMessengerId("b", [active])).toBe("a");
+    expect(reconcileMessengerId("", [active])).toBe("a");
+    expect(reconcileMessengerId("b", [])).toBe("");
+  });
 });
 
 describe("rutas-client wiring (R5.1)", () => {
@@ -24,11 +31,16 @@ describe("rutas-client wiring (R5.1)", () => {
     "utf-8",
   );
 
-  it("drops archived messenger ids when restoring a draft", () => {
-    expect(source).toMatch(/setMessengerId\(restorableMessengerId\(draft\.messengerId, activeMessengers\)\)/);
-    expect(source).toMatch(
-      /setLotMessengerId\(restorableMessengerId\(draft\.lotMessengerId, activeMessengers\)\)/,
-    );
+  it("restores draft messenger ids as-is so draft autosave keeps working", () => {
+    expect(source).toMatch(/setMessengerId\(draft\.messengerId\)/);
+    expect(source).toMatch(/setLotMessengerId\(draft\.lotMessengerId\)/);
+    expect(source).not.toMatch(/restorableMessengerId/);
+  });
+
+  it("reconciles stale ids only after the messenger list has loaded", () => {
+    expect(source).toMatch(/messengersLoaded/);
+    expect(source).toMatch(/reconcileMessengerId\(messengerId, activeMessengers\)/);
+    expect(source).toMatch(/reconcileMessengerId\(lotMessengerId, activeMessengers\)/);
   });
 
   it("defaults to the first active messenger", () => {

@@ -20,7 +20,7 @@ import {
   buildResolvedCardsPreviewSummary,
   getPostCreateRouteBrowseFilters,
 } from "@/lib/route-preview";
-import { filterActiveMessengers, restorableMessengerId } from "@/lib/active-messengers";
+import { filterActiveMessengers, reconcileMessengerId } from "@/lib/active-messengers";
 import { usePersistentState } from "@/lib/use-persistent-state";
 import { useWorkflowDraft } from "@/lib/use-workflow-draft";
 import { formatDateOnly, getRecentDateRange } from "@/lib/date";
@@ -434,6 +434,7 @@ export default function RutasClient() {
   const operativoTab = resolveOperativoTab(operativoTabRaw);
 
   const [messengers, setMessengers] = useState<Messenger[]>([]);
+  const [messengersLoaded, setMessengersLoaded] = useState(false);
   // Create pickers and defaults offer active messengers only; browse filters keep the full list.
   const activeMessengers = useMemo(() => filterActiveMessengers(messengers), [messengers]);
   const [provinces, setProvinces] = useState<ProvinceRow[]>([]);
@@ -584,7 +585,7 @@ export default function RutasClient() {
       setOperativoTab(draft.operativoTab);
       setFecha(draft.fecha);
       setRouteProductFilter(draft.routeProductFilter ?? "ALL");
-      setMessengerId(restorableMessengerId(draft.messengerId, activeMessengers));
+      setMessengerId(draft.messengerId);
       setIdentifiers(draft.identifiers);
       setSelectedRouteId(draft.selectedRouteId);
       setSelectedRouteForLot(draft.selectedRouteForLot);
@@ -594,7 +595,7 @@ export default function RutasClient() {
       setScanStatus(draft.scanStatus);
       setScanComment(draft.scanComment);
       setShowNewLot(draft.showNewLot);
-      setLotMessengerId(restorableMessengerId(draft.lotMessengerId, activeMessengers));
+      setLotMessengerId(draft.lotMessengerId);
       setLotDestinationProvince(draft.lotDestinationProvince);
       setLotFechaEnvio(draft.lotFechaEnvio);
       setLotIdentifiers(draft.lotIdentifiers);
@@ -711,6 +712,7 @@ export default function RutasClient() {
     const json = await res.json();
     const list = json.messengers ?? [];
     setMessengers(list);
+    setMessengersLoaded(true);
     const activeList = filterActiveMessengers<Messenger>(list);
     if (!messengerId && activeList[0]) {
       setMessengerId(activeList[0].id);
@@ -795,6 +797,16 @@ export default function RutasClient() {
   useEffect(() => {
     void Promise.all([loadMessengers(), loadProvinces(), loadReturnReasons()]);
   }, []);
+
+  // Archived or missing ids (e.g. from a restored draft) are replaced only once the list is known.
+  useEffect(() => {
+    if (!messengersLoaded) return;
+    const nextMessengerId = reconcileMessengerId(messengerId, activeMessengers);
+    if (nextMessengerId !== messengerId) setMessengerId(nextMessengerId);
+    const nextLotMessengerId = reconcileMessengerId(lotMessengerId, activeMessengers);
+    if (nextLotMessengerId !== lotMessengerId) setLotMessengerId(nextLotMessengerId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [messengersLoaded, activeMessengers, messengerId, lotMessengerId]);
 
   useEffect(() => {
     setRoutePage(1);
