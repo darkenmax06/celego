@@ -15,6 +15,7 @@ import { countInactiveProvinceRows, loadInactiveProvinceNames } from "@/lib/inac
 import { recalculateAdditionalCardsForGroups } from "@/lib/card-additional";
 import { applyMessengerReassignment } from "@/lib/route-reassignment";
 import { applyCardTransition } from "@/lib/card-transition";
+import { assertMessengerActive } from "@/lib/messenger-lifecycle";
 
 async function getSlaDaysForRow(cedula: string, reference: string) {
   const config = await prisma.sLAConfig.upsert({
@@ -82,6 +83,7 @@ export async function batchUpdateCards(
   }
 
   await prisma.$transaction(async (tx) => {
+    if (changes.messengerId) await assertMessengerActive(tx, changes.messengerId);
     for (const card of cards) {
       const nextStatus = changes.status ?? card.status;
       const shouldUpdateStatus = nextStatus !== card.status;

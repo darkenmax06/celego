@@ -8,6 +8,7 @@ import {
   findOperationalCardCandidates,
   resolveOperationalIdentifier,
 } from "@/lib/operational-card-service";
+import { requireActiveMessenger } from "@/lib/messenger-lifecycle";
 import { prisma } from "@/lib/prisma";
 import { RETURN_REASON_REQUIRED, normalizeItemResult } from "@/lib/item-outcome";
 import {
@@ -161,6 +162,9 @@ export async function POST(request: Request) {
   if (!parsed.success) {
     return NextResponse.json({ error: "Payload invalido" }, { status: 400 });
   }
+
+  const guard = await requireActiveMessenger(prisma, parsed.data.messengerId);
+  if ("error" in guard) return guard.error;
 
   const identifiers = parsed.data.identifiers
     .map((identifier) => identifier.trim())

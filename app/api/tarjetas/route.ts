@@ -10,6 +10,11 @@ import { tarjetasListQuery } from "@/lib/list-query/descriptors/tarjetas";
 import { applyContactoEstado } from "@/lib/list-query/tarjetas-where";
 import { createManualCreditCard, ManualCardError, upsertCustomerPreservingData } from "@/lib/card-service";
 import { applyCardTransition, RETURN_REASON_REQUIRED } from "@/lib/card-transition";
+import {
+  archivedMessengerResponse,
+  assertMessengerActive,
+  MESSENGER_ARCHIVED,
+} from "@/lib/messenger-lifecycle";
 import { cardPhoneSearchOr } from "@/lib/customer-phone-search";
 
 const originSchema = z.enum(["TORRE_POPULAR", "CENTRO_ACOPIO"]);
@@ -176,6 +181,7 @@ export async function PATCH(request: Request) {
   let updated;
   try {
     updated = await prisma.$transaction(async (tx) => {
+      if (parsed.data.messengerId) await assertMessengerActive(tx, parsed.data.messengerId);
       await applyCardTransition({
         tx,
         card,
@@ -207,6 +213,9 @@ export async function PATCH(request: Request) {
       });
     });
   } catch (error) {
+    if (error instanceof Error && error.message === MESSENGER_ARCHIVED) {
+      return archivedMessengerResponse();
+    }
     if (error instanceof Error && error.message === RETURN_REASON_REQUIRED) {
       return NextResponse.json(
         { error: "Motivo de devolucion requerido para marcar tarjeta retornada/devuelta" },

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { requireApiSession } from "@/lib/api-session";
+import { requireActiveMessenger } from "@/lib/messenger-lifecycle";
 import { prisma } from "@/lib/prisma";
 import { LoanScheduleError, buildLoanSchedule, loanBalanceCents } from "@/lib/payroll/loan-schedule";
 import { rebalanceLoan } from "@/lib/payroll/payments";
@@ -55,8 +56,8 @@ export async function POST(request: Request) {
     throw error;
   }
 
-  const messenger = await prisma.messenger.findUnique({ where: { id: data.messengerId }, select: { id: true } });
-  if (!messenger) return NextResponse.json({ error: "Mensajero no encontrado" }, { status: 404 });
+  const guard = await requireActiveMessenger(prisma, data.messengerId);
+  if ("error" in guard) return guard.error;
 
   const loan = await prisma.loan.create({
     data: {
