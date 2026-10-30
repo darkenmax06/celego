@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { type UserRole } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { verifyMobileToken } from "@/lib/mobile-auth";
+import { MESSENGER_ARCHIVED_MESSAGE } from "@/lib/messenger-lifecycle";
 
 type MobileSessionUser = {
   id: string;
@@ -33,12 +34,21 @@ export async function requireMobileSession(request: NextRequest, roles?: UserRol
     return { error: NextResponse.json({ error: "Sin permisos" }, { status: 403 }) } as const;
   }
 
-  const user = await prisma.user.findUnique({
-    where: { id: payload.uid },
-    select: { id: true, email: true, name: true, role: true, active: true },
-  });
+  const [user, messenger] = await Promise.all([
+    prisma.user.findUnique({
+      where: { id: payload.uid },
+      select: { id: true, email: true, name: true, role: true, active: true },
+    }),
+    payload.messengerId
+      ? prisma.messenger.findUnique({ where: { id: payload.messengerId }, select: { activo: true } })
+      : Promise.resolve(null),
+  ]);
   if (!user || !user.active) {
     return { error: NextResponse.json({ error: "Usuario no activo" }, { status: 401 }) } as const;
+  }
+  // Only field messengers lose access; ADMIN/OPERADOR tokens may carry any messengerId.
+  if (user.role === "MENSAJERO" && payload.messengerId && !messenger?.activo) {
+    return { error: NextResponse.json({ error: MESSENGER_ARCHIVED_MESSAGE }, { status: 401 }) } as const;
   }
 
   const sessionUser: MobileSessionUser = {

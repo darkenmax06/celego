@@ -3,6 +3,7 @@ import { z } from "zod";
 import { requireApiSession } from "@/lib/api-session";
 import { toCardStatus } from "@/lib/card-status";
 import { batchUpdateCards } from "@/lib/card-service";
+import { archivedMessengerResponse, MESSENGER_ARCHIVED } from "@/lib/messenger-lifecycle";
 import { prisma } from "@/lib/prisma";
 import { ZONAS } from "@/lib/constants";
 
@@ -79,6 +80,9 @@ export async function POST(request: Request) {
 
     return NextResponse.json(result);
   } catch (error) {
+    if (error instanceof Error && error.message === MESSENGER_ARCHIVED) {
+      return archivedMessengerResponse();
+    }
     if (error instanceof Error && error.message === "RETURN_REASON_REQUIRED") {
       return NextResponse.json(
         { error: "Motivo de devolucion requerido para marcar tarjeta retornada/devuelta" },
