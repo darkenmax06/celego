@@ -3,11 +3,21 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { CardDetailModal } from "@/components/cards/card-detail-modal";
+import { DailyFlowChart } from "@/components/dashboard/daily-flow-chart";
+import { StatusDonutChart } from "@/components/dashboard/status-donut-chart";
 import { PageHeader } from "@/components/ui/page-header";
 import { Panel } from "@/components/ui/panel";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { notificationFailureMessage, notifyInBrowser } from "@/lib/browser-notifications";
 import { usePersistentState } from "@/lib/use-persistent-state";
+import type { DailyFlowPoint } from "@/lib/dashboard/daily-flow";
+import {
+  buildStatusSegments,
+  DELIVERED_STATUSES,
+  EN_ROUTE_STATUSES,
+  IN_POSSESSION_STATUSES,
+  RETURNED_STATUSES,
+} from "@/lib/dashboard/status-segments";
 
 type DashboardPayload = {
   range?: { from: string; to: string };
@@ -56,6 +66,7 @@ type DashboardPayload = {
     zona: string;
     customer: { nombre: string; cedula: string };
   }>;
+  dailyFlow: DailyFlowPoint[];
 };
 
 type UrgentNotification = {
@@ -80,6 +91,7 @@ const emptyData: DashboardPayload = {
   slaAlerts: [],
   recentActivity: [],
   contactadasPendientes: [],
+  dailyFlow: [],
 };
 
 const METRIC_STYLES = {
@@ -88,21 +100,21 @@ const METRIC_STYLES = {
     bar: "bg-blue-500",
     text: "text-blue-700",
     chip: "bg-blue-50",
-    query: { status: "DESPACHADA,ENVIADA_INTERIOR" },
+    query: { status: IN_POSSESSION_STATUSES.join(",") },
   },
   enRuta: {
     label: "En Ruta",
     bar: "bg-amber-500",
     text: "text-amber-700",
     chip: "bg-amber-50",
-    query: { status: "EN_RUTA" },
+    query: { status: EN_ROUTE_STATUSES.join(",") },
   },
   entregadas: {
     label: "Entregadas",
     bar: "bg-emerald-500",
     text: "text-emerald-700",
     chip: "bg-emerald-50",
-    query: { status: "ENTREGADA,ENTREGA_DIGITAL" },
+    query: { status: DELIVERED_STATUSES.join(",") },
   },
   urgentes: {
     label: "Urgentes",
@@ -116,7 +128,7 @@ const METRIC_STYLES = {
     bar: "bg-violet-500",
     text: "text-violet-700",
     chip: "bg-violet-50",
-    query: { status: "RETORNADA" },
+    query: { status: RETURNED_STATUSES.join(",") },
   },
 } as const;
 
@@ -224,6 +236,7 @@ export default function DashboardClient() {
 
   const rangeTotal = data.statusBreakdown.reduce((sum, row) => sum + row.count, 0) || 1;
   const zoneTotal = data.zoneBreakdown.reduce((sum, row) => sum + row.count, 0) || 1;
+  const statusSegments = buildStatusSegments(data.statusBreakdown);
 
   function goToTarjetas(extra: Record<string, string>) {
     const params = new URLSearchParams({ from, to, ...extra });
@@ -271,6 +284,24 @@ export default function DashboardClient() {
           {notificationIssue}
         </div>
       ) : null}
+
+      <div className="mb-5 grid gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(0,1.7fr)]">
+        <Panel title="Estados de las tarjetas" subtitle="Distribución del rango por grupo de estado">
+          <StatusDonutChart
+            segments={statusSegments}
+            loading={loading}
+            onSelect={(statuses) => {
+              if (statuses.length) goToTarjetas({ status: statuses.join(",") });
+            }}
+          />
+        </Panel>
+        <Panel
+          title="Flujo diario"
+          subtitle="Despachadas por fecha de despacho; contactadas, entregadas y retornadas por el día del contacto o del cambio de estado"
+        >
+          <DailyFlowChart points={data.dailyFlow ?? []} loading={loading} />
+        </Panel>
+      </div>
 
       <div className="mb-5 grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
         <MetricCard

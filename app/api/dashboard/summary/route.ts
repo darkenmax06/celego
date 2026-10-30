@@ -3,7 +3,14 @@ import { CardStatus } from "@prisma/client";
 import { requireApiSession } from "@/lib/api-session";
 import { prisma } from "@/lib/prisma";
 import { remainingBusinessDays } from "@/lib/sla";
-import { DEBIT_RETURN_STATUSES } from "@/lib/debit-status";
+import { loadDailyFlow } from "@/lib/dashboard/daily-flow";
+import {
+  DELIVERED_STATUSES,
+  EN_ROUTE_STATUSES,
+  IN_POSSESSION_STATUSES,
+  RETURNED_STATUSES,
+  sumStatuses,
+} from "@/lib/dashboard/status-segments";
 import { SLA_CLOSED_STATUSES } from "@/lib/list-query/descriptors/sla-vencidas";
 import {
   clampUrgencyLevel,
@@ -34,22 +41,6 @@ function parseDateRange(fromRaw: string | null, toRaw: string | null) {
   return { start: end, end: start };
 }
 
-// Credit and debit (TD-*) statuses that close the cycle as a delivery.
-const DELIVERED_STATUSES: CardStatus[] = [
-  CardStatus.ENTREGADA,
-  CardStatus.ENTREGA_DIGITAL,
-  CardStatus.ENTREGA_SIN_CONTRATO,
-  CardStatus.ENTREGA_DIGITAL_SIN_CONTRATO,
-  CardStatus.TD_ENTREGADO,
-];
-
-// Credit and debit (TD-*) statuses that close the cycle as a return.
-const RETURNED_STATUSES: CardStatus[] = [CardStatus.RETORNADA, ...DEBIT_RETURN_STATUSES];
-
-function sumStatuses(statusMap: Record<string, number>, statuses: CardStatus[]) {
-  return statuses.reduce((total, status) => total + (statusMap[status] ?? 0), 0);
-}
-
 function dateKey(value: Date) {
   return value.toISOString().slice(0, 10);
 }
@@ -71,7 +62,7 @@ export async function GET(request: Request) {
 
   const dispatchRange = { gte: start, lte: end };
 
-  const [statusGroups, activeUrgentCasesRaw, urgentTotal, recentLogs, cardsWithSla, nonDeliveredCards] = await Promise.all([
+  const [statusGroups, activeUrgentCasesRaw, urgentTotal, recentLogs, cardsWithSla, nonDeliveredCards, dailyFlow] = await Promise.all([
     prisma.card.groupBy({
       where: {
         dispatchDate: dispatchRange,
@@ -143,6 +134,7 @@ export async function GET(request: Request) {
       take: 1200,
       orderBy: { updatedAt: "desc" },
     }),
+    loadDailyFlow({ fromKey: dateKey(start), toKey: dateKey(end) }),
   ]);
 
   const statusMap = Object.fromEntries(
@@ -244,10 +236,8 @@ export async function GET(request: Request) {
     },
     statusBreakdown,
     metrics: {
-      enPosesion:
-        (statusMap.DESPACHADA ?? 0) +
-        (statusMap.ENVIADA_INTERIOR ?? 0),
-      enRuta: statusMap.EN_RUTA ?? 0,
+      enPosesion: sumStatuses(statusMap, IN_POSSESSION_STATUSES),
+      enRuta: sumStatuses(statusMap, EN_ROUTE_STATUSES),
       entregadas: sumStatuses(statusMap, DELIVERED_STATUSES),
       urgentes: urgentTotal,
       retornadas: sumStatuses(statusMap, RETURNED_STATUSES),
@@ -264,5 +254,6 @@ export async function GET(request: Request) {
       },
     })),
     contactadasPendientes,
+    dailyFlow,
   });
 }
