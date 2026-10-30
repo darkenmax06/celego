@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { requireApiSession } from "@/lib/api-session";
 import { prisma } from "@/lib/prisma";
+import { cardPhoneSearchOr } from "@/lib/customer-phone-search";
 import {
   buildOffFilterMatchWhere,
   compileOffFilterWhere,
@@ -48,7 +49,7 @@ export async function POST(request: Request) {
 
   let where;
   try {
-    where = compileOffFilterWhere(resource, new URLSearchParams(filters));
+    where = compileOffFilterWhere(resource, new URLSearchParams(filters), await cardPhoneSearchOr(new URLSearchParams(filters).get("q")));
   } catch (error) {
     if (error instanceof ListQueryValidationError) {
       return NextResponse.json({ error: error.message }, { status: 400 });

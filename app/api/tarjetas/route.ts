@@ -10,6 +10,7 @@ import { tarjetasListQuery } from "@/lib/list-query/descriptors/tarjetas";
 import { applyContactoEstado } from "@/lib/list-query/tarjetas-where";
 import { createManualCreditCard, ManualCardError, upsertCustomerPreservingData } from "@/lib/card-service";
 import { applyCardTransition, RETURN_REASON_REQUIRED } from "@/lib/card-transition";
+import { cardPhoneSearchOr } from "@/lib/customer-phone-search";
 
 const originSchema = z.enum(["TORRE_POPULAR", "CENTRO_ACOPIO"]);
 
@@ -60,7 +61,9 @@ export async function GET(request: NextRequest) {
   // reproduce this route's historical behaviour exactly — see the descriptor.
   let query;
   try {
-    query = compile(tarjetasListQuery, request.nextUrl.searchParams);
+    query = compile(tarjetasListQuery, request.nextUrl.searchParams, {
+      searchOr: await cardPhoneSearchOr(request.nextUrl.searchParams.get("q")),
+    });
   } catch (error) {
     if (error instanceof ListQueryValidationError) {
       return NextResponse.json({ error: error.message }, { status: 400 });

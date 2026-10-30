@@ -19,6 +19,8 @@ export type SlaFilters = {
   zona?: string;
   status?: CardStatus;
   q?: string;
+  /** Customer phone match for `q`, from `cardPhoneSearchClause` (async, so callers resolve it). */
+  phoneClause?: Prisma.CardWhereInput | null;
 };
 
 /**
@@ -53,6 +55,7 @@ export function slaWhere(filters: SlaFilters): Prisma.CardWhereInput {
             { externalReference: { contains: q, mode: "insensitive" } },
             { customer: { cedula: { contains: q, mode: "insensitive" } } },
             { customer: { nombre: { contains: q, mode: "insensitive" } } },
+            ...(filters.phoneClause ? [filters.phoneClause] : []),
           ],
         }
       : {}),

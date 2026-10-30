@@ -60,17 +60,18 @@ export function getOffFilterCountSecurity(
 export function compileOffFilterWhere(
   resource: string,
   params: URLSearchParams,
+  /** Same `searchOr` the list route passed, so the predicate cannot drift from the list. */
+  searchOr: readonly Prisma.CardWhereInput[] = [],
 ): Prisma.CardWhereInput {
   const security = RESOURCE_SECURITY[resource];
   if (!security) throw new Error(`Unknown off-filter-count resource: ${resource}`);
 
   const descriptor = getListQueryDescriptor(resource);
   const baseConstraint = security.baseWhere?.();
-  const compiled = compile(
-    descriptor,
-    params,
-    baseConstraint ? { andPrefix: [baseConstraint] } : {},
-  );
+  const compiled = compile(descriptor, params, {
+    ...(baseConstraint ? { andPrefix: [baseConstraint] } : {}),
+    ...(searchOr.length ? { searchOr } : {}),
+  });
 
   return applyContactoEstado(compiled.where as Prisma.CardWhereInput, params);
 }
