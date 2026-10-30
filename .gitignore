@@ -53,3 +53,4 @@ next-env.d.ts
 
 # Production dumps (never commit real card data)
 tmp/dumps/
+output/historico-masivas/
