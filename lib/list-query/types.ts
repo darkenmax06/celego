@@ -316,6 +316,11 @@ export type CompileOptions<TWhere> = {
   readonly andPrefix?: readonly TWhere[];
   /** Mandatory clauses emitted AFTER the compiled ones. */
   readonly andSuffix?: readonly TWhere[];
+  /**
+   * Extra alternatives OR-ed into the free-text search when `q` is present,
+   * for matches a plain `contains` cannot express (customer phones by digits).
+   */
+  readonly searchOr?: readonly TWhere[];
 };
 
 /** Anything with URLSearchParams-compatible reads. */

@@ -3,6 +3,7 @@ import { CardProductType, CardStatus } from "@prisma/client";
 import { z } from "zod";
 import { requireApiSession } from "@/lib/api-session";
 import { prisma } from "@/lib/prisma";
+import { cardPhoneSearchClause } from "@/lib/customer-phone-search";
 import { writeAuditEvent } from "@/lib/audit";
 import { exportRowsToCsv, exportRowsToPdf, exportRowsToXlsx } from "@/lib/reports/export";
 import { dateRangesToParams } from "@/lib/date-range-params";
@@ -53,6 +54,7 @@ export async function POST(request: Request) {
     productType: input.productType,
     messengerId: input.messengerId !== "ALL" ? input.messengerId : undefined,
     provincia: input.provincia || undefined, zona: input.zona || undefined, status: input.status, q: input.q || undefined,
+    phoneClause: await cardPhoneSearchClause(input.q),
   };
   let dateClauses;
   try {

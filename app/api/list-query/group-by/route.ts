@@ -6,6 +6,7 @@ import { getListQueryDescriptor } from "@/lib/list-query/registry";
 import { RESOURCE_SECURITY } from "@/lib/list-query/security";
 import { CARD_GROUP_NONE_TOKEN } from "@/lib/list-query/card-group-where";
 import { compileOffFilterWhere } from "@/lib/list-query/off-filter-count";
+import { cardPhoneSearchOr } from "@/lib/customer-phone-search";
 
 /**
  * SDD card-groups — Stage C, Task C2.
@@ -170,7 +171,7 @@ export async function GET(request: NextRequest) {
 async function groupByCardGroup(resource: string, params: URLSearchParams) {
   let cardWhere;
   try {
-    cardWhere = compileOffFilterWhere(resource, params);
+    cardWhere = compileOffFilterWhere(resource, params, await cardPhoneSearchOr(params.get("q")));
   } catch (error) {
     if (error instanceof ListQueryValidationError) {
       return NextResponse.json({ error: error.message }, { status: 400 });

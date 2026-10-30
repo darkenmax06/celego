@@ -3,6 +3,7 @@ import { CardStatus } from "@prisma/client";
 import { z } from "zod";
 import { requireApiSession } from "@/lib/api-session";
 import { prisma } from "@/lib/prisma";
+import { cardPhoneSearchClause } from "@/lib/customer-phone-search";
 import { applyCardTransition } from "@/lib/card-transition";
 import { ListQueryValidationError } from "@/lib/list-query";
 import { compileCardDateRangeWhere } from "@/lib/list-query/card-date-range";
@@ -29,6 +30,7 @@ export async function GET(request: NextRequest) {
 
   const statusParam = request.nextUrl.searchParams.get("status");
   const searchParam = request.nextUrl.searchParams.get("search")?.trim();
+  const phoneClause = await cardPhoneSearchClause(searchParam);
 
   const statuses =
     statusParam && (PENDING_STATUSES as readonly string[]).includes(statusParam)
@@ -57,6 +59,7 @@ export async function GET(request: NextRequest) {
               { tc: { contains: searchParam, mode: "insensitive" } },
               { customer: { nombre: { contains: searchParam, mode: "insensitive" } } },
               { customer: { cedula: { contains: searchParam, mode: "insensitive" } } },
+              ...(phoneClause ? [phoneClause] : []),
             ],
           }
         : {}),
