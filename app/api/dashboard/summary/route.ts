@@ -3,6 +3,7 @@ import { CardStatus } from "@prisma/client";
 import { requireApiSession } from "@/lib/api-session";
 import { prisma } from "@/lib/prisma";
 import { remainingBusinessDays } from "@/lib/sla";
+import { DEBIT_RETURN_STATUSES } from "@/lib/debit-status";
 import { SLA_CLOSED_STATUSES } from "@/lib/list-query/descriptors/sla-vencidas";
 import {
   clampUrgencyLevel,
@@ -31,6 +32,22 @@ function parseDateRange(fromRaw: string | null, toRaw: string | null) {
     return { start, end };
   }
   return { start: end, end: start };
+}
+
+// Credit and debit (TD-*) statuses that close the cycle as a delivery.
+const DELIVERED_STATUSES: CardStatus[] = [
+  CardStatus.ENTREGADA,
+  CardStatus.ENTREGA_DIGITAL,
+  CardStatus.ENTREGA_SIN_CONTRATO,
+  CardStatus.ENTREGA_DIGITAL_SIN_CONTRATO,
+  CardStatus.TD_ENTREGADO,
+];
+
+// Credit and debit (TD-*) statuses that close the cycle as a return.
+const RETURNED_STATUSES: CardStatus[] = [CardStatus.RETORNADA, ...DEBIT_RETURN_STATUSES];
+
+function sumStatuses(statusMap: Record<string, number>, statuses: CardStatus[]) {
+  return statuses.reduce((total, status) => total + (statusMap[status] ?? 0), 0);
 }
 
 function dateKey(value: Date) {
@@ -231,9 +248,9 @@ export async function GET(request: Request) {
         (statusMap.DESPACHADA ?? 0) +
         (statusMap.ENVIADA_INTERIOR ?? 0),
       enRuta: statusMap.EN_RUTA ?? 0,
-      entregadas: (statusMap.ENTREGADA ?? 0) + (statusMap.ENTREGA_DIGITAL ?? 0),
+      entregadas: sumStatuses(statusMap, DELIVERED_STATUSES),
       urgentes: urgentTotal,
-      retornadas: statusMap.RETORNADA ?? 0,
+      retornadas: sumStatuses(statusMap, RETURNED_STATUSES),
     },
     urgentes: activeUrgentCases,
     slaAlerts,
