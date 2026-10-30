@@ -225,7 +225,10 @@ export function compile<TWhere>(
     const fields = allowed && allowed.length > 0 ? allowed : descriptor.searchFields;
 
     searchClause = {
-      OR: fields.map((field) => nest(field, { contains: q, mode: "insensitive" })),
+      OR: [
+        ...fields.map((field) => nest(field, { contains: q, mode: "insensitive" })),
+        ...((options.searchOr ?? []) as readonly Record<string, unknown>[]),
+      ],
     };
   }
 

@@ -3,6 +3,7 @@ import { CardProductType, CardStatus, Prisma, SLAExtensionRequestStatus } from "
 import { z } from "zod";
 import { requireApiSession } from "@/lib/api-session";
 import { prisma } from "@/lib/prisma";
+import { cardPhoneSearchClause } from "@/lib/customer-phone-search";
 import { addBusinessDaysStrict } from "@/lib/sla";
 import { resolveZone } from "@/lib/zone-map";
 import { buildListEnvelope, compile, ListQueryValidationError } from "@/lib/list-query";
@@ -119,6 +120,7 @@ export async function GET(request: NextRequest) {
     null;
   const urgentParam = request.nextUrl.searchParams.get("urgent");
   const q = request.nextUrl.searchParams.get("q")?.trim();
+  const phoneClause = await cardPhoneSearchClause(q);
   const daysRaw = Number(request.nextUrl.searchParams.get("days") ?? 3);
   const days = Number.isFinite(daysRaw) ? Math.min(10, Math.max(1, Math.trunc(daysRaw))) : 3;
   const { page, pageSize } = compile(operativoContactoListQuery, request.nextUrl.searchParams);
@@ -204,6 +206,7 @@ export async function GET(request: NextRequest) {
           { externalReference: { contains: q, mode: "insensitive" } },
           { customer: { cedula: { contains: q, mode: "insensitive" } } },
           { customer: { nombre: { contains: q, mode: "insensitive" } } },
+          ...(phoneClause ? [phoneClause] : []),
         ],
       });
     }
@@ -322,6 +325,7 @@ export async function GET(request: NextRequest) {
                 { externalReference: { contains: q, mode: "insensitive" } },
                 { customer: { cedula: { contains: q, mode: "insensitive" } } },
                 { customer: { nombre: { contains: q, mode: "insensitive" } } },
+                ...(phoneClause ? [phoneClause] : []),
               ],
             }
           : {},
@@ -433,6 +437,7 @@ export async function GET(request: NextRequest) {
                 { externalReference: { contains: q, mode: "insensitive" } },
                 { customer: { cedula: { contains: q, mode: "insensitive" } } },
                 { customer: { nombre: { contains: q, mode: "insensitive" } } },
+                ...(phoneClause ? [phoneClause] : []),
               ],
             } as Prisma.CardWhereInput,
           ]
