@@ -4,6 +4,7 @@ import { requireApiSession } from "@/lib/api-session";
 import { remainingBusinessDays } from "@/lib/sla";
 import { prisma } from "@/lib/prisma";
 import { buildListEnvelope, compile, ListQueryValidationError } from "@/lib/list-query";
+import { cardPhoneSearchOr } from "@/lib/customer-phone-search";
 import {
   slaVencidasListQuery,
   SLA_CLOSED_STATUSES,
@@ -32,6 +33,7 @@ export async function GET(request: NextRequest) {
   try {
     compiled = compile(slaVencidasListQuery, request.nextUrl.searchParams, {
       andPrefix: [baseConstraint],
+      searchOr: await cardPhoneSearchOr(request.nextUrl.searchParams.get("q")),
     });
   } catch (error) {
     if (error instanceof ListQueryValidationError) {

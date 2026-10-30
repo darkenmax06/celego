@@ -3,6 +3,7 @@ import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { requireApiSession } from "@/lib/api-session";
 import { prisma } from "@/lib/prisma";
+import { cardPhoneSearchClause } from "@/lib/customer-phone-search";
 import { buildListEnvelope } from "@/lib/list-query";
 import { CALL_ASSIGNMENT_SELECT } from "@/lib/call-assignment";
 import { mapCardToOperativeRow } from "@/lib/operativo-row";
@@ -39,6 +40,7 @@ export async function GET(request: NextRequest) {
   const assignedToParam = params.get("assignedToId")?.trim();
   const assignedToId = mine ? auth.session.user.id : assignedToParam || undefined;
   const q = params.get("q")?.trim();
+  const phoneClause = await cardPhoneSearchClause(q);
   const page = parsePositiveInt(params.get("page"), 1, 100000);
   const pageSize = parsePositiveInt(params.get("pageSize"), 50, 200);
 
@@ -54,6 +56,7 @@ export async function GET(request: NextRequest) {
               { externalReference: { contains: q, mode: "insensitive" } },
               { customer: { cedula: { contains: q, mode: "insensitive" } } },
               { customer: { nombre: { contains: q, mode: "insensitive" } } },
+              ...(phoneClause ? [phoneClause] : []),
             ],
           }
         : {},

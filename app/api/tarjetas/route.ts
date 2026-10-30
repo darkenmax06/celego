@@ -15,6 +15,7 @@ import {
   assertMessengerActive,
   MESSENGER_ARCHIVED,
 } from "@/lib/messenger-lifecycle";
+import { cardPhoneSearchOr } from "@/lib/customer-phone-search";
 
 const originSchema = z.enum(["TORRE_POPULAR", "CENTRO_ACOPIO"]);
 
@@ -65,7 +66,9 @@ export async function GET(request: NextRequest) {
   // reproduce this route's historical behaviour exactly — see the descriptor.
   let query;
   try {
-    query = compile(tarjetasListQuery, request.nextUrl.searchParams);
+    query = compile(tarjetasListQuery, request.nextUrl.searchParams, {
+      searchOr: await cardPhoneSearchOr(request.nextUrl.searchParams.get("q")),
+    });
   } catch (error) {
     if (error instanceof ListQueryValidationError) {
       return NextResponse.json({ error: error.message }, { status: 400 });
