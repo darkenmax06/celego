@@ -4,6 +4,7 @@ import { requireApiSession } from "@/lib/api-session";
 import { prisma } from "@/lib/prisma";
 import { remainingBusinessDays } from "@/lib/sla";
 import { loadDailyFlow } from "@/lib/dashboard/daily-flow";
+import { buildZoneBreakdown, parseDashboardProductType, productTypeWhere } from "@/lib/dashboard/filters";
 import {
   DELIVERED_STATUSES,
   EN_ROUTE_STATUSES,
@@ -60,20 +61,29 @@ export async function GET(request: Request) {
     url.searchParams.get("to"),
   );
 
+  const productType = parseDashboardProductType(url.searchParams.get("productType"));
+  const productFilter = productTypeWhere(productType);
   const dispatchRange = { gte: start, lte: end };
+  const rangeWhere = { dispatchDate: dispatchRange, ...productFilter };
+  // Urgent cases are not range-bound; only the product filter narrows them.
+  const urgentCardFilter = productType === "ALL" ? {} : { card: productFilter };
 
-  const [statusGroups, activeUrgentCasesRaw, urgentTotal, recentLogs, cardsWithSla, nonDeliveredCards, dailyFlow] = await Promise.all([
+  const [statusGroups, zoneGroups, activeUrgentCasesRaw, urgentTotal, recentLogs, cardsWithSla, contactedCards, dailyFlow] = await Promise.all([
     prisma.card.groupBy({
-      where: {
-        dispatchDate: dispatchRange,
-      },
+      where: rangeWhere,
       by: ["status"],
+      _count: { _all: true },
+    }),
+    prisma.card.groupBy({
+      where: rangeWhere,
+      by: ["zona"],
       _count: { _all: true },
     }),
     prisma.urgentCase.findMany({
       where: {
         resolvedAt: null,
         cardId: { not: null },
+        ...urgentCardFilter,
       },
       include: {
         card: {
@@ -86,11 +96,12 @@ export async function GET(request: Request) {
     prisma.urgentCase.count({
       where: {
         resolvedAt: null,
+        ...urgentCardFilter,
       },
     }),
     prisma.cardStatusLog.findMany({
       where: {
-        card: { dispatchDate: dispatchRange },
+        card: rangeWhere,
       },
       orderBy: { createdAt: "desc" },
       take: 10,
@@ -105,7 +116,7 @@ export async function GET(request: Request) {
           notIn: [...SLA_CLOSED_STATUSES],
         },
         slaDueDate: { not: null },
-        dispatchDate: dispatchRange,
+        ...rangeWhere,
       },
       select: {
         id: true,
@@ -118,7 +129,8 @@ export async function GET(request: Request) {
     prisma.card.findMany({
       where: {
         status: { notIn: [CardStatus.ENTREGADA, CardStatus.TD_ENTREGADO] },
-        dispatchDate: dispatchRange,
+        metadata: { path: ["operativo", "contactado"], equals: true },
+        ...rangeWhere,
       },
       select: {
         id: true,
@@ -126,15 +138,14 @@ export async function GET(request: Request) {
         status: true,
         provincia: true,
         zona: true,
-        metadata: true,
         customer: {
           select: { nombre: true, cedula: true },
         },
       },
-      take: 1200,
+      take: 12,
       orderBy: { updatedAt: "desc" },
     }),
-    loadDailyFlow({ fromKey: dateKey(start), toKey: dateKey(end) }),
+    loadDailyFlow({ fromKey: dateKey(start), toKey: dateKey(end), productType }),
   ]);
 
   const statusMap = Object.fromEntries(
@@ -188,52 +199,25 @@ export async function GET(request: Request) {
     .sort((a, b) => (a.remaining ?? 99) - (b.remaining ?? 99))
     .slice(0, 10);
 
-  const activeZoneStatuses = new Set<CardStatus>([
-    CardStatus.ENTREGADA,
-    CardStatus.RETORNADA,
-    CardStatus.ENTREGA_DIGITAL,
-    CardStatus.ACUSE_RECIBIDO,
-    CardStatus.DEVUELTA_TIENDA,
-  ]);
-  const zoneCounts = new Map<string, number>();
-  for (const card of nonDeliveredCards) {
-    if (activeZoneStatuses.has(card.status)) continue;
-    const zona = card.zona || "Sin zona";
-    zoneCounts.set(zona, (zoneCounts.get(zona) ?? 0) + 1);
-  }
-  const zoneBreakdown = Array.from(zoneCounts.entries())
-    .map(([zona, count]) => ({ zona, count }))
-    .sort((a, b) => b.count - a.count);
+  const zoneBreakdown = buildZoneBreakdown(
+    zoneGroups.map((entry) => ({ zona: entry.zona, count: entry._count._all })),
+  );
 
-  const contactadasPendientes = nonDeliveredCards
-    .filter((card) => {
-      const root =
-        card.metadata && typeof card.metadata === "object" && !Array.isArray(card.metadata)
-          ? (card.metadata as Record<string, unknown>)
-          : null;
-      const operativo =
-        root?.operativo &&
-        typeof root.operativo === "object" &&
-        !Array.isArray(root.operativo)
-          ? (root.operativo as Record<string, unknown>)
-          : null;
-      return Boolean(operativo?.contactado);
-    })
-    .slice(0, 12)
-    .map((card) => ({
-      id: card.id,
-      tc: card.tc,
-      status: card.status,
-      provincia: card.provincia,
-      zona: card.zona,
-      customer: card.customer,
-    }));
+  const contactadasPendientes = contactedCards.map((card) => ({
+    id: card.id,
+    tc: card.tc,
+    status: card.status,
+    provincia: card.provincia,
+    zona: card.zona,
+    customer: card.customer,
+  }));
 
   return NextResponse.json({
     range: {
       from: dateKey(start),
       to: dateKey(end),
     },
+    productType,
     statusBreakdown,
     metrics: {
       enPosesion: sumStatuses(statusMap, IN_POSSESSION_STATUSES),

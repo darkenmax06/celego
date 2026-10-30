@@ -1,5 +1,6 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
+import type { DashboardProductType } from "@/lib/dashboard/filters";
 import { DELIVERED_STATUSES, RETURNED_STATUSES } from "@/lib/dashboard/status-segments";
 
 export type DailyFlowPoint = {
@@ -52,9 +53,10 @@ export function fillDailyFlow(fromKey: string, toKey: string, rows: DailyFlowRow
 /**
  * Daily dispatched, contacted, delivered and returned cards. Dispatches count by
  * dispatch date; the rest count distinct cards by the local day the contact or
- * status change happened. Timestamps are stored as UTC without a zone.
+ * status change happened. Timestamps are stored as UTC without a zone. A
+ * product type other than ALL keeps only that product's cards.
  */
-export async function loadDailyFlow(range: { fromKey: string; toKey: string }) {
+export async function loadDailyFlow(range: { fromKey: string; toKey: string; productType?: DashboardProductType }) {
   const fromKey = cappedFromKey(range.fromKey, range.toKey);
   // Loose UTC bounds keep the indexes usable; the local-day filter below is the exact one.
   const start = new Date(keyToUtc(fromKey) - DAY_MS);
@@ -62,33 +64,43 @@ export async function loadDailyFlow(range: { fromKey: string; toKey: string }) {
   const localDay = (column: Prisma.Sql) => Prisma.sql`(${column} AT TIME ZONE 'UTC' AT TIME ZONE ${TIME_ZONE})::date`;
   const inLocalRange = (column: Prisma.Sql) =>
     Prisma.sql`${localDay(column)} BETWEEN ${fromKey}::date AND ${range.toKey}::date`;
+  const productType = range.productType && range.productType !== "ALL" ? range.productType : null;
+  const productOf = (alias: Prisma.Sql) =>
+    productType ? Prisma.sql`AND ${alias}."productType"::text = ${productType}` : Prisma.empty;
 
   const rows = await prisma.$queryRaw<Array<{ date: Date | string; series: DailyFlowRow["series"]; count: bigint | number }>>(Prisma.sql`
     SELECT ${localDay(Prisma.sql`c."dispatchDate"`)} AS date, 'despachadas' AS series, COUNT(*) AS count
       FROM "Card" c
      WHERE c."dispatchDate" BETWEEN ${start} AND ${end}
        AND ${inLocalRange(Prisma.sql`c."dispatchDate"`)}
+       ${productOf(Prisma.sql`c`)}
      GROUP BY 1
     UNION ALL
     SELECT ${localDay(Prisma.sql`l."createdAt"`)}, 'contactadas', COUNT(DISTINCT l."cardId")
       FROM "ContactLog" l
+      JOIN "Card" c ON c.id = l."cardId"
      WHERE l.contactado = true
        AND l."createdAt" BETWEEN ${start} AND ${end}
        AND ${inLocalRange(Prisma.sql`l."createdAt"`)}
+       ${productOf(Prisma.sql`c`)}
      GROUP BY 1
     UNION ALL
     SELECT ${localDay(Prisma.sql`s."createdAt"`)}, 'entregadas', COUNT(DISTINCT s."cardId")
       FROM "CardStatusLog" s
+      JOIN "Card" c ON c.id = s."cardId"
      WHERE s."toStatus"::text IN (${Prisma.join([...DELIVERED_STATUSES])})
        AND s."createdAt" BETWEEN ${start} AND ${end}
        AND ${inLocalRange(Prisma.sql`s."createdAt"`)}
+       ${productOf(Prisma.sql`c`)}
      GROUP BY 1
     UNION ALL
     SELECT ${localDay(Prisma.sql`s."createdAt"`)}, 'retornadas', COUNT(DISTINCT s."cardId")
       FROM "CardStatusLog" s
+      JOIN "Card" c ON c.id = s."cardId"
      WHERE s."toStatus"::text IN (${Prisma.join([...RETURNED_STATUSES])})
        AND s."createdAt" BETWEEN ${start} AND ${end}
        AND ${inLocalRange(Prisma.sql`s."createdAt"`)}
+       ${productOf(Prisma.sql`c`)}
      GROUP BY 1
   `);
 

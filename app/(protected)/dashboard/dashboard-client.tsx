@@ -11,6 +11,7 @@ import { StatusBadge } from "@/components/ui/status-badge";
 import { notificationFailureMessage, notifyInBrowser } from "@/lib/browser-notifications";
 import { usePersistentState } from "@/lib/use-persistent-state";
 import type { DailyFlowPoint } from "@/lib/dashboard/daily-flow";
+import { parseDashboardProductType, type DashboardProductType } from "@/lib/dashboard/filters";
 import {
   buildStatusSegments,
   DELIVERED_STATUSES,
@@ -21,6 +22,7 @@ import {
 
 type DashboardPayload = {
   range?: { from: string; to: string };
+  productType?: DashboardProductType;
   statusBreakdown: Array<{ status: string; count: number }>;
   metrics: {
     enPosesion: number;
@@ -179,12 +181,15 @@ export default function DashboardClient() {
   );
   const [from, setFrom] = usePersistentState("dashboard:from", defaults.from);
   const [to, setTo] = usePersistentState("dashboard:to", defaults.to);
+  const [productTypeRaw, setProductType] = usePersistentState<string>("dashboard:productType", "ALL");
+  const productType = parseDashboardProductType(productTypeRaw);
   const [urgentNotifications, setUrgentNotifications] = useState<UrgentNotification[]>([]);
   const [notificationIssue, setNotificationIssue] = useState("");
   const seenNotificationKeys = useRef(new Set<string>());
 
-  async function loadSummary(fromDate = from, toDate = to) {
+  async function loadSummary(fromDate = from, toDate = to, product: DashboardProductType = productType) {
     const params = new URLSearchParams({ from: fromDate, to: toDate });
+    if (product !== "ALL") params.set("productType", product);
     const res = await fetch(`/api/dashboard/summary?${params.toString()}`, { cache: "no-store" });
     const json = (await res.json()) as DashboardPayload;
     setData(json);
@@ -192,8 +197,8 @@ export default function DashboardClient() {
   }
 
   useEffect(() => {
-    void loadSummary(from, to);
-  }, [from, to]);
+    void loadSummary(from, to, productType);
+  }, [from, to, productType]);
 
   useEffect(() => {
     let mounted = true;
@@ -239,7 +244,7 @@ export default function DashboardClient() {
   const statusSegments = buildStatusSegments(data.statusBreakdown);
 
   function goToTarjetas(extra: Record<string, string>) {
-    const params = new URLSearchParams({ from, to, ...extra });
+    const params = new URLSearchParams({ from, to, ...(productType === "ALL" ? {} : { productType }), ...extra });
     router.push(`/tarjetas?${params.toString()}`);
   }
 
@@ -250,6 +255,18 @@ export default function DashboardClient() {
         subtitle="Resumen operativo de tarjetas despachadas en el rango seleccionado"
         actions={
           <div className="flex flex-wrap items-end gap-2">
+            <label className="text-xs font-medium text-slate-500">
+              Tipo
+              <select
+                value={productType}
+                onChange={(event) => setProductType(event.target.value)}
+                className="mt-1 block rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-sm"
+              >
+                <option value="ALL">Ambos</option>
+                <option value="CREDITO">Crédito</option>
+                <option value="DEBITO">Débito</option>
+              </select>
+            </label>
             <label className="text-xs font-medium text-slate-500">
               Desde
               <input
@@ -270,7 +287,7 @@ export default function DashboardClient() {
             </label>
             <button
               type="button"
-              onClick={() => void loadSummary(from, to)}
+              onClick={() => void loadSummary(from, to, productType)}
               className="rounded-lg bg-blue-600 px-3.5 py-2 text-sm font-medium text-white transition hover:bg-blue-700"
             >
               Actualizar
@@ -475,18 +492,23 @@ export default function DashboardClient() {
         </div>
 
         <div className="flex flex-col gap-5">
-          <Panel title="Tarjetas por zona" subtitle="Distribución de tarjetas activas">
+          <Panel title="Tarjetas por zona" subtitle="Tarjetas despachadas en el rango por zona">
             <div className="flex flex-col gap-3">
               {data.zoneBreakdown.map((zone, index) => (
                 <button
                   key={zone.zona}
                   type="button"
-                  onClick={() => goToTarjetas({ zona: zone.zona })}
+                  onClick={() => {
+                    if (zone.zona !== "Sin zona") goToTarjetas({ zona: zone.zona });
+                  }}
                   className="flex flex-col gap-1 rounded-lg p-1 text-left transition hover:bg-slate-50"
                 >
                   <div className="flex items-center justify-between text-sm">
                     <span className="font-medium text-slate-700">{zone.zona}</span>
-                    <span className="font-display font-bold text-slate-900">{zone.count}</span>
+                    <span className="flex items-baseline gap-2">
+                      <span className="text-xs text-slate-500">{((zone.count / zoneTotal) * 100).toFixed(1)}%</span>
+                      <span className="font-display font-bold text-slate-900">{zone.count.toLocaleString("es-DO")}</span>
+                    </span>
                   </div>
                   <div className="h-1.5 overflow-hidden rounded-full bg-slate-100">
                     <div
@@ -578,7 +600,7 @@ export default function DashboardClient() {
           cardId={selectedCardId}
           onClose={() => setSelectedCardId(null)}
           onUpdated={() => {
-            void loadSummary(from, to);
+            void loadSummary(from, to, productType);
           }}
         />
       ) : null}

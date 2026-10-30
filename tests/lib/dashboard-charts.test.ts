@@ -10,6 +10,7 @@ import {
   buildStatusSegments,
   sumStatuses,
 } from "@/lib/dashboard/status-segments";
+import { buildZoneBreakdown, parseDashboardProductType, productTypeWhere } from "@/lib/dashboard/filters";
 
 describe("fillDailyFlow", () => {
   it("returns one zero-filled point per day in order", () => {
@@ -92,5 +93,47 @@ describe("buildStatusSegments", () => {
 
   it("keeps the returned list in sync with the debit return statuses", () => {
     expect(RETURNED_STATUSES.slice(1)).toEqual([...DEBIT_RETURN_STATUSES]);
+  });
+});
+
+describe("parseDashboardProductType", () => {
+  it("accepts the two product types in any case", () => {
+    expect(parseDashboardProductType("CREDITO")).toBe("CREDITO");
+    expect(parseDashboardProductType(" debito ")).toBe("DEBITO");
+  });
+
+  it("falls back to ALL for missing or unknown values", () => {
+    expect(parseDashboardProductType(null)).toBe("ALL");
+    expect(parseDashboardProductType("")).toBe("ALL");
+    expect(parseDashboardProductType("ALL")).toBe("ALL");
+    expect(parseDashboardProductType("PREPAGO")).toBe("ALL");
+  });
+
+  it("builds no where clause for ALL and a product clause otherwise", () => {
+    expect(productTypeWhere("ALL")).toEqual({});
+    expect(productTypeWhere("DEBITO")).toEqual({ productType: "DEBITO" });
+  });
+});
+
+describe("buildZoneBreakdown", () => {
+  it("sorts by count, groups blank zones as Sin zona and keeps every card", () => {
+    const rows = [
+      { zona: "Metro", count: 69 },
+      { zona: "", count: 3 },
+      { zona: "Este", count: 474 },
+      { zona: null, count: 2 },
+      { zona: "Sur", count: 0 },
+    ];
+    const zones = buildZoneBreakdown(rows);
+    expect(zones).toEqual([
+      { zona: "Este", count: 474 },
+      { zona: "Metro", count: 69 },
+      { zona: "Sin zona", count: 5 },
+    ]);
+    expect(zones.reduce((sum, zone) => sum + zone.count, 0)).toBe(rows.reduce((sum, row) => sum + row.count, 0));
+  });
+
+  it("returns nothing for an empty range", () => {
+    expect(buildZoneBreakdown([])).toEqual([]);
   });
 });

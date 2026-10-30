@@ -96,7 +96,7 @@ export function StatusDonutChart({
       <PieChart
         style={{ width: "100%", height: compact ? 220 : 288 }}
         responsive
-        margin={compact ? { top: 8, right: 8, bottom: 8, left: 8 } : { top: 20, right: 70, bottom: 20, left: 70 }}
+        margin={compact ? { top: 8, right: 8, bottom: 8, left: 8 } : { top: 20, right: 96, bottom: 20, left: 96 }}
       >
         <Pie
           data={visible}
