@@ -143,7 +143,7 @@ describe("Lot.estatusTipo dual-write on creation (task 3.3, POST /api/lotes)", (
   const MESSENGER_ID = "cmessengerone1";
 
   beforeEach(() => {
-    prisma.__seed("messenger", { id: MESSENGER_ID, nombre: "Pedro Gonzalez" });
+    prisma.__seed("messenger", { id: MESSENGER_ID, nombre: "Pedro Gonzalez", activo: true });
   });
 
   it("maps the default 'EN TRANSITO' estatus to estatusTipo EN_TRANSITO", async () => {

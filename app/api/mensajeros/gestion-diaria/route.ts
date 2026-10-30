@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { requireApiSession } from "@/lib/api-session";
+import { requireActiveMessenger } from "@/lib/messenger-lifecycle";
 import { prisma } from "@/lib/prisma";
 import { countedBetween, lockStateFor, totalForCounts } from "@/lib/payroll/counting";
 import { openPayment } from "@/lib/payroll/payments";
@@ -138,6 +139,13 @@ export async function POST(request: Request) {
         where: { messengerId: parsed.data.messengerId, siguienteCorte: false, fecha: { gte: fecha, lt: new Date(fecha.getTime() + 24 * 60 * 60 * 1000) } },
       }),
     ]);
+
+    // Only a NEW day is blocked; editing an existing day of an archived
+    // messenger stays allowed.
+    if (!existing) {
+      const guard = await requireActiveMessenger(prisma, parsed.data.messengerId);
+      if ("error" in guard) return guard.error;
+    }
 
     // The automatic count stays the base; what the operator types becomes an
     // adjustment on top of it, so a later recount keeps the correction.

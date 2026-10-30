@@ -4,6 +4,7 @@ import { z } from "zod";
 import { requireApiSession } from "@/lib/api-session";
 import { buildListEnvelope, compile } from "@/lib/list-query";
 import { mensajerosListQuery } from "@/lib/list-query/descriptors/mensajeros";
+import { setMessengerActive } from "@/lib/messenger-lifecycle";
 import { prisma } from "@/lib/prisma";
 
 const rateSchema = z.object({
@@ -19,9 +20,10 @@ const createSchema = z.object({
   rates: z.array(rateSchema).default([]),
 });
 
+// `activo` is intentionally absent: zod strips it, so the lifecycle only changes
+// through the audited `/api/mensajeros/estado` endpoint.
 const updateSchema = createSchema.extend({
   id: z.string().cuid(),
-  activo: z.boolean().optional(),
 });
 
 export async function GET(request: NextRequest) {
@@ -53,7 +55,12 @@ export async function GET(request: NextRequest) {
   // depend on that exact shape, so the absence check must happen before any
   // clamping — which is precisely what `compile()` does with those raw params.
   const query = compile(mensajerosListQuery, request.nextUrl.searchParams);
-  const where: Prisma.MessengerWhereInput = query.where;
+  // `onlyArchived=1` is route-level (the descriptor has no falsy-only boolean)
+  // and wins over `onlyActive=1`.
+  const where: Prisma.MessengerWhereInput =
+    request.nextUrl.searchParams.get("onlyArchived") === "1"
+      ? { ...query.where, activo: false }
+      : query.where;
 
   if (query.unpaginated) {
     const messengers = await prisma.messenger.findMany({
@@ -122,7 +129,6 @@ export async function PATCH(request: Request) {
       telefono: parsed.data.telefono,
       zonaPrincipal: parsed.data.zonaPrincipal,
       provinciaTrabajo: parsed.data.provinciaTrabajo,
-      activo: parsed.data.activo,
     },
   });
 
@@ -150,6 +156,16 @@ export async function DELETE(request: Request) {
     return NextResponse.json({ error: "id requerido" }, { status: 400 });
   }
 
-  await prisma.messenger.update({ where: { id }, data: { activo: false } });
+  // Transitional (slice A): archives through the audited helper. A later slice
+  // replaces this with a guarded hard delete.
+  const result = await setMessengerActive(
+    id,
+    false,
+    { id: auth.session.user.id, email: auth.session.user.email },
+    request,
+  );
+  if (!result.found) {
+    return NextResponse.json({ error: "Mensajero no encontrado" }, { status: 404 });
+  }
   return NextResponse.json({ ok: true });
 }
