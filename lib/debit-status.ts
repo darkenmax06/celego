@@ -1,4 +1,5 @@
 import { CardStatus, CardProductType } from "@prisma/client";
+import { mapPinitCodeToCardStatus, resolvePinitCode } from "@/lib/pinit-status-catalog";
 
 export const DEBIT_TERMINAL_STATUSES: CardStatus[] = [
   CardStatus.TD_ENTREGADO,
@@ -84,38 +85,19 @@ export function normalizeDebitConsolidadoStatus(raw: string | null | undefined):
  * Maps Pinit export status string to Celego CardStatus.
  */
 export function mapPinitExportStatus(pinitStatus: string | null | undefined): CardStatus | null {
-  if (!pinitStatus) return null;
-  const s = pinitStatus.trim().toLowerCase();
+  if (!pinitStatus?.trim()) return null;
 
-  // Check code prefixes and specific non-delivered phrases first
-  if (/^123\b/.test(s) || s.includes("devuelto a origen") || s.includes("retornado")) {
-    return CardStatus.TD_DEVUELTO_NO_LOCALIZADO;
-  }
-  if (/^335\b/.test(s) || s.includes("no cobertura") || s.includes("fuera de cobertura")) {
-    return CardStatus.TD_ZONA_FUERA_COBERTURA;
-  }
-  if (s.includes("310") || s.includes("intentados no entregados") || s.includes("no entregad")) {
-    return CardStatus.NO_LOCALIZADO;
-  }
-  if (s.includes("207") || s.includes("en espera para salir de nuevo a ruta")) {
-    return CardStatus.NO_LOCALIZADO;
-  }
-  if (s.includes("318") || s.includes("rechazado por el cliente") || s.includes("no le interesa")) {
-    return CardStatus.TD_NO_LE_INTERESA;
-  }
-  if (s.includes("420") || s.includes("cancelado") || s.includes("orden anulada")) {
-    return CardStatus.TD_DEVUELTO_NO_LOCALIZADO;
-  }
-  if (s.includes("311") || s.includes("cliente no disponible") || s.includes("dnd")) {
-    return CardStatus.TD_DEVUELTO_NO_LOCALIZADO;
-  }
-  if (s.includes("303") || s.includes("en transito") || s.includes("en ruta")) {
-    return CardStatus.EN_RUTA;
-  }
-  if (s.includes("360") || s.includes("entregado al cliente") || s.includes("entregado")) {
+  // Only Pinit 213, 420 and 335 count as returns; every other catalog code is
+  // a delivery or an in-transit state (see lib/pinit-status-catalog.ts).
+  const code = resolvePinitCode(pinitStatus);
+  if (code != null) return mapPinitCodeToCardStatus(code);
+
+  // Text outside the catalog: only trust an explicit delivery, otherwise skip
+  // the row instead of guessing and moving the card backwards.
+  const s = pinitStatus.trim().toLowerCase();
+  if (s.includes("entregad") && !s.includes("no entregad") && !s.includes("media milla")) {
     return CardStatus.TD_ENTREGADO;
   }
-
   return null;
 }
 

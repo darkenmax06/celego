@@ -7,6 +7,7 @@ import { type ParsedDebitConsolidadoRow } from "@/lib/importers/debit-consolidad
 import { type ParsedDebitDespachoRow } from "@/lib/importers/debit-despacho";
 import { type ParsedDebitPinitRow } from "@/lib/importers/debit-pinit-import";
 import { isDebitTerminalStatus } from "@/lib/debit-status";
+import { formatPinitStatus } from "@/lib/pinit-status-catalog";
 import { CUSTOMER_ID_RULE, normalizeCustomerId } from "@/lib/customer-id";
 import { buildSourceRecordKey, canCreateDispatch, DispatchConflictError, nextTcGuardState } from "@/lib/dispatch-origin";
 import { resolveZone } from "@/lib/zone-map";
@@ -698,6 +699,13 @@ export async function persistDebitDespachoImport(input: {
   return { created, updated: 0, count: input.rows.length, cards: createdCards, inactiveProvinceRows: inactive.count, inactiveProvinceNames: inactive.names };
 }
 
+/** Bitácora description: the Pinit status plus the comment Pinit recorded for it. */
+export function buildPinitLogNote(item: Pick<ParsedDebitPinitRow, "rawStatus" | "lastAttemptNotes">): string {
+  const status = formatPinitStatus(item.rawStatus);
+  const comment = item.lastAttemptNotes?.trim();
+  return comment ? `Pinit: ${status} — ${comment}` : `Pinit: ${status}`;
+}
+
 /** Updates card status and metadata from Pinit deliveries export. */
 export async function updateCardsFromPinitExport(input: {
   rows: ParsedDebitPinitRow[];
@@ -740,19 +748,24 @@ export async function updateCardsFromPinitExport(input: {
       fechaEntrega: item.deliveryDate ? item.deliveryDate.toISOString() : currentMeta.fechaEntrega,
     };
 
+    // Pinit exports repeat every requestNumber on every download; only log when
+    // the card moves or Pinit reports a new status/comment, so a reprocessed
+    // export never reads as a fresh change on cards that never moved.
+    // Cards never synced from Pinit have no baseline: don't log them unless they move.
+    const hasPinitBaseline = typeof currentMeta.pinitRawStatus === "string";
+    const pinitChanged =
+      hasPinitBaseline &&
+      (currentMeta.pinitRawStatus !== item.rawStatus ||
+        (currentMeta.pinitLastAttemptNotes ?? null) !== item.lastAttemptNotes);
+    const shouldLog = targetCard.status !== item.mappedStatus || pinitChanged;
+
     await prisma.$transaction(async (tx) => {
       return applyCardTransition({
         tx,
         card: targetCard,
         nextStatus: item.mappedStatus!,
         byUserId: input.byUserId,
-        // Pinit exports repeat every requestNumber on every download; only
-        // log when the mapped status actually moves the card, or a reprocessed
-        // export reads as a fresh status change on cards that never moved.
-        note:
-          targetCard.status !== item.mappedStatus
-            ? `Actualizado desde Pinit (${item.rawStatus})`
-            : undefined,
+        note: shouldLog ? buildPinitLogNote(item) : undefined,
         data: {
           metadata: updatedMeta as Prisma.InputJsonValue,
         },
