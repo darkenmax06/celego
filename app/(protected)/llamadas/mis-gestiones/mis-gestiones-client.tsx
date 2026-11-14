@@ -4,14 +4,30 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { PageHeader } from "@/components/ui/page-header";
 import { Panel } from "@/components/ui/panel";
-import { FilterBar, type ViewType } from "@/components/filters/filter-bar";
+import { FilterBar, groupByLevelLabel, type ViewType } from "@/components/filters/filter-bar";
+import { useCardFacetSources } from "@/components/filters/card-filter-bar";
+import { NestedGroupList, useCollapsedGroups } from "@/components/grouping/nested-group-list";
+import {
+  buildCardFacets,
+  buildGroupByOptions,
+  OPEN_CARD_STATUS_VALUES,
+  pruneStatusesForProduct,
+  type CardFacetKey,
+  type CardGroupByKey,
+} from "@/lib/filters/card-facets";
+import { groupRowsNested, parseGroupByLevels } from "@/lib/grouping/nested";
 import { CardTile } from "@/components/cards/card-tile";
 import { CardTileGrid } from "@/components/cards/card-tile-grid";
 import { CardListTable } from "@/components/cards/card-list-table";
 import { ContactReportModal } from "@/components/llamadas/contact-report-modal";
 import { useCardListFilters } from "@/lib/use-card-list-filters";
 import { useCallOperators } from "@/lib/llamadas/use-call-operators";
-import { callItemFromOperativoRow, type CallListItem, type OperativoRowLike } from "@/lib/llamadas/call-list-item";
+import {
+  callItemFromOperativoRow,
+  callItemGroupKey,
+  type CallListItem,
+  type OperativoRowLike,
+} from "@/lib/llamadas/call-list-item";
 import { callDetailHref, writeNavContext } from "@/lib/llamadas/nav-context";
 
 /**
@@ -24,17 +40,45 @@ import { callDetailHref, writeNavContext } from "@/lib/llamadas/nav-context";
 const ASIGNACIONES_ENDPOINT = "/api/llamadas/asignaciones";
 const DEFAULT_FILTERS = { page: "1", pageSize: "50" };
 const MIS_GESTIONES_VIEWS: ViewType[] = ["cards", "list"];
+/**
+ * Shared "llamadas" facets minus `asignado`: the list is already scoped to one
+ * operator. Must match `MIS_GESTIONES_FACET_PARAMS` (lib/llamadas/call-facet-where.ts).
+ */
+const MIS_GESTIONES_FACET_KEYS: CardFacetKey[] = [
+  "contactoEstado",
+  "canalContacto",
+  "status",
+  "productType",
+  "provincia",
+  "zona",
+  "messengerId",
+  "grupo",
+  "urgent",
+];
+const MIS_GESTIONES_GROUP_KEYS: CardGroupByKey[] = [
+  "contactoEstado",
+  "status",
+  "provincia",
+  "zona",
+  "mensajero",
+  "canalContacto",
+];
+const MIS_GESTIONES_GROUP_BY_OPTIONS = buildGroupByOptions(MIS_GESTIONES_GROUP_KEYS);
 
 type PaginationMeta = { page: number; pageSize: number; total: number; totalPages: number };
 type AsignacionesResponse = { cards?: OperativoRowLike[]; pagination?: PaginationMeta; error?: string };
 
-/** Query params of the list WITHOUT `page` / `pageSize`. */
+/** Query params of the list WITHOUT `page` / `pageSize` / `groupBy`. */
 function buildListParams(filters: Record<string, string>, isAdmin: boolean) {
   const params: Record<string, string> = {};
   const operatorId = isAdmin ? filters.operador : "";
   if (operatorId) params.assignedToId = operatorId;
   else params.mine = "1";
   if (filters.q?.trim()) params.q = filters.q.trim();
+  for (const key of MIS_GESTIONES_FACET_KEYS) {
+    const value = filters[key]?.trim();
+    if (value && value !== "ALL") params[key] = value;
+  }
   return params;
 }
 
@@ -84,6 +128,26 @@ export default function MisGestionesClient({ isAdmin }: { isAdmin: boolean }) {
 
   const items = useMemo(() => rows.map(callItemFromOperativoRow), [rows]);
 
+  const facetSources = useCardFacetSources(MIS_GESTIONES_FACET_KEYS);
+  // FilterBar refetches distinct values whenever `facets` changes identity, so keep it memoized.
+  const facets = useMemo(
+    () =>
+      buildCardFacets(MIS_GESTIONES_FACET_KEYS, {
+        ...facetSources,
+        statusValues: OPEN_CARD_STATUS_VALUES,
+        productType: filters.productType,
+      }),
+    [facetSources, filters.productType],
+  );
+
+  // Grouping runs over the loaded page, same as the other call workspaces.
+  const collapsedGroups = useCollapsedGroups();
+  const groupLevels = useMemo(() => parseGroupByLevels(filters.groupBy), [filters.groupBy]);
+  const groupedItems = useMemo(
+    () => groupRowsNested(items, groupLevels, (item, token) => callItemGroupKey(item, token)),
+    [items, groupLevels],
+  );
+
   const openCallDetail = useCallback(
     (cardId: string, options: { llamar?: boolean } = {}) => {
       const page = Number(filters.page) || 1;
@@ -127,6 +191,27 @@ export default function MisGestionesClient({ isAdmin }: { isAdmin: boolean }) {
     />
   );
 
+  const emptyMessage = loading ? "Cargando..." : "No hay tarjetas asignadas.";
+  const renderItems = (list: CallListItem[]) =>
+    viewMode === "list" ? (
+      <CardListTable
+        items={list}
+        getKey={(item) => item.id}
+        onOpen={(item) => (item.cardId ? openCallDetail(item.cardId) : undefined)}
+        renderActions={(item) => callButton(item)}
+        loading={loading}
+        emptyMessage={emptyMessage}
+      />
+    ) : (
+      <CardTileGrid
+        items={list}
+        getKey={(item) => item.id}
+        renderItem={renderTile}
+        loading={loading}
+        emptyMessage={emptyMessage}
+      />
+    );
+
   const page = Number(filters.page) || 1;
   const viewingOther = isAdmin && Boolean(filters.operador);
 
@@ -169,8 +254,17 @@ export default function MisGestionesClient({ isAdmin }: { isAdmin: boolean }) {
           resource="llamadas-asignaciones"
           sectionKey="mis-gestiones"
           filters={filters}
-          onFilterChange={(next) => setFilters({ ...next, page: "1", pageSize: filters.pageSize || "50" })}
+          onFilterChange={(next) =>
+            setFilters({
+              ...pruneStatusesForProduct(next),
+              ...(filters.operador ? { operador: filters.operador } : {}),
+              page: "1",
+              pageSize: filters.pageSize || "50",
+            })
+          }
           onReset={resetFilters}
+          facets={facets}
+          groupByOptions={MIS_GESTIONES_GROUP_BY_OPTIONS}
           searchPlaceholder="Buscar por TC, cédula, nombre o referencia..."
           allowedViews={MIS_GESTIONES_VIEWS}
           currentView={viewMode}
@@ -181,23 +275,22 @@ export default function MisGestionesClient({ isAdmin }: { isAdmin: boolean }) {
 
       <Panel>
         {error ? <p className="mb-3 text-sm font-semibold text-red-600">{error}</p> : null}
-        {viewMode === "list" ? (
-          <CardListTable
-            items={items}
-            getKey={(item) => item.id}
-            onOpen={(item) => (item.cardId ? openCallDetail(item.cardId) : undefined)}
-            renderActions={(item) => callButton(item)}
-            loading={loading}
-            emptyMessage={loading ? "Cargando..." : "No hay tarjetas asignadas."}
+        {groupLevels.length ? (
+          <p className="mb-3 text-xs font-semibold text-slate-500">
+            Agrupado por:{" "}
+            {groupLevels.map((token) => groupByLevelLabel(token, MIS_GESTIONES_GROUP_BY_OPTIONS)).join(" › ")}
+          </p>
+        ) : null}
+        {groupedItems && groupedItems.length ? (
+          <NestedGroupList
+            groups={groupedItems}
+            variant="blocks"
+            isCollapsed={collapsedGroups.isCollapsed}
+            onToggle={collapsedGroups.toggle}
+            renderRows={(groupItems) => renderItems(groupItems)}
           />
         ) : (
-          <CardTileGrid
-            items={items}
-            getKey={(item) => item.id}
-            renderItem={renderTile}
-            loading={loading}
-            emptyMessage={loading ? "Cargando..." : "No hay tarjetas asignadas."}
-          />
+          renderItems(items)
         )}
 
         <div className="mt-4 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-xs text-slate-600">
