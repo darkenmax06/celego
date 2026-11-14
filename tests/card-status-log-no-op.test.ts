@@ -232,7 +232,56 @@ describe("updateCardsFromPinitExport: no-op status must not write a bitácora ro
 
     const logs = prisma.__rows("cardStatusLog");
     expect(logs).toHaveLength(1);
-    expect(logs[0]).toMatchObject({ fromStatus: "EN_RUTA", toStatus: "TD_ENTREGADO" });
+    expect(logs[0]).toMatchObject({
+      fromStatus: "EN_RUTA",
+      toStatus: "TD_ENTREGADO",
+      note: "Pinit: 360 - Entregado al cliente",
+    });
+  });
+
+  it("a new Pinit status with the same Celego status logs the Pinit comment", async () => {
+    prisma.__seed("card", {
+      id: "card-5",
+      tc: "REQ-5",
+      requestNumber: "REQ-5",
+      productType: "DEBITO",
+      status: "NO_LOCALIZADO",
+      isRemote: false,
+      returnReason: null,
+      digitalDeliveryCycle: 0,
+      dispatchDate: new Date("2026-01-01T00:00:00Z"),
+      createdAt: new Date("2026-01-01T00:00:00Z"),
+      metadata: { pinitRawStatus: "310 - Intentados no entregados", pinitLastAttemptNotes: null },
+    } as never);
+
+    const row = {
+      requestNumber: "REQ-5",
+      trackingNumber: "TRK-5",
+      customerName: "Cliente Cinco",
+      customerPhone: null,
+      customerAddress: null,
+      rawStatus: "CLIENTE NO DISPONIBLE (DND)",
+      mappedStatus: CardStatus.NO_LOCALIZADO,
+      deliveryDate: null,
+      recipientName: null,
+      messengerName: null,
+      messengerEmail: null,
+      attemptsCount: 2,
+      lastAttemptNotes: "No contesta el telefono",
+      sourceRowNumber: 2,
+    };
+
+    await updateCardsFromPinitExport({ rows: [row] });
+    // Reprocessing the same export must not duplicate the entry.
+    await updateCardsFromPinitExport({ rows: [row] });
+
+    const logs = prisma.__rows("cardStatusLog");
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toMatchObject({
+      fromStatus: "NO_LOCALIZADO",
+      toStatus: "NO_LOCALIZADO",
+      note: "Pinit: 311 - Cliente no disponible (DND) — No contesta el telefono",
+    });
   });
 });
 
