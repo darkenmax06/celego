@@ -8,6 +8,7 @@ import { buildListEnvelope } from "@/lib/list-query";
 import { CALL_ASSIGNMENT_SELECT } from "@/lib/call-assignment";
 import { mapCardToOperativeRow } from "@/lib/operativo-row";
 import { SLA_CLOSED_STATUSES } from "@/lib/list-query/descriptors/sla-vencidas";
+import { buildCallFacetWhere } from "@/lib/llamadas/call-facet-where";
 
 const MAX_CARDS = 1000;
 
@@ -27,7 +28,8 @@ function parsePositiveInt(raw: string | null, fallback: number, max: number) {
 }
 
 /**
- * GET /api/llamadas/asignaciones?mine=1&assignedToId=&q=&page=&pageSize=
+ * GET /api/llamadas/asignaciones?mine=1&assignedToId=&q=&page=&pageSize=&<call facets>
+ * (facets: see `MIS_GESTIONES_FACET_PARAMS` in lib/llamadas/call-facet-where.ts)
  * Cards with a call assignment (optionally only the session user's), using the
  * operativo row shape plus `asignadoA`.
  */
@@ -60,6 +62,7 @@ export async function GET(request: NextRequest) {
             ],
           }
         : {},
+      ...buildCallFacetWhere(params),
     ],
   };
 
