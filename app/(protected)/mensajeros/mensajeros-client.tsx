@@ -48,6 +48,8 @@ type MessengerReport = {
   totalCents: number;
   generatedAt: string;
   anulada?: boolean;
+  imagePath?: string | null;
+  payrollPeriod?: { id: string; label: string } | null;
 };
 
 type Counts = {
@@ -910,7 +912,7 @@ function MessengerModal({
   onClose: () => void;
   onUpdated: (message: string) => Promise<void>;
 }) {
-  const [tab, setTab] = useState<"perfil" | "registro" | "pagos" | "prestamos" | "reporte" | "historial">("perfil");
+  const [tab, setTab] = useState<"perfil" | "registro" | "pagos" | "prestamos" | "historial">("perfil");
   const [nombre, setNombre] = useState(messenger.nombre);
   const [telefono, setTelefono] = useState(messenger.telefono ?? "");
   const [zona, setZona] = useState(messenger.zonaPrincipal ?? "Metro");
@@ -927,8 +929,6 @@ function MessengerModal({
 
   const [recordDate, setRecordDate] = useState(new Date().toISOString().slice(0, 10));
   const [recordCounts, setRecordCounts] = useState<Counts>({ ...ZERO_COUNTS });
-  const [from, setFrom] = useState(new Date().toISOString().slice(0, 10));
-  const [to, setTo] = useState(new Date().toISOString().slice(0, 10));
   const [busy, setBusy] = useState(false);
   const [savingRecord, setSavingRecord] = useState(false);
   const [feedback, setFeedbackNotice] = useState<Notice | null>(null);
@@ -955,20 +955,6 @@ function MessengerModal({
     [provinciaTrabajo, provinces],
   );
   const zoneOptions: string[] = zona && !(ZONES as readonly string[]).includes(zona) ? [zona, ...ZONES] : [...ZONES];
-
-  const previewRecords = useMemo(() => {
-    const start = new Date(from);
-    const end = new Date(to);
-    return records.filter((record) => {
-      const date = new Date(record.fecha);
-      return date >= start && date <= end;
-    });
-  }, [from, to, records]);
-
-  const previewTotal = useMemo(
-    () => previewRecords.reduce((sum, record) => sum + record.totalCents, 0),
-    [previewRecords],
-  );
 
   async function saveProfile() {
     const trimmedName = nombre.trim();
@@ -1088,55 +1074,6 @@ function MessengerModal({
     };
   }, [recordCounts, recordDate, saveDailyRecord, tab]);
 
-  async function generateReport() {
-    setBusy(true);
-    setFeedback("");
-
-    const imageParams = new URLSearchParams({
-      mode: "single",
-      messengerId: messenger.id,
-      from,
-      to,
-    });
-
-    const imageRes = await fetch(`/api/mensajeros/reportes?${imageParams.toString()}`);
-    if (!imageRes.ok) {
-      const imageJson = await imageRes.json().catch(() => ({ error: "No se pudo generar imagen del reporte" }));
-      setFeedback(imageJson.error ?? "No se pudo generar imagen del reporte");
-      setBusy(false);
-      return;
-    }
-
-    const imageBlob = await imageRes.blob();
-    const imageUrl = URL.createObjectURL(imageBlob);
-    const a = document.createElement("a");
-    a.href = imageUrl;
-    a.download = `${messenger.nombre.replace(/\s+/g, "_")}-${from}-${to}.jpg`;
-    a.click();
-    URL.revokeObjectURL(imageUrl);
-
-    const res = await fetch("/api/mensajeros/gestion-diaria", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        type: "report",
-        messengerId: messenger.id,
-        from,
-        to,
-      }),
-    });
-    const json = await res.json();
-    if (!res.ok) {
-      setFeedback(json.error ?? "Imagen generada, pero no se pudo guardar el historial");
-      setBusy(false);
-      return;
-    }
-
-    setBusy(false);
-    setFeedback(`Imagen generada y reporte guardado: ${formatCurrencyDOP(json.totalCents ?? 0)}`);
-    await onUpdated(`Reporte generado para ${messenger.nombre}`);
-  }
-
   return (
     <div className="fixed inset-0 z-[125] flex items-center justify-center bg-black/40 px-4 py-6" onClick={onClose}>
       <div
@@ -1159,7 +1096,7 @@ function MessengerModal({
         </div>
 
         <div className="flex border-b border-slate-200">
-          {(["perfil", "registro", "pagos", "prestamos", "reporte", "historial"] as const).map((value) => (
+          {(["perfil", "registro", "pagos", "prestamos", "historial"] as const).map((value) => (
             <button
               key={value}
               onClick={() => setTab(value)}
@@ -1173,7 +1110,6 @@ function MessengerModal({
               {value === "registro" ? "Registro diario" : null}
               {value === "pagos" ? "Periodos y pagos" : null}
               {value === "prestamos" ? "Prestamos" : null}
-              {value === "reporte" ? "Generar reporte" : null}
               {value === "historial" ? "Historial reportes" : null}
             </button>
           ))}
@@ -1360,75 +1296,19 @@ function MessengerModal({
             </div>
           ) : null}
 
-          {tab === "reporte" ? (
-            <div>
-              <div className="mb-4 grid gap-2 md:grid-cols-2">
-                <input
-                  type="date"
-                  value={from}
-                  onChange={(event) => setFrom(event.target.value)}
-                  className="rounded-xl border border-slate-300 px-3 py-2 text-sm"
-                />
-                <input
-                  type="date"
-                  value={to}
-                  onChange={(event) => setTo(event.target.value)}
-                  className="rounded-xl border border-slate-300 px-3 py-2 text-sm"
-                />
-              </div>
-
-              <div className="overflow-x-auto rounded-xl border border-slate-200">
-                <table className="w-full text-left text-sm">
-                  <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
-                    <tr>
-                      <th className="px-3 py-2">Fecha</th>
-                      <th className="px-3 py-2">Normales</th>
-                      <th className="px-3 py-2">Remotas</th>
-                      <th className="px-3 py-2">Recogidas</th>
-                      <th className="px-3 py-2">Mandados</th>
-                      <th className="px-3 py-2 text-right">Subtotal</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {previewRecords.map((record) => (
-                      <tr key={record.id} className="border-t border-slate-100">
-                        <td className="px-3 py-2">
-                          {dateKey(record.fecha)}
-                          {record.siguienteCorte ? <span className="ml-2 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-800">restantes tras el corte</span> : null}
-                        </td>
-                        <td className="px-3 py-2">{record.entregasNormales}</td>
-                        <td className="px-3 py-2">{record.entregasRemotas}</td>
-                        <td className="px-3 py-2">{record.recogidasBanco}</td>
-                        <td className="px-3 py-2">{record.mandados}</td>
-                        <td className="px-3 py-2 text-right font-semibold">{formatCurrencyDOP(record.totalCents)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-
-              <div className="mt-3 flex items-center justify-between rounded-xl bg-slate-900 px-4 py-3">
-                <span className="text-xs uppercase tracking-wide text-slate-300">Total del periodo</span>
-                <span className="font-display text-2xl font-bold text-emerald-400">{formatCurrencyDOP(previewTotal)}</span>
-              </div>
-
-              <button
-                onClick={() => void generateReport()}
-                disabled={busy}
-                className="mt-4 rounded-xl bg-[#0f2544] px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
-              >
-                Generar imagen y guardar
-              </button>
-            </div>
-          ) : null}
-
           {tab === "historial" ? (
             <div className="space-y-2">
+              <p className="text-xs text-slate-500">
+                El reporte de cada periodo se genera y guarda al bloquearlo en Periodos y pagos.
+              </p>
               {reports.map((report) => (
-                <article key={report.id} className="flex items-center gap-3 rounded-xl border border-slate-200 px-3 py-3">
+                <article key={report.id} className="flex flex-wrap items-center gap-3 rounded-xl border border-slate-200 px-3 py-3">
                   <div className="flex-1">
                     <p className="text-sm font-semibold text-slate-800">
-                      {dateKey(report.fromDate)} → {dateKey(report.toDate)}
+                      {report.payrollPeriod?.label ?? "Reporte por rango"}{" "}
+                      <span className="text-xs font-normal text-slate-500">
+                        {dateKey(report.fromDate)} al {dateKey(report.toDate)}
+                      </span>
                     </p>
                     <p className="text-xs text-slate-500">
                       Generado: {new Date(report.generatedAt).toLocaleString("es-DO")}
@@ -1437,6 +1317,15 @@ function MessengerModal({
                   <p className="font-display text-lg font-bold text-emerald-700">
                     {formatCurrencyDOP(report.totalCents)}
                   </p>
+                  {report.imagePath ? (
+                    <a
+                      href={`/api/mensajeros/reportes/${report.id}/imagen`}
+                      download
+                      className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                    >
+                      Descargar
+                    </a>
+                  ) : null}
                 </article>
               ))}
               {!reports.length ? <p className="text-sm text-slate-500">No hay reportes generados.</p> : null}

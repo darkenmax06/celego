@@ -205,6 +205,52 @@ describe("MensajerosClient archive lifecycle (R3.3)", () => {
     expect(fetchMock.mock.calls.some(([, init]) => init?.method === "PATCH")).toBe(false);
   });
 
+  it("has no Generar reporte tab and lists stored period reports with Descargar", async () => {
+    const base = fetchMock.getMockImplementation() as (url: string, init?: RequestInit) => Promise<unknown>;
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (url.startsWith("/api/mensajeros/gestion-diaria")) {
+        return json({
+          records: [],
+          reports: [
+            {
+              id: "rep-1",
+              messengerId: "m1",
+              fromDate: "2026-10-01T00:00:00.000Z",
+              toDate: "2026-10-15T00:00:00.000Z",
+              totalCents: 150000,
+              generatedAt: "2026-10-16T12:00:00.000Z",
+              imagePath: "messenger-reports/m1/p1.jpg",
+              payrollPeriod: { id: "p1", label: "Quincena 1" },
+            },
+            {
+              id: "rep-old",
+              messengerId: "m1",
+              fromDate: "2026-09-01T00:00:00.000Z",
+              toDate: "2026-09-15T00:00:00.000Z",
+              totalCents: 1000,
+              generatedAt: "2026-09-16T12:00:00.000Z",
+              imagePath: null,
+              payrollPeriod: null,
+            },
+          ],
+        });
+      }
+      return base(url, init);
+    });
+    render(<MensajerosClient />);
+    await screen.findAllByText("Ana Activa");
+    fireEvent.click(screen.getByRole("button", { name: "Ver perfil" }));
+
+    expect(screen.queryByRole("button", { name: "Generar reporte" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Historial reportes" }));
+
+    const stored = (await screen.findByText("Quincena 1")).closest("article")!;
+    expect(stored).toHaveTextContent("2026-10-01 al 2026-10-15");
+    expect(within(stored).getByRole("link", { name: "Descargar" })).toHaveAttribute("href", "/api/mensajeros/reportes/rep-1/imagen");
+    const legacy = screen.getByText("Reporte por rango").closest("article")!;
+    expect(within(legacy).queryByRole("link", { name: "Descargar" })).not.toBeInTheDocument();
+  });
+
   it("hides Eliminar unless the page grants canDelete", async () => {
     render(<MensajerosClient />);
     await screen.findAllByText("Ana Activa");

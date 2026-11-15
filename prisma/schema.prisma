@@ -559,8 +559,14 @@ model MessengerReport {
   generatedById String?
   generatedBy   User?     @relation("MessengerReportGeneratedBy", fields: [generatedById], references: [id], onDelete: SetNull)
   totalCents    Int       @default(0)
+  /// Stored JPEG, relative to the app storage dir (messenger-reports/<messengerId>/<periodId>.jpg).
   imagePath     String?
   anulada       Boolean   @default(false)
+  /// Set when the report comes from locking a payroll period: one report per messenger and period.
+  payrollPeriodId String?
+  payrollPeriod   PayrollPeriod? @relation(fields: [payrollPeriodId], references: [id], onDelete: SetNull)
+
+  @@unique([messengerId, payrollPeriodId])
 }
 
 model Route {
@@ -1206,6 +1212,7 @@ model PayrollPeriod {
   createdAt   DateTime             @default(now())
   locks       PayrollPeriodLock[]
   payments    MessengerPayment[]
+  reports     MessengerReport[]
 
   @@index([messengerId, fromDate])
   @@index([fromDate, toDate])

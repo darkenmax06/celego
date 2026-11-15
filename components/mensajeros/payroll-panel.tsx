@@ -12,7 +12,32 @@ type Period = {
   messengerId: string | null;
   status: "ABIERTO" | "BLOQUEADO";
   pendingChanges: number;
+  /** Stored report generated when the period was locked for this messenger. */
+  report?: { id: string; generatedAt: string } | null;
 };
+
+type Notice = { text: string; tone: "info" | "success" | "warning" | "error" };
+
+const NOTICE_CLASS: Record<Notice["tone"], string> = {
+  info: "text-slate-600",
+  success: "text-emerald-700",
+  warning: "rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 font-semibold text-amber-800",
+  error: "rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 font-semibold text-rose-700",
+};
+
+function imageFileName(period: { label: string }, suffix = "") {
+  return `pago-${period.label.replace(/[^\w.-]+/g, "_")}${suffix}.jpg`;
+}
+
+/** Saves a fetched file through a temporary link. */
+async function saveResponseAs(response: Response, fileName: string) {
+  const url = URL.createObjectURL(await response.blob());
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = fileName;
+  link.click();
+  URL.revokeObjectURL(url);
+}
 
 type PaymentInstallment = {
   id: string;
@@ -44,7 +69,11 @@ export function PayrollPanel({ messengerId, onChanged }: { messengerId: string; 
   const [periods, setPeriods] = useState<Period[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [payment, setPayment] = useState<Payment | null>(null);
-  const [message, setMessage] = useState("");
+  const [notice, setNotice] = useState<Notice | null>(null);
+  const setMessage = useCallback(
+    (text: string, tone: Notice["tone"] = "info") => setNotice(text ? { text, tone } : null),
+    [],
+  );
   const [busy, setBusy] = useState(false);
   const [label, setLabel] = useState("");
   const [from, setFrom] = useState("");
@@ -62,9 +91,9 @@ export function PayrollPanel({ messengerId, onChanged }: { messengerId: string; 
       const res = await fetch(`/api/mensajeros/pagos?messengerId=${messengerId}&periodId=${periodId}`, { cache: "no-store" });
       const json = await res.json();
       if (res.ok) setPayment(json.payment);
-      else setMessage(json.error ?? "No se pudo cargar el pago");
+      else setMessage(json.error ?? "No se pudo cargar el pago", "error");
     },
-    [messengerId],
+    [messengerId, setMessage],
   );
 
   useEffect(() => {
@@ -91,7 +120,8 @@ export function PayrollPanel({ messengerId, onChanged }: { messengerId: string; 
     });
     const json = await res.json();
     setBusy(false);
-    setMessage(res.ok ? "Periodo creado para este mensajero" : (json.error ?? "No se pudo crear el periodo"));
+    if (res.ok) setMessage("Periodo creado para este mensajero", "success");
+    else setMessage(json.error ?? "No se pudo crear el periodo", "error");
     if (res.ok) {
       setLabel("");
       setFrom("");
@@ -111,16 +141,21 @@ export function PayrollPanel({ messengerId, onChanged }: { messengerId: string; 
     const json = await res.json();
     setBusy(false);
     if (!res.ok) {
-      setMessage(json.error ?? "No se pudo cambiar el estado del periodo");
+      setMessage(json.error ?? "No se pudo cambiar el estado del periodo", "error");
       return;
     }
-    setMessage(
-      unlocking
-        ? json.pendingApplied
+    if (unlocking) {
+      setMessage(
+        json.pendingApplied
           ? `Periodo desbloqueado: se aplicaron ${json.pendingApplied} cambios de entregas que estaban pendientes`
-          : "Periodo desbloqueado"
-        : "Periodo bloqueado y pago cerrado",
-    );
+          : "Periodo desbloqueado",
+        "success",
+      );
+    } else if (json.reportWarning) {
+      setMessage(json.reportWarning, "warning");
+    } else {
+      setMessage("Periodo bloqueado, pago cerrado y reporte guardado en el historial", "success");
+    }
     await refreshAll();
   }
 
@@ -131,45 +166,71 @@ export function PayrollPanel({ messengerId, onChanged }: { messengerId: string; 
       body: JSON.stringify(body),
     });
     const json = await res.json();
-    if (!res.ok) setMessage(json.error ?? "No se pudo modificar la cuota");
+    if (!res.ok) setMessage(json.error ?? "No se pudo modificar la cuota", "error");
     if (selected) await loadPayment(selected);
   }
 
   const locked = Boolean(payment?.lockedAt);
 
-  async function downloadPaymentImage(period: Period) {
-    setBusy(true);
-    setMessage("");
-    const params = new URLSearchParams({
-      mode: "single",
-      messengerId,
-      periodId: period.id,
-      from: period.fromDate.slice(0, 10),
-      to: period.toDate.slice(0, 10),
-    });
-    const image = await fetch(`/api/mensajeros/reportes?${params.toString()}`);
+  /** Downloads the stored report of a locked period. */
+  async function downloadStoredReport(period: Period, reportId: string) {
+    const image = await fetch(`/api/mensajeros/reportes/${reportId}/imagen`);
     if (!image.ok) {
       const json = await image.json().catch(() => ({}));
-      setMessage(json.error ?? "No se pudo generar la imagen del pago");
+      setMessage(json.error ?? "No se pudo descargar el reporte", "error");
+      return false;
+    }
+    await saveResponseAs(image, imageFileName(period));
+    return true;
+  }
+
+  /** Builds the report of a locked period again (e.g. after a failed generation) and downloads it. */
+  async function regenerateReport(period: Period) {
+    setBusy(true);
+    setNotice(null);
+    const res = await fetch("/api/mensajeros/periodos", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "REGENERATE_REPORT", periodId: period.id, messengerId }),
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok || !json.report?.id) {
+      setBusy(false);
+      setMessage(json.error ?? "No se pudo generar el reporte", "error");
+      return;
+    }
+    const downloaded = await downloadStoredReport(period, json.report.id);
+    setBusy(false);
+    if (downloaded) setMessage("Reporte generado y guardado en el historial", "success");
+    await refreshAll();
+  }
+
+  /** Locked period: its stored report (generated when missing). Open period: a provisional preview, not stored. */
+  async function downloadPaymentImage(period: Period) {
+    if (period.status === "BLOQUEADO") {
+      if (!period.report) {
+        await regenerateReport(period);
+        return;
+      }
+      setBusy(true);
+      setNotice(null);
+      await downloadStoredReport(period, period.report.id);
       setBusy(false);
       return;
     }
-    const url = URL.createObjectURL(await image.blob());
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `pago-${period.label.replace(/[^\w.-]+/g, "_")}.jpg`;
-    link.click();
-    URL.revokeObjectURL(url);
 
-    const saved = await fetch("/api/mensajeros/gestion-diaria", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ type: "report", messengerId, from: period.fromDate.slice(0, 10), to: period.toDate.slice(0, 10), periodId: period.id }),
-    });
-    const json = await saved.json().catch(() => ({}));
+    setBusy(true);
+    setNotice(null);
+    const params = new URLSearchParams({ mode: "single", messengerId, periodId: period.id });
+    const image = await fetch(`/api/mensajeros/reportes?${params.toString()}`);
+    if (!image.ok) {
+      const json = await image.json().catch(() => ({}));
+      setMessage(json.error ?? "No se pudo generar la imagen del pago", "error");
+      setBusy(false);
+      return;
+    }
+    await saveResponseAs(image, imageFileName(period, "-provisional"));
     setBusy(false);
-    setMessage(saved.ok ? `Imagen del pago generada y guardada en el historial: ${formatCurrencyDOP(json.totalCents ?? 0)} a pagar` : (json.error ?? "Imagen generada, pero no se pudo guardar en el historial"));
-    onChanged?.();
   }
 
   return (
@@ -200,7 +261,14 @@ export function PayrollPanel({ messengerId, onChanged }: { messengerId: string; 
         </div>
       </div>
 
-      {message ? <p className="text-xs text-slate-600">{message}</p> : null}
+      {notice ? (
+        <p
+          role={notice.tone === "error" || notice.tone === "warning" ? "alert" : "status"}
+          className={`text-xs ${NOTICE_CLASS[notice.tone]}`}
+        >
+          {notice.text}
+        </p>
+      ) : null}
       {!periods.length ? <p className="text-sm text-slate-500">No hay periodos de corte definidos. Cree uno general desde la pantalla de Mensajeros o uno propio aqui.</p> : null}
 
       <div className="space-y-2">
@@ -330,9 +398,29 @@ export function PayrollPanel({ messengerId, onChanged }: { messengerId: string; 
                     disabled={busy}
                     className="rounded-xl bg-[#0f2544] px-4 py-2 text-xs font-semibold text-white disabled:opacity-50"
                   >
-                    Generar reporte de pago (imagen)
+                    {period.status === "BLOQUEADO"
+                      ? period.report
+                        ? "Descargar reporte"
+                        : "Generar reporte"
+                      : "Vista previa del reporte (imagen)"}
                   </button>
-                  {!locked ? <span className="text-xs text-amber-700">Periodo abierto: las cifras son provisionales hasta bloquearlo.</span> : null}
+                  {period.status === "BLOQUEADO" && period.report ? (
+                    <button
+                      onClick={() => void regenerateReport(period)}
+                      disabled={busy}
+                      className="rounded-xl border border-slate-300 px-4 py-2 text-xs font-semibold text-slate-700 disabled:opacity-50"
+                    >
+                      Regenerar reporte
+                    </button>
+                  ) : null}
+                  {period.status === "BLOQUEADO" && !period.report ? (
+                    <span className="text-xs font-semibold text-rose-700">Periodo bloqueado sin reporte guardado: genere el reporte.</span>
+                  ) : null}
+                  {!locked ? (
+                    <span className="text-xs text-amber-700">
+                      Periodo abierto: las cifras son provisionales. El reporte se guarda al bloquear el periodo.
+                    </span>
+                  ) : null}
                 </div>
               </div>
             ) : null}
