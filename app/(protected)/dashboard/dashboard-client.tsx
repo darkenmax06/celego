@@ -11,7 +11,7 @@ import { StatusBadge } from "@/components/ui/status-badge";
 import { notificationFailureMessage, notifyInBrowser } from "@/lib/browser-notifications";
 import { usePersistentState } from "@/lib/use-persistent-state";
 import type { DailyFlowPoint } from "@/lib/dashboard/daily-flow";
-import { parseDashboardProductType, type DashboardProductType } from "@/lib/dashboard/filters";
+import { buildTarjetasDrillDownParams, parseDashboardProductType, type DashboardProductType } from "@/lib/dashboard/filters";
 import {
   buildStatusSegments,
   DELIVERED_STATUSES,
@@ -244,7 +244,7 @@ export default function DashboardClient() {
   const statusSegments = buildStatusSegments(data.statusBreakdown);
 
   function goToTarjetas(extra: Record<string, string>) {
-    const params = new URLSearchParams({ from, to, ...(productType === "ALL" ? {} : { productType }), ...extra });
+    const params = buildTarjetasDrillDownParams({ from, to, productType, extra });
     router.push(`/tarjetas?${params.toString()}`);
   }
 
