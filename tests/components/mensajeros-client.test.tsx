@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import MensajerosClient from "@/app/(protected)/mensajeros/mensajeros-client";
 
@@ -176,11 +176,13 @@ describe("MensajerosClient archive lifecycle (R3.3)", () => {
     await screen.findByText("Beto Archivado fue eliminado");
   });
 
-  it("surfaces the 409 history message and suggests Archivar", async () => {
-    const error = "No se puede eliminar: tiene historial (loans: 2). Use Archivar en su lugar.";
+  it("keeps a 409 history refusal in a red dialog with the counts and offers Archivar", async () => {
+    const error = "No se puede eliminar: tiene historial (routes: 27). Use Archivar en su lugar.";
     const base = fetchMock.getMockImplementation() as (url: string, init?: RequestInit) => Promise<unknown>;
     fetchMock.mockImplementation(async (url: string, init?: RequestInit) =>
-      init?.method === "DELETE" ? json({ error, code: "TIENE_HISTORIAL" }, 409) : base(url, init),
+      init?.method === "DELETE"
+        ? json({ error, code: "TIENE_HISTORIAL", counts: { routes: 27, dailyRecords: 33 } }, 409)
+        : base(url, init),
     );
     render(<MensajerosClient canDelete />);
     await screen.findAllByText("Ana Activa");
@@ -189,7 +191,53 @@ describe("MensajerosClient archive lifecycle (R3.3)", () => {
     await screen.findByRole("alertdialog");
     fireEvent.click(screen.getByRole("button", { name: "Eliminar mensajero" }));
 
-    await screen.findByText(error);
+    const refusal = await screen.findByRole("alert");
+    expect(refusal).toHaveTextContent("Tiene historial: 27 rutas y 33 registros diarios.");
+    expect(refusal).toHaveClass("text-rose-700");
+    const dialog = screen.getByRole("alertdialog");
+    expect(dialog).toHaveTextContent("No se puede eliminar a Ana Activa");
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Archivar" }));
+    await waitFor(() => {
+      const post = fetchMock.mock.calls.find(([url, init]) => url === "/api/mensajeros/estado" && init?.method === "POST");
+      expect(JSON.parse(post![1].body)).toEqual({ id: "m1", action: "archive" });
+    });
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument());
+    expect(await screen.findByText("Ana Activa fue archivado")).toHaveClass("text-emerald-700");
+  });
+
+  it("only offers Cerrar when the blocked messenger is already archived", async () => {
+    const base = fetchMock.getMockImplementation() as (url: string, init?: RequestInit) => Promise<unknown>;
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) =>
+      init?.method === "DELETE" ? json({ error: "x", code: "TIENE_HISTORIAL", counts: { loans: 1 } }, 409) : base(url, init),
+    );
+    render(<MensajerosClient canDelete />);
+    await screen.findAllByText("Ana Activa");
+    fireEvent.click(screen.getByRole("button", { name: "Archivados" }));
+    await screen.findByText("Beto Archivado");
+
+    fireEvent.click(screen.getByRole("button", { name: "Eliminar" }));
+    await screen.findByRole("alertdialog");
+    fireEvent.click(screen.getByRole("button", { name: "Eliminar mensajero" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("1 prestamo");
+    expect(within(screen.getByRole("alertdialog")).queryByRole("button", { name: "Archivar" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Cerrar" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument());
+  });
+
+  it("shows other lifecycle errors in red", async () => {
+    const base = fetchMock.getMockImplementation() as (url: string, init?: RequestInit) => Promise<unknown>;
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) =>
+      init?.method === "DELETE" ? json({ error: "Otra operacion esta en curso", code: "CONFLICTO_CONCURRENTE" }, 409) : base(url, init),
+    );
+    render(<MensajerosClient canDelete />);
+    await screen.findAllByText("Ana Activa");
+    fireEvent.click(screen.getByRole("button", { name: "Eliminar" }));
+    await screen.findByRole("alertdialog");
+    fireEvent.click(screen.getByRole("button", { name: "Eliminar mensajero" }));
+
+    expect(await screen.findByText("Otra operacion esta en curso")).toHaveClass("text-rose-700");
     expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
   });
 });

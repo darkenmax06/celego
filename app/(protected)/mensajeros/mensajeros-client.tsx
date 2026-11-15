@@ -11,6 +11,7 @@ import { LoansPanel } from "@/components/mensajeros/loans-panel";
 import { PayrollPanel } from "@/components/mensajeros/payroll-panel";
 import { usePersistentState } from "@/lib/use-persistent-state";
 import { copyTextToClipboard } from "@/lib/clipboard";
+import { formatHistoryCounts } from "@/lib/messenger-history-labels";
 
 type Messenger = {
   id: string;
@@ -63,6 +64,9 @@ type PendingAction = {
   openRoutes: number;
   assignedCards: number;
 };
+
+type Notice = { text: string; tone: "success" | "error" };
+type DeleteBlocked = { messenger: Messenger; counts: Record<string, number> };
 
 type PaginationMeta = { page: number; pageSize: number; total: number; totalPages: number };
 type ProvinceRow = { id: string; nombre: string; zona: string; active: boolean };
@@ -160,9 +164,12 @@ export default function MensajerosClient({ canDelete = false }: { canDelete?: bo
   const [view, setView] = usePersistentState<MessengerView>("mensajeros:view", "activos");
   const [pendingAction, setPendingAction] = useState<PendingAction | null>(null);
   const [lifecycleBusy, setLifecycleBusy] = useState(false);
+  const [deleteBlocked, setDeleteBlocked] = useState<DeleteBlocked | null>(null);
   const loadRequestId = useRef(0);
   const [showNew, setShowNew] = usePersistentState("mensajeros:new-modal", false);
-  const [message, setMessage] = useState("");
+  const [notice, setNotice] = useState<Notice | null>(null);
+  const notifySuccess = (text: string) => setNotice({ text, tone: "success" });
+  const notifyError = (text: string) => setNotice({ text, tone: "error" });
   const [busyGlobalSaveById, setBusyGlobalSaveById] = useState<Record<string, boolean>>({});
   const [busyGlobalZip, setBusyGlobalZip] = useState(false);
   const globalAutoSaveTimers = useRef<Record<string, ReturnType<typeof setTimeout> | null>>({});
@@ -285,14 +292,14 @@ export default function MensajerosClient({ canDelete = false }: { canDelete?: bo
 
     const json = await res.json();
     if (!res.ok) {
-      setMessage(json.error ?? "No se pudo guardar registro global");
+      notifyError(json.error ?? "No se pudo guardar registro global");
       setGlobalRowBusy(messenger.id, false);
       return;
     }
 
     setGlobalRowBusy(messenger.id, false);
     if (!silent) {
-      setMessage(`Registro diario guardado para ${messenger.nombre}`);
+      notifySuccess(`Registro diario guardado para ${messenger.nombre}`);
     }
     await loadActivity();
   }
@@ -315,11 +322,11 @@ export default function MensajerosClient({ canDelete = false }: { canDelete?: bo
   }
 
   async function requestArchive(messenger: Messenger) {
-    setMessage("");
+    setNotice(null);
     const res = await fetch(`/api/mensajeros/estado?id=${encodeURIComponent(messenger.id)}`, { cache: "no-store" });
     const json = await res.json().catch(() => ({}));
     if (!res.ok) {
-      setMessage(json.error ?? "No se pudo consultar el estado del mensajero");
+      notifyError(json.error ?? "No se pudo consultar el estado del mensajero");
       return;
     }
     setPendingAction({
@@ -330,44 +337,64 @@ export default function MensajerosClient({ canDelete = false }: { canDelete?: bo
     });
   }
 
-  async function confirmPendingAction() {
-    if (!pendingAction || lifecycleBusy) return;
-    setLifecycleBusy(true);
-    const isDelete = pendingAction.type === "delete";
-    let res: Response;
-    let json: { error?: string } = {};
+  async function runLifecycle(type: PendingAction["type"], target: Messenger) {
+    const isDelete = type === "delete";
     try {
-      res = await fetch(isDelete ? "/api/mensajeros" : "/api/mensajeros/estado", {
+      const res = await fetch(isDelete ? "/api/mensajeros" : "/api/mensajeros/estado", {
         method: isDelete ? "DELETE" : "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(
-          isDelete
-            ? { id: pendingAction.messenger.id }
-            : { id: pendingAction.messenger.id, action: pendingAction.type },
-        ),
+        body: JSON.stringify(isDelete ? { id: target.id } : { id: target.id, action: type }),
       });
-      json = await res.json().catch(() => ({}));
+      const json = (await res.json().catch(() => ({}))) as {
+        error?: string;
+        code?: string;
+        counts?: Record<string, number>;
+      };
+      return { ok: res.ok, json };
     } catch {
-      setPendingAction(null);
-      setMessage("No se pudo actualizar el mensajero");
-      return;
-    } finally {
-      setLifecycleBusy(false);
+      return { ok: false, json: { error: "No se pudo actualizar el mensajero" } as { error?: string; code?: string; counts?: Record<string, number> } };
     }
+  }
+
+  async function confirmPendingAction() {
+    if (!pendingAction || lifecycleBusy) return;
+    const { type, messenger: target } = pendingAction;
+    setLifecycleBusy(true);
+    const { ok, json } = await runLifecycle(type, target);
+    setLifecycleBusy(false);
     setPendingAction(null);
-    if (!res.ok) {
-      setMessage(json.error ?? "No se pudo actualizar el mensajero");
+    if (!ok) {
+      if (type === "delete" && json.code === "TIENE_HISTORIAL") {
+        // Keep the refusal in a dialog, next to the way out (archiving).
+        setDeleteBlocked({ messenger: target, counts: json.counts ?? {} });
+        return;
+      }
+      notifyError(json.error ?? "No se pudo actualizar el mensajero");
       return;
     }
-    const name = pendingAction.messenger.nombre;
-    const done = { archive: "archivado", restore: "restaurado", delete: "eliminado" }[pendingAction.type];
-    setMessage(`${name} fue ${done}`);
+    const done = { archive: "archivado", restore: "restaurado", delete: "eliminado" }[type];
+    notifySuccess(`${target.nombre} fue ${done}`);
+    await loadMessengers(messengerPage, view);
+  }
+
+  async function archiveBlockedMessenger() {
+    if (!deleteBlocked || lifecycleBusy) return;
+    const target = deleteBlocked.messenger;
+    setLifecycleBusy(true);
+    const { ok, json } = await runLifecycle("archive", target);
+    setLifecycleBusy(false);
+    setDeleteBlocked(null);
+    if (!ok) {
+      notifyError(json.error ?? "No se pudo archivar el mensajero");
+      return;
+    }
+    notifySuccess(`${target.nombre} fue archivado`);
     await loadMessengers(messengerPage, view);
   }
 
   async function downloadGlobalReportsZip() {
     if (!globalReportFrom || !globalReportTo) {
-      setMessage("Selecciona el rango para generar el ZIP");
+      notifyError("Selecciona el rango para generar el ZIP");
       return;
     }
 
@@ -381,7 +408,7 @@ export default function MensajerosClient({ canDelete = false }: { canDelete?: bo
     const res = await fetch(`/api/mensajeros/reportes?${params.toString()}`);
     if (!res.ok) {
       const json = await res.json().catch(() => ({ error: "No se pudo generar ZIP general" }));
-      setMessage(json.error ?? "No se pudo generar ZIP general");
+      notifyError(json.error ?? "No se pudo generar ZIP general");
       setBusyGlobalZip(false);
       return;
     }
@@ -394,7 +421,7 @@ export default function MensajerosClient({ canDelete = false }: { canDelete?: bo
     a.click();
     URL.revokeObjectURL(url);
     setBusyGlobalZip(false);
-    setMessage("ZIP general generado");
+    notifySuccess("ZIP general generado");
   }
 
   return (
@@ -634,7 +661,14 @@ export default function MensajerosClient({ canDelete = false }: { canDelete?: bo
         </div>
       </Panel>
 
-      {message ? <p className="mt-4 text-sm text-emerald-700">{message}</p> : null}
+      {notice ? (
+        <p
+          role={notice.tone === "error" ? "alert" : "status"}
+          className={`mt-4 text-sm ${notice.tone === "error" ? "text-rose-700" : "text-emerald-700"}`}
+        >
+          {notice.text}
+        </p>
+      ) : null}
 
       <ConfirmDialog
         open={Boolean(pendingAction)}
@@ -665,13 +699,31 @@ export default function MensajerosClient({ canDelete = false }: { canDelete?: bo
         onCancel={() => setPendingAction(null)}
       />
 
+      <ConfirmDialog
+        open={Boolean(deleteBlocked)}
+        tone="danger"
+        busy={lifecycleBusy}
+        title={`No se puede eliminar a ${deleteBlocked?.messenger.nombre ?? ""}`}
+        message={
+          deleteBlocked?.messenger.activo
+            ? "Un mensajero con historial no se elimina para no perder rutas, pagos ni registros. Puede archivarlo: dejara de recibir nuevas rutas, lotes y tarjetas, y no podra iniciar sesion en la app movil."
+            : "Un mensajero con historial no se elimina para no perder rutas, pagos ni registros. Ya esta archivado, por lo que no recibe trabajo nuevo."
+        }
+        alert={historyAlert(deleteBlocked?.counts)}
+        confirmLabel="Archivar"
+        hideConfirm={!deleteBlocked?.messenger.activo}
+        cancelLabel={deleteBlocked?.messenger.activo ? "Cancelar" : "Cerrar"}
+        onConfirm={() => void archiveBlockedMessenger()}
+        onCancel={() => setDeleteBlocked(null)}
+      />
+
       {showNew ? (
         <NewMessengerModal
           provinces={provinces}
           onClose={() => setShowNew(false)}
           onCreated={async () => {
             setShowNew(false);
-            setMessage("Mensajero creado");
+            notifySuccess("Mensajero creado");
             await Promise.all([loadMessengers(messengerPage), loadActivity()]);
           }}
         />
@@ -686,7 +738,7 @@ export default function MensajerosClient({ canDelete = false }: { canDelete?: bo
           onClose={() => setSelectedMessengerId(null)}
           onUpdated={async (nextMessage) => {
             if (nextMessage) {
-              setMessage(nextMessage);
+              notifySuccess(nextMessage);
             }
             await Promise.all([loadMessengers(messengerPage), loadActivity()]);
           }}
@@ -694,6 +746,11 @@ export default function MensajerosClient({ canDelete = false }: { canDelete?: bo
       ) : null}
     </div>
   );
+}
+
+function historyAlert(counts: Record<string, number> | undefined) {
+  const detail = formatHistoryCounts(counts);
+  return detail ? `Tiene historial: ${detail}.` : "Tiene historial asociado.";
 }
 
 function MiniStat({ label, value }: { label: string; value: string | number }) {
