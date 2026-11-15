@@ -4,8 +4,6 @@ import { ensureCardTransitionPolicy } from "@/lib/card-transition-policy-store";
 import { CardStatus } from "@prisma/client";
 
 export async function ensureBaseCatalogs() {
-  await prisma.$executeRawUnsafe('DROP INDEX IF EXISTS "Card_debit_request_dispatch_key";').catch(() => undefined);
-
   await prisma.sLAConfig.upsert({
     where: { id: "default" },
     update: {},

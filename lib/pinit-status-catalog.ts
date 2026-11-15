@@ -162,6 +162,7 @@ export const PINIT_STATUS_CATALOG: Readonly<Record<number, string>> = {
  * as returned. Every other code is either a delivery or an in-transit state.
  */
 export const PINIT_RETURN_CODES: Readonly<Record<number, CardStatus>> = {
+  123: CardStatus.TD_DEVUELTO_NO_LOCALIZADO,
   213: CardStatus.TD_DEVUELTO_NO_LOCALIZADO,
   420: CardStatus.TD_DEVUELTO_NO_LOCALIZADO,
   335: CardStatus.TD_ZONA_FUERA_COBERTURA,

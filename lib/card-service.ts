@@ -636,9 +636,26 @@ export async function persistDebitDespachoImport(input: {
   byUserId?: string;
 }) {
   let created = 0;
+  let skipped = 0;
   const createdCards = [];
 
   for (const item of input.rows) {
+    // A debit card is identified by (requestNumber, dispatchDate). The consolidado
+    // import or a re-uploaded despacho file may have created it already; creating
+    // it again leaves a stale duplicate that Pinit updates and the UI show apart.
+    const existing = await prisma.card.findFirst({
+      where: {
+        requestNumber: item.requestNumber,
+        dispatchDate: item.dispatchDate,
+        productType: CardProductType.DEBITO,
+      },
+      select: { id: true },
+    });
+    if (existing) {
+      skipped += 1;
+      continue;
+    }
+
     const { customer } = await upsertCustomerPreservingData(prisma, {
       cedula: item.cedula,
       nombre: item.nombre,
@@ -696,7 +713,7 @@ export async function persistDebitDespachoImport(input: {
   }).catch(() => undefined);
 
   const inactive = countInactiveProvinceRows(input.rows.map((row) => row.provincia), await loadInactiveProvinceNames(prisma));
-  return { created, updated: 0, count: input.rows.length, cards: createdCards, inactiveProvinceRows: inactive.count, inactiveProvinceNames: inactive.names };
+  return { created, updated: 0, skipped, count: input.rows.length, cards: createdCards, inactiveProvinceRows: inactive.count, inactiveProvinceNames: inactive.names };
 }
 
 /** Bitácora description: the Pinit status plus the comment Pinit recorded for it. */
