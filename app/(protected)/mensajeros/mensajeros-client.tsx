@@ -731,6 +731,7 @@ export default function MensajerosClient({ canDelete = false }: { canDelete?: bo
 
       {selectedMessenger ? (
         <MessengerModal
+          key={selectedMessenger.id}
           messenger={selectedMessenger}
           provinces={provinces}
           records={records.filter((item) => item.messengerId === selectedMessenger.id)}
@@ -910,6 +911,7 @@ function MessengerModal({
   onUpdated: (message: string) => Promise<void>;
 }) {
   const [tab, setTab] = useState<"perfil" | "registro" | "pagos" | "prestamos" | "reporte" | "historial">("perfil");
+  const [nombre, setNombre] = useState(messenger.nombre);
   const [telefono, setTelefono] = useState(messenger.telefono ?? "");
   const [zona, setZona] = useState(messenger.zonaPrincipal ?? "Metro");
   const [provinciaTrabajo, setProvinciaTrabajo] = useState(messenger.provinciaTrabajo ?? "");
@@ -929,7 +931,11 @@ function MessengerModal({
   const [to, setTo] = useState(new Date().toISOString().slice(0, 10));
   const [busy, setBusy] = useState(false);
   const [savingRecord, setSavingRecord] = useState(false);
-  const [feedback, setFeedback] = useState("");
+  const [feedback, setFeedbackNotice] = useState<Notice | null>(null);
+  const setFeedback = useCallback(
+    (text: string, tone: Notice["tone"] = "success") => setFeedbackNotice(text ? { text, tone } : null),
+    [],
+  );
   const [copiedMessengerId, setCopiedMessengerId] = useState(false);
   const skipRecordAutoSave = useRef(true);
   const recordAutoSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -943,11 +949,12 @@ function MessengerModal({
     lastRecordSignature.current = recordSignature(recordDate, nextCounts);
   }, [recordDate, records]);
 
-  useEffect(() => {
-    if (!provinciaTrabajo && provinces.length) {
-      setProvinciaTrabajo(provinces[0]);
-    }
-  }, [provinciaTrabajo, provinces]);
+  // The saved province stays selectable even if it is no longer configured or active.
+  const provinceOptions = useMemo(
+    () => (provinciaTrabajo && !provinces.includes(provinciaTrabajo) ? [provinciaTrabajo, ...provinces] : provinces),
+    [provinciaTrabajo, provinces],
+  );
+  const zoneOptions: string[] = zona && !(ZONES as readonly string[]).includes(zona) ? [zona, ...ZONES] : [...ZONES];
 
   const previewRecords = useMemo(() => {
     const start = new Date(from);
@@ -964,6 +971,11 @@ function MessengerModal({
   );
 
   async function saveProfile() {
+    const trimmedName = nombre.trim();
+    if (trimmedName.length < 2) {
+      setFeedback("El nombre debe tener al menos 2 caracteres", "error");
+      return;
+    }
     setBusy(true);
     setFeedback("");
 
@@ -972,10 +984,10 @@ function MessengerModal({
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         id: messenger.id,
-        nombre: messenger.nombre,
-        telefono: telefono || undefined,
-        zonaPrincipal: zona || undefined,
-        provinciaTrabajo: provinciaTrabajo || undefined,
+        nombre: trimmedName,
+        telefono: telefono.trim(),
+        zonaPrincipal: zona,
+        provinciaTrabajo,
         rates: SERVICE_ORDER.map((service) => ({
           serviceType: service,
           amountCents: toCents(rates[service]),
@@ -984,12 +996,14 @@ function MessengerModal({
     });
     const json = await res.json();
     if (!res.ok) {
-      setFeedback(json.error ?? "No se pudo guardar perfil");
+      setFeedback(json.error ?? "No se pudo guardar perfil", "error");
       setBusy(false);
       return;
     }
 
     setBusy(false);
+    setNombre(trimmedName);
+    setTelefono(telefono.trim());
     setFeedback("Perfil actualizado");
     await onUpdated("Perfil de mensajero actualizado");
   }
@@ -999,7 +1013,7 @@ function MessengerModal({
       setCopiedMessengerId(true);
       setFeedback("Messenger ID copiado. Pegalo en Expo Go para iniciar sesion.");
     } else {
-      setFeedback("No se pudo copiar automaticamente. Selecciona el ID y copialo manualmente.");
+      setFeedback("No se pudo copiar automaticamente. Selecciona el ID y copialo manualmente.", "error");
     }
   }
 
@@ -1030,7 +1044,7 @@ function MessengerModal({
     });
     const json = await res.json();
     if (!res.ok) {
-      setFeedback(json.error ?? "No se pudo guardar registro");
+      setFeedback(json.error ?? "No se pudo guardar registro", "error");
       if (silent) {
         setSavingRecord(false);
       } else {
@@ -1047,7 +1061,7 @@ function MessengerModal({
     }
     setFeedback(silent ? "Cambios guardados automaticamente" : "Registro diario guardado");
     await onUpdated(silent ? "" : `Registro diario guardado para ${messenger.nombre}`);
-  }, [messenger.id, messenger.nombre, onUpdated, recordCounts, recordDate]);
+  }, [messenger.id, messenger.nombre, onUpdated, recordCounts, recordDate, setFeedback]);
 
   useEffect(() => {
     if (tab !== "registro") return;
@@ -1193,38 +1207,62 @@ function MessengerModal({
                 </code>
               </div>
 
-              <div className="mb-3 grid gap-3 md:grid-cols-3">
-                <input
-                  value={telefono}
-                  onChange={(event) => setTelefono(event.target.value)}
-                  placeholder="Telefono"
-                  className="rounded-xl border border-slate-300 px-3 py-2"
-                />
-                <select
-                  value={zona}
-                  onChange={(event) => setZona(event.target.value)}
-                  className="rounded-xl border border-slate-300 px-3 py-2"
-                >
-                  {ZONES.map((zone) => (
-                    <option key={zone} value={zone}>
-                      {zone}
-                    </option>
-                  ))}
-                </select>
-                <select
-                  value={provinciaTrabajo}
-                  onChange={(event) => setProvinciaTrabajo(event.target.value)}
-                  className="rounded-xl border border-slate-300 px-3 py-2"
-                >
-                  {!provinces.length ? <option value="">Sin provincias configuradas</option> : null}
-                  {provinces.map((province) => (
-                    <option key={province} value={province}>
-                      {province}
-                    </option>
-                  ))}
-                </select>
-              </div>
+              <section className="mb-4 rounded-2xl border border-slate-200 p-4" aria-labelledby="messenger-data-title">
+                <p id="messenger-data-title" className="mb-3 text-sm font-semibold text-slate-900">
+                  Datos del mensajero
+                </p>
+                <div className="grid gap-3 md:grid-cols-2">
+                  <label className="text-xs font-semibold text-slate-600">
+                    Nombre
+                    <input
+                      value={nombre}
+                      onChange={(event) => setNombre(event.target.value)}
+                      placeholder="Nombre completo"
+                      className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm font-normal text-slate-900"
+                    />
+                  </label>
+                  <label className="text-xs font-semibold text-slate-600">
+                    Telefono
+                    <input
+                      value={telefono}
+                      onChange={(event) => setTelefono(event.target.value)}
+                      placeholder="Telefono"
+                      className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm font-normal text-slate-900"
+                    />
+                  </label>
+                  <label className="text-xs font-semibold text-slate-600">
+                    Zona principal
+                    <select
+                      value={zona}
+                      onChange={(event) => setZona(event.target.value)}
+                      className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm font-normal text-slate-900"
+                    >
+                      {zoneOptions.map((zone) => (
+                        <option key={zone} value={zone}>
+                          {zone}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="text-xs font-semibold text-slate-600">
+                    Provincia de trabajo
+                    <select
+                      value={provinciaTrabajo}
+                      onChange={(event) => setProvinciaTrabajo(event.target.value)}
+                      className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm font-normal text-slate-900"
+                    >
+                      <option value="">{provinces.length ? "Sin provincia asignada" : "Sin provincias configuradas"}</option>
+                      {provinceOptions.map((province) => (
+                        <option key={province} value={province}>
+                          {province}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+              </section>
 
+              <p className="mb-2 text-sm font-semibold text-slate-900">Tarifas por servicio</p>
               <div className="space-y-2">
                 {SERVICE_ORDER.map((service) => (
                   <div key={service} className="flex items-center gap-2 rounded-xl border border-slate-200 px-3 py-2">
@@ -1405,7 +1443,14 @@ function MessengerModal({
             </div>
           ) : null}
 
-          {feedback ? <p className="mt-4 text-sm text-emerald-700">{feedback}</p> : null}
+          {feedback ? (
+            <p
+              role={feedback.tone === "error" ? "alert" : "status"}
+              className={`mt-4 text-sm ${feedback.tone === "error" ? "text-rose-700" : "text-emerald-700"}`}
+            >
+              {feedback.text}
+            </p>
+          ) : null}
         </div>
       </div>
     </div>

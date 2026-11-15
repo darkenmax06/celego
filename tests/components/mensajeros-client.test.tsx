@@ -152,6 +152,59 @@ describe("MensajerosClient archive lifecycle (R3.3)", () => {
     });
   });
 
+  it("edits the messenger name and profile data from Perfil y tarifas", async () => {
+    const base = fetchMock.getMockImplementation() as (url: string, init?: RequestInit) => Promise<unknown>;
+    let saved = false;
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (url.startsWith("/api/config/provincias")) {
+        return json({ provincias: [{ id: "p1", nombre: "Santiago", zona: "Norte", active: true }] });
+      }
+      if (init?.method === "PATCH") {
+        saved = true;
+        return json({ messenger: {} });
+      }
+      if (url.startsWith("/api/mensajeros?") && saved) {
+        return json({ messengers: [{ ...messenger("m1", "Ana Maria", true), telefono: "809-555" }], pagination });
+      }
+      return base(url, init);
+    });
+    render(<MensajerosClient />);
+    await screen.findAllByText("Ana Activa");
+    fireEvent.click(screen.getByRole("button", { name: "Ver perfil" }));
+
+    const section = await screen.findByRole("region", { name: "Datos del mensajero" });
+    fireEvent.change(within(section).getByLabelText("Nombre"), { target: { value: "  Ana Maria " } });
+    fireEvent.change(within(section).getByLabelText("Telefono"), { target: { value: "809-555" } });
+    fireEvent.change(within(section).getByLabelText("Zona principal"), { target: { value: "Norte" } });
+    await within(section).findByRole("option", { name: "Santiago" });
+    fireEvent.change(within(section).getByLabelText("Provincia de trabajo"), { target: { value: "Santiago" } });
+    fireEvent.click(screen.getByRole("button", { name: "Guardar perfil y tarifas" }));
+
+    await waitFor(() => {
+      const patch = fetchMock.mock.calls.find(([, init]) => init?.method === "PATCH");
+      expect(JSON.parse(patch![1].body)).toMatchObject({
+        id: "m1",
+        nombre: "Ana Maria",
+        telefono: "809-555",
+        zonaPrincipal: "Norte",
+        provinciaTrabajo: "Santiago",
+      });
+    });
+    expect(await screen.findAllByText("Ana Maria")).not.toHaveLength(0);
+  });
+
+  it("refuses to save a name shorter than 2 characters", async () => {
+    render(<MensajerosClient />);
+    await screen.findAllByText("Ana Activa");
+    fireEvent.click(screen.getByRole("button", { name: "Ver perfil" }));
+    const section = await screen.findByRole("region", { name: "Datos del mensajero" });
+    fireEvent.change(within(section).getByLabelText("Nombre"), { target: { value: " A " } });
+    fireEvent.click(screen.getByRole("button", { name: "Guardar perfil y tarifas" }));
+
+    expect(await screen.findByText("El nombre debe tener al menos 2 caracteres")).toHaveClass("text-rose-700");
+    expect(fetchMock.mock.calls.some(([, init]) => init?.method === "PATCH")).toBe(false);
+  });
+
   it("hides Eliminar unless the page grants canDelete", async () => {
     render(<MensajerosClient />);
     await screen.findAllByText("Ana Activa");
