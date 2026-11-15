@@ -640,13 +640,13 @@ export async function persistDebitDespachoImport(input: {
   const createdCards = [];
 
   for (const item of input.rows) {
-    // A debit card is identified by (requestNumber, dispatchDate). The consolidado
-    // import or a re-uploaded despacho file may have created it already; creating
+    // The consolidado identifies a debit card by requestNumber and dictates its
+    // dispatch date, so the despacho date may differ from the stored one. If the
+    // consolidado or a re-uploaded despacho file already created the card, creating
     // it again leaves a stale duplicate that Pinit updates and the UI show apart.
     const existing = await prisma.card.findFirst({
       where: {
         requestNumber: item.requestNumber,
-        dispatchDate: item.dispatchDate,
         productType: CardProductType.DEBITO,
       },
       select: { id: true },

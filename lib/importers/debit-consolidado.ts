@@ -65,6 +65,8 @@ export function parseDebitConsolidadoImport(buffer: Buffer, preferredSheet = "DA
 
   const header = rows[headerRowIndex];
   const idx = {
+    // "Fecha" (first column of the bank consolidado) is the dispatch date.
+    fecha: mapHeaderIndex(header, ["FECHA"]),
     fechaAsig: mapHeaderIndex(header, ["FECH ASIG", "FECHA ASIGNACION", "FECHA ASIG", "FECHA_ASIGNACION"]),
     nss: mapHeaderIndex(header, ["N-SS", "NRO_SS", "NRO SS", "NO_ORDEN", "NO. DE ORDEN", "ORDEN"]),
     tipo: mapHeaderIndex(header, ["TIPO"]),
@@ -164,8 +166,12 @@ export function parseDebitConsolidadoImport(buffer: Buffer, preferredSheet = "DA
     const status = normalizeDebitConsolidadoStatus(rawStatus);
 
     // Dates
-    const rawFechaAsig = getCell(row, idx.fechaAsig) || getCell(row, idx.fechaCreacion);
-    const dispatchDate = parseExcelSerialDate(rawFechaAsig);
+    // The consolidado dictates the dispatch date: its "Fecha" column first, then
+    // the legacy assignment date, and FECHA_CREACION only as a last resort.
+    const dispatchDate =
+      parseExcelSerialDate(getCell(row, idx.fecha)) ??
+      parseExcelSerialDate(getCell(row, idx.fechaAsig)) ??
+      parseExcelSerialDate(getCell(row, idx.fechaCreacion));
     const rawFechaEntrega = getCell(row, idx.fechaEntrega);
     const deliveryDate = parseExcelSerialDate(rawFechaEntrega);
 
