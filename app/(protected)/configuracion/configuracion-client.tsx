@@ -12,7 +12,15 @@ import { usePersistentState } from "@/lib/use-persistent-state";
 type SlaConfig = { id: string; businessDays: number; warningBusinessDays: number };
 type DebitConsolidadoExportConfig = { id: string; dispatchDateFrom: string | null };
 type Motivo = { id: string; nombre: string; active: boolean };
-type Provincia = { id: string; nombre: string; zona: string; active: boolean };
+type Provincia = { id: string; nombre: string; zona: string; active: boolean; aliases?: string[] };
+type AliasMerge = { provincia: Provincia; aliases: string[]; conflicts: Array<{ id: string; nombre: string }> };
+
+function parseAliasInput(value: string) {
+  return value
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
 
 export default function ConfiguracionClient() {
   const [activeTab, setActiveTab] = usePersistentState<"GENERAL" | "USERS" | "PLANTILLAS">(
@@ -25,6 +33,10 @@ export default function ConfiguracionClient() {
   const [provincias, setProvincias] = useState<Provincia[]>([]);
   const [provinciaToDelete, setProvinciaToDelete] = useState<Provincia | null>(null);
   const [deletingProvincia, setDeletingProvincia] = useState(false);
+  const [editingAliasesId, setEditingAliasesId] = useState<string | null>(null);
+  const [aliasDraft, setAliasDraft] = useState("");
+  const [savingAliases, setSavingAliases] = useState(false);
+  const [aliasMerge, setAliasMerge] = useState<AliasMerge | null>(null);
   const [newMotivo, setNewMotivo] = usePersistentState("config:new-return-reason", "");
   const [newProvincia, setNewProvincia] = usePersistentState("config:new-province", "");
   const [newZona, setNewZona] = usePersistentState("config:new-zone", "Metro");
@@ -209,6 +221,49 @@ export default function ConfiguracionClient() {
     }
     success(provincia.active ? "Provincia desactivada" : "Provincia activada");
     await loadAll();
+  }
+
+  function startEditingAliases(provincia: Provincia) {
+    setEditingAliasesId(provincia.id);
+    setAliasDraft((provincia.aliases ?? []).join(", "));
+  }
+
+  async function saveAliases(provincia: Provincia, aliases: string[], merge = false) {
+    setSavingAliases(true);
+    try {
+      const response = await fetch("/api/config/provincias", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: provincia.id, aliases, ...(merge ? { merge: true } : {}) }),
+      });
+      const json = await response.json().catch(() => ({}));
+      if (response.status === 409 && json.code === "ALIAS_CONFLICT" && Array.isArray(json.conflicts)) {
+        setAliasMerge({ provincia, aliases, conflicts: json.conflicts });
+        return;
+      }
+      if (!response.ok) {
+        failure(json.error ?? "No se pudieron guardar las variantes");
+        return;
+      }
+      const merged = Array.isArray(json.merged) ? json.merged.length : 0;
+      success(merged ? `Variantes guardadas; ${merged === 1 ? "1 provincia fusionada" : `${merged} provincias fusionadas`}` : "Variantes guardadas");
+      setEditingAliasesId(null);
+      setAliasMerge(null);
+      await loadAll();
+    } finally {
+      setSavingAliases(false);
+    }
+  }
+
+  function aliasMergeMessage(merge: AliasMerge | null) {
+    if (!merge) return "";
+    const target = merge.provincia.nombre;
+    return merge.conflicts
+      .map(
+        (conflict) =>
+          `«${conflict.nombre}» ya existe como provincia. ¿Fusionarla con «${target}»? Sus tarjetas y clientes pasarán a «${target}» y «${conflict.nombre}» se eliminará.`,
+      )
+      .join(" ");
   }
 
   async function deleteProvincia(provincia: Provincia) {
@@ -546,7 +601,60 @@ export default function ConfiguracionClient() {
                       </span>
                     </div>
                     <p className="mt-1 text-slate-500">Zona: {provincia.zona}</p>
-                    <div className="mt-2 flex gap-2">
+                    {editingAliasesId === provincia.id ? (
+                      <form
+                        className="mt-2 space-y-2"
+                        onSubmit={(event) => {
+                          event.preventDefault();
+                          void saveAliases(provincia, parseAliasInput(aliasDraft));
+                        }}
+                      >
+                        <input
+                          value={aliasDraft}
+                          onChange={(event) => setAliasDraft(event.target.value)}
+                          placeholder="Variantes separadas por coma"
+                          aria-label={`Variantes de ${provincia.nombre}`}
+                          className="w-full rounded-lg border border-slate-300 px-2 py-1 text-xs"
+                          autoFocus
+                        />
+                        <div className="flex gap-2">
+                          <button
+                            type="submit"
+                            disabled={savingAliases}
+                            className="rounded-lg bg-slate-900 px-2 py-1 text-xs font-semibold text-white disabled:opacity-60"
+                          >
+                            Guardar
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setEditingAliasesId(null)}
+                            className="rounded-lg border border-slate-300 px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                          >
+                            Cancelar
+                          </button>
+                        </div>
+                      </form>
+                    ) : provincia.aliases?.length ? (
+                      <div className="mt-2 flex flex-wrap gap-1">
+                        {provincia.aliases.map((alias) => (
+                          <span
+                            key={alias}
+                            className="rounded-md bg-slate-100 px-1.5 py-0.5 text-[11px] text-slate-600"
+                          >
+                            {alias}
+                          </span>
+                        ))}
+                      </div>
+                    ) : null}
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        aria-label={`Editar variantes de ${provincia.nombre}`}
+                        onClick={() => startEditingAliases(provincia)}
+                        className="rounded-lg border border-slate-300 px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                      >
+                        Variantes
+                      </button>
                       <button
                         type="button"
                         aria-label={`${provincia.active ? "Desactivar" : "Activar"} ${provincia.nombre}`}
@@ -572,6 +680,18 @@ export default function ConfiguracionClient() {
 
         </>
       )}
+
+      <ConfirmDialog
+        open={aliasMerge !== null}
+        title="Fusionar provincias"
+        message={aliasMergeMessage(aliasMerge)}
+        confirmLabel="Fusionar"
+        busy={savingAliases}
+        onCancel={() => setAliasMerge(null)}
+        onConfirm={() => {
+          if (aliasMerge) void saveAliases(aliasMerge.provincia, aliasMerge.aliases, true);
+        }}
+      />
 
       <ConfirmDialog
         open={provinciaToDelete !== null}
