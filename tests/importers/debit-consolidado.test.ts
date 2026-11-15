@@ -69,4 +69,30 @@ describe("debit consolidado import parser", () => {
     expect(result.rows[1].status).toBe(CardStatus.TD_DEVUELTO_NO_LOCALIZADO);
     expect(result.rows[1].zona).toBe("Este");
   });
+  it("takes the dispatch date from the Fecha column, not FECHA_CREACION", () => {
+    const headers = ["Fecha", "N-SS", "NRO_ID", "CONTACTO", "PROVINCIA", "FECHA_CREACION", "FechaAsig - VAL", "STATUS"];
+    const row = ["2026-11-10", "4-14522200862", "00100000000", "JUAN PEREZ", "Santiago", "2026-11-08", "1900-01-00", "EN RUTA"];
+    const ws = XLSX.utils.aoa_to_sheet([headers, row]);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "DATA");
+    const buffer = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
+
+    const [card] = parseDebitConsolidadoImport(buffer).rows;
+    expect(card.dispatchDate).not.toBeNull();
+    expect(card.dispatchDate!.getFullYear()).toBe(2026);
+    expect(card.dispatchDate!.getMonth()).toBe(10);
+    expect(card.dispatchDate!.getDate()).toBe(10);
+  });
+
+  it("falls back to FECHA_CREACION when there is no Fecha column", () => {
+    const headers = ["N-SS", "NRO_ID", "CONTACTO", "PROVINCIA", "FECHA_CREACION", "STATUS"];
+    const row = ["4-14522200862", "00100000000", "JUAN PEREZ", "Santiago", "2026-11-08", "EN RUTA"];
+    const ws = XLSX.utils.aoa_to_sheet([headers, row]);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "DATA");
+    const buffer = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
+
+    const [card] = parseDebitConsolidadoImport(buffer).rows;
+    expect(card.dispatchDate!.getDate()).toBe(8);
+  });
 });

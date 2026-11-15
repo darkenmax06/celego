@@ -111,7 +111,7 @@ describe("inactive province warning on card imports", () => {
     expect(result.inactiveProvinceNames).toEqual(["Distrito Nacional"]);
   });
 
-  it("Despacho Débito skips rows whose (requestNumber, dispatchDate) card already exists", async () => {
+  it("Despacho Débito skips rows whose requestNumber already has a debit card", async () => {
     fn(prisma.card.findFirst).mockImplementation(async ({ where }: { where: { requestNumber: string } }) =>
       where.requestNumber === "REQ-1" ? { id: "existing-card" } : null,
     );
@@ -124,9 +124,10 @@ describe("inactive province warning on card imports", () => {
     expect(result.created).toBe(1);
     expect(result.skipped).toBe(1);
     expect(prisma.__rows("card")).toHaveLength(1);
+    // Matched by requestNumber only: the consolidado may have set a different dispatch date.
     expect(prisma.card.findFirst).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: expect.objectContaining({ requestNumber: "REQ-1", productType: CardProductType.DEBITO, dispatchDate: expect.any(Date) }),
+        where: { requestNumber: "REQ-1", productType: CardProductType.DEBITO },
       }),
     );
   });
