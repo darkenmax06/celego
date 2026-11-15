@@ -1,0 +1,11 @@
+[Unit]
+Description=Run Celego PostgreSQL backup 6 times a day (every 4 hours)
+
+[Timer]
+OnCalendar=*-*-* 00,04,08,12,16,20:00:00
+Persistent=true
+RandomizedDelaySec=120
+Unit=celego-backup.service
+
+[Install]
+WantedBy=timers.target
