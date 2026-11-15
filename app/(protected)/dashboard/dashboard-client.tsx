@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { CardDetailModal } from "@/components/cards/card-detail-modal";
 import { DailyFlowChart } from "@/components/dashboard/daily-flow-chart";
+import { SlaPortfolioChart, type SlaPortfolioSelection } from "@/components/dashboard/sla-portfolio-chart";
 import { StatusDonutChart } from "@/components/dashboard/status-donut-chart";
 import { PageHeader } from "@/components/ui/page-header";
 import { Panel } from "@/components/ui/panel";
@@ -11,6 +12,8 @@ import { StatusBadge } from "@/components/ui/status-badge";
 import { notificationFailureMessage, notifyInBrowser } from "@/lib/browser-notifications";
 import { usePersistentState } from "@/lib/use-persistent-state";
 import type { DailyFlowPoint } from "@/lib/dashboard/daily-flow";
+import type { SlaPortfolio } from "@/lib/dashboard/sla-portfolio";
+import { dateRangeParamKey } from "@/lib/date-range-params";
 import { buildTarjetasDrillDownParams, parseDashboardProductType, type DashboardProductType } from "@/lib/dashboard/filters";
 import {
   buildStatusSegments,
@@ -69,6 +72,7 @@ type DashboardPayload = {
     customer: { nombre: string; cedula: string };
   }>;
   dailyFlow: DailyFlowPoint[];
+  slaPortfolio?: SlaPortfolio & { openStatuses: string[] };
 };
 
 type UrgentNotification = {
@@ -248,6 +252,25 @@ export default function DashboardClient() {
     router.push(`/tarjetas?${params.toString()}`);
   }
 
+  function goToSlaPortfolio(selection: SlaPortfolioSelection) {
+    const portfolio = data.slaPortfolio;
+    if (!portfolio) return;
+    if (selection.kind === "alDia") {
+      goToTarjetas({
+        status: portfolio.openStatuses.join(","),
+        [dateRangeParamKey("slaDueDate", "from")]: portfolio.today,
+      });
+      return;
+    }
+    const extra: Record<string, string> = {};
+    if (selection.kind === "bucket") {
+      if (selection.bucket.slaDueFrom) extra[dateRangeParamKey("slaDueDate", "from")] = selection.bucket.slaDueFrom;
+      extra[dateRangeParamKey("slaDueDate", "to")] = selection.bucket.slaDueTo;
+    }
+    const params = buildTarjetasDrillDownParams({ from, to, productType, extra });
+    router.push(`/sla-vencidas?${params.toString()}`);
+  }
+
   return (
     <div>
       <PageHeader
@@ -352,6 +375,14 @@ export default function DashboardClient() {
           onClick={() => goToTarjetas(METRIC_STYLES.retornadas.query)}
         />
       </div>
+
+      <Panel
+        className="mb-5"
+        title="Cartera al día vs vencidas"
+        subtitle="Tarjetas abiertas del rango según su fecha de vencimiento SLA"
+      >
+        <SlaPortfolioChart portfolio={data.slaPortfolio} loading={loading} onSelect={goToSlaPortfolio} />
+      </Panel>
 
       <Panel
         className="mb-5"
