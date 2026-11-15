@@ -46,4 +46,30 @@ describe("debit despacho import parser", () => {
     expect(card.telefonosRaw).toContain("8095044590");
     expect(card.telefonosRaw).toContain("8096623841");
   });
+
+  it("takes the dispatch date from the Fecha column, not FECHA_CREACION", () => {
+    const headers = ["NRO_SS", "NRO_ID", "CONTACTO", "PROVINCIA", "FECHA_CREACION", "Fecha", "FechaAsig - VAL"];
+    const row = ["4-14463049822", "00100000000", "REYLIN DOMINGUEZ", "Santiago", "2026-10-31", "2026-11-02", "1900-01-00"];
+    const ws = XLSX.utils.aoa_to_sheet([headers, row]);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "CELE");
+    const buffer = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
+
+    const [card] = parseDebitDespachoImport(buffer).rows;
+    expect(card.dispatchDate.getMonth()).toBe(10);
+    expect(card.dispatchDate.getDate()).toBe(2);
+  });
+
+  it("falls back to FECHA_CREACION when there is no Fecha column", () => {
+    const headers = ["NRO_SS", "NRO_ID", "CONTACTO", "PROVINCIA", "FECHA_CREACION"];
+    const row = ["4-14463049822", "00100000000", "REYLIN DOMINGUEZ", "Santiago", "2026-10-31"];
+    const ws = XLSX.utils.aoa_to_sheet([headers, row]);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "CELE");
+    const buffer = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
+
+    const [card] = parseDebitDespachoImport(buffer).rows;
+    expect(card.dispatchDate.getMonth()).toBe(9);
+    expect(card.dispatchDate.getDate()).toBe(31);
+  });
 });

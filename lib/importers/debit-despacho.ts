@@ -89,7 +89,9 @@ export function parseDebitDespachoImport(buffer: Buffer): DebitDespachoImportRes
     tel2: mapHeaderIndex(header, ["TEL_2", "TEL2", "TELEFONO 2"]),
     tel3: mapHeaderIndex(header, ["TEL_3", "TEL3", "TELEFONO 3"]),
     creadoPor: mapHeaderIndex(header, ["CREADO_POR"]),
-    fechaCreacion: mapHeaderIndex(header, ["FECHA_CREACION", "FECHA CREACION", "FECHA"]),
+    // Same bank layout as the consolidado: "Fecha" is the dispatch date.
+    fecha: mapHeaderIndex(header, ["FECHA"]),
+    fechaCreacion: mapHeaderIndex(header, ["FECHA_CREACION", "FECHA CREACION"]),
     estado: mapHeaderIndex(header, ["ESTADO"]),
     nota: mapHeaderIndex(header, ["NOTA"]),
   };
@@ -139,8 +141,11 @@ export function parseDebitDespachoImport(buffer: Buffer): DebitDespachoImportRes
       .filter((p) => p.length >= 7 && !/^0+$/.test(p) && p !== "0000000001");
     const telefonosRaw = [...new Set(phones)].join(" | ");
 
-    const rawFecha = getCell(row, idx.fechaCreacion);
-    const dispatchDate = parseExcelSerialDate(rawFecha) ?? new Date();
+    // "Fecha" is the dispatch date; FECHA_CREACION is only a fallback.
+    const dispatchDate =
+      parseExcelSerialDate(getCell(row, idx.fecha)) ??
+      parseExcelSerialDate(getCell(row, idx.fechaCreacion)) ??
+      new Date();
 
     const rawRecord: Record<string, unknown> = {};
     for (let c = 0; c < header.length; c += 1) {
