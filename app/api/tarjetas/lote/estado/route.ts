@@ -5,6 +5,7 @@ import { toCardStatus } from "@/lib/card-status";
 import { batchUpdateCards } from "@/lib/card-service";
 import { archivedMessengerResponse, MESSENGER_ARCHIVED } from "@/lib/messenger-lifecycle";
 import { prisma } from "@/lib/prisma";
+import { loadProvinceResolver } from "@/lib/province-resolver";
 import { ZONAS } from "@/lib/constants";
 
 const schema = z.object({
@@ -28,11 +29,9 @@ export async function POST(request: Request) {
   }
 
   const status = parsed.data.status ? toCardStatus(parsed.data.status) : undefined;
+  // Any spelling or configured variant resolves to the canonical province.
   const provinceConfig = parsed.data.provincia
-    ? await prisma.provinceConfig.findUnique({
-        where: { nombre: parsed.data.provincia },
-        select: { active: true, zona: true },
-      })
+    ? (await loadProvinceResolver(prisma)).resolve(parsed.data.provincia)
     : null;
 
   if (parsed.data.provincia && !provinceConfig?.active) {
@@ -68,7 +67,7 @@ export async function POST(request: Request) {
       parsed.data.cardIds,
       {
         status,
-        provincia: parsed.data.provincia,
+        provincia: provinceConfig?.nombre,
         zona: nextZone,
         isRemote: parsed.data.isRemote,
         messengerId: parsed.data.messengerId,

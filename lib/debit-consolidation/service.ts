@@ -3,8 +3,7 @@ import { Prisma, type CardStatus, type UserRole } from "@prisma/client";
 import { writeAuditEvent } from "@/lib/audit";
 import { prisma } from "@/lib/prisma";
 import { addBusinessDaysStrict } from "@/lib/sla";
-import { normalizeText } from "@/lib/utils";
-import { resolveZone } from "@/lib/zone-map";
+import { buildProvinceResolver, resolveProvinceAndZone } from "@/lib/province-resolver";
 import {
   reconcileDebitFiles,
   reconciliationDifferences,
@@ -168,10 +167,6 @@ type ApplyDebitRunInput = {
   actorEmail?: string | null;
 };
 
-function normalizeZone(province: string, configured: Map<string, string>) {
-  return configured.get(normalizeText(province)) ?? resolveZone(province, "Metro");
-}
-
 async function syncDebitCards(
   tx: Prisma.TransactionClient,
   plan: ReturnType<typeof reconcileDebitFiles>,
@@ -185,11 +180,9 @@ async function syncDebitCards(
       create: { id: "default", businessDays: 5 },
     }),
     tx.sLAExtension.findMany({ where: { active: true } }),
-    tx.provinceConfig.findMany({ where: { active: true } }),
+    tx.provinceConfig.findMany({ select: { nombre: true, zona: true, active: true, aliases: true } }),
   ]);
-  const provinceToZone = new Map(
-    provinceConfigs.map((item) => [normalizeText(item.nombre), item.zona]),
-  );
+  const provinceResolver = buildProvinceResolver(provinceConfigs);
   const extensionDays = (cedula: string, reference: string) =>
     extensions
       .filter(
@@ -203,8 +196,8 @@ async function syncDebitCards(
   let updated = 0;
 
   for (const row of plan.effectiveRows) {
-    const provincia = row.provincia || "Santo Domingo";
-    const zona = normalizeZone(provincia, provinceToZone);
+    // Configured provinces (name or variant) dictate the stored spelling and zone.
+    const { provincia, zona } = resolveProvinceAndZone(provinceResolver, row.provincia || "Santo Domingo", "Metro");
     const customer = await tx.customer.upsert({
       where: { cedula: row.cedula },
       update: {

@@ -21,6 +21,7 @@ import { CardStatus, Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { recalculateAdditionalCardsForGroups } from "@/lib/card-additional";
 import { resolveNormalizedImportLocation, upsertCustomerPreservingData } from "@/lib/card-service";
+import { loadProvinceResolver, type ProvinceResolver } from "@/lib/province-resolver";
 import {
   buildHistoricalCards,
   HISTORICAL_BATCH_LABEL,
@@ -72,8 +73,11 @@ async function existingKeys(cards: HistoricalCard[]) {
   return found;
 }
 
+// Loaded once in runImport so every row stores the configured province spelling and zone.
+let provinceResolver: ProvinceResolver | null = null;
+
 function locate(card: HistoricalCard) {
-  return resolveNormalizedImportLocation({ origin: card.origin, provincia: card.provincia, zona: card.zona });
+  return resolveNormalizedImportLocation({ origin: card.origin, provincia: card.provincia, zona: card.zona }, provinceResolver);
 }
 
 async function ensureBatch(origin: HistoricalCard["origin"], fileHash: string, rowCount: number) {
@@ -192,6 +196,7 @@ function rejectionReport(rejected: HistoricalRejection[]) {
 }
 
 async function runImport() {
+  provinceResolver = await loadProvinceResolver(prisma);
   const bytes = readFileSync(filePath);
   const fileHash = createHash("sha256").update(bytes).digest("hex");
   const rows = parseHistoricalCsv(bytes.toString("utf8"));

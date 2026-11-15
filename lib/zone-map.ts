@@ -7,7 +7,8 @@ for (const p of PROVINCIAS_INICIALES) {
   provinceToZone.set(normalizeText(p.nombre), p.zona);
 }
 
-const provinceAliases = [
+/** Static spelling table: [alias, canonical province]. Fallback when no ProvinceConfig matches. */
+export const STATIC_PROVINCE_ALIASES: ReadonlyArray<readonly [string, string]> = [
   // ── Metro: Santo Domingo y Distrito Nacional ───────────────────────────
   ["DISTRITO NACIONAL",                        "Distrito Nacional"],
   ["DISTRITO",                                 "Distrito Nacional"],
@@ -89,11 +90,11 @@ const provinceAliases = [
   ["ELIAS PINA",                               "Elias Pina"],
   ["ELÍAS PIÑA",                               "Elias Pina"],
   ["COMENDADOR",                               "Elias Pina"],
-] as const;
+];
 
 const aliasToProvince = new Map<string, string>();
 
-for (const [alias, canonical] of provinceAliases) {
+for (const [alias, canonical] of STATIC_PROVINCE_ALIASES) {
   aliasToProvince.set(normalizeText(alias), canonical);
   const zone = provinceToZone.get(normalizeText(canonical));
   if (zone) {
