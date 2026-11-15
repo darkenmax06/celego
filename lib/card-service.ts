@@ -12,7 +12,8 @@ import { CUSTOMER_ID_RULE, normalizeCustomerId } from "@/lib/customer-id";
 import { buildSourceRecordKey, canCreateDispatch, DispatchConflictError, nextTcGuardState } from "@/lib/dispatch-origin";
 import { resolveZone } from "@/lib/zone-map";
 import { mergePhoneLists, planCustomerMerge, type CustomerData } from "@/lib/customer-merge";
-import { countInactiveProvinceRows, loadInactiveProvinceNames } from "@/lib/inactive-provinces";
+import { countInactiveProvinceRows } from "@/lib/inactive-provinces";
+import { loadProvinceResolver, resolveProvinceAndZone, type ProvinceResolver } from "@/lib/province-resolver";
 import { recalculateAdditionalCardsForGroups } from "@/lib/card-additional";
 import { applyMessengerReassignment } from "@/lib/route-reassignment";
 import { applyCardTransition } from "@/lib/card-transition";
@@ -190,13 +191,19 @@ function nonEmpty(value: string | null | undefined) {
   return trimmed ? trimmed : null;
 }
 
-export function resolveNormalizedImportLocation(item: Pick<NormalizedCardImportRow, "origin" | "provincia" | "zona">) {
+export function resolveNormalizedImportLocation(
+  item: Pick<NormalizedCardImportRow, "origin" | "provincia" | "zona">,
+  resolver?: ProvinceResolver | null,
+) {
   if (item.origin === "CENTRO_ACOPIO") return { province: "Santo Domingo", zone: "Metro" };
   const zonaRaw = nonEmpty(item.zona);
   // Torre dispatch sheets frequently ship a single ZONA column holding the
   // province name and no PROVINCIA/ENVIADO A column at all, so fall back to it
   // before treating the row as unresolvable.
   const province = nonEmpty(item.provincia) ?? zonaRaw;
+  // A configured province (by name or variant) dictates the stored spelling and zone.
+  const configured = resolver?.resolve(province) ?? null;
+  if (configured) return { province: configured.nombre, zone: configured.zona };
   const zone = normalizeZoneCandidate(zonaRaw ?? "") ?? (province ? resolveZone(province, "") : "");
   return { province, zone };
 }
@@ -300,7 +307,7 @@ export async function persistNormalizedCardImport(input: {
     const updated = 0;
     const skippedRows: ImportRowIssue[] = [];
     const rejectedRows: ImportRowIssue[] = [...input.rejectedRows];
-    const inactiveProvinces = await loadInactiveProvinceNames(tx);
+    const provinceResolver = await loadProvinceResolver(tx);
     // Inactive provinces are still imported; the stored value of each created card feeds the warning.
     const createdProvinces: string[] = [];
 
@@ -340,7 +347,7 @@ export async function persistNormalizedCardImport(input: {
         continue;
       }
 
-      const { province, zone } = resolveNormalizedImportLocation(item);
+      const { province, zone } = resolveNormalizedImportLocation(item, provinceResolver);
       if (!zone) {
         await reject(item, "UNRESOLVED_ZONE", `Zona no resuelta: provincia ${shownValue(item.provincia)} y zona ${shownValue(item.zona)} no coinciden con ninguna provincia configurada; corrija la columna ZONA/PROVINCIA o agreguela al mapa de zonas`);
         continue;
@@ -404,7 +411,7 @@ export async function persistNormalizedCardImport(input: {
       where: { id: input.batchId },
       data: { status: "COMPLETED", rowCount: input.rows.length + input.rejectedRows.length, createdCount: created, updatedCount: updated, skippedCount: skippedRows.length, rejectedCount: rejectedRows.length, completedAt: new Date() },
     });
-    const inactive = countInactiveProvinceRows(createdProvinces, inactiveProvinces);
+    const inactive = countInactiveProvinceRows(createdProvinces, [], provinceResolver);
     return { created, updated, skipped: skippedRows.length, rejected: rejectedRows.length, rejectedRows, skippedRows, inactiveProvinceRows: inactive.count, inactiveProvinceNames: inactive.names };
   }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
 }
@@ -446,7 +453,10 @@ export async function createManualCreditCard(input: {
   if (!cedula) {
     throw new ManualCardError("INVALID_CEDULA", `Cedula invalida: ${shownValue(input.cedula)} (debe ser ${CUSTOMER_ID_RULE})`, 422);
   }
-  const { province, zone } = resolveNormalizedImportLocation({ origin: "TORRE_POPULAR", provincia: input.provincia, zona: input.zona ?? null });
+  const { province, zone } = resolveNormalizedImportLocation(
+    { origin: "TORRE_POPULAR", provincia: input.provincia, zona: input.zona ?? null },
+    await loadProvinceResolver(prisma),
+  );
   if (!zone) {
     throw new ManualCardError("UNRESOLVED_ZONE", `Zona no resuelta: la provincia ${shownValue(input.provincia)} no coincide con ninguna provincia configurada`, 422);
   }
@@ -511,6 +521,12 @@ export async function updateTcGuardAfterTransition(input: { cardId: string; tc: 
   });
 }
 
+/** Debit rows: configured province spelling and zone, else the parser values unchanged. */
+function debitLocation(resolver: ProvinceResolver, item: { provincia: string; zona: string }) {
+  const location = resolveProvinceAndZone(resolver, item.provincia, item.zona);
+  return location.matched ? location : { provincia: item.provincia, zona: item.zona };
+}
+
 /** Persists batch import from Débito Consolidado. */
 export async function persistDebitConsolidadoImport(input: {
   batchId: string;
@@ -519,15 +535,19 @@ export async function persistDebitConsolidadoImport(input: {
 }) {
   let created = 0;
   let updated = 0;
+  const provinceResolver = await loadProvinceResolver(prisma);
+  const storedProvinces: string[] = [];
 
   for (const item of input.rows) {
+    const location = debitLocation(provinceResolver, item);
+    storedProvinces.push(location.provincia);
     const { customer } = await upsertCustomerPreservingData(prisma, {
       cedula: item.cedula,
       nombre: item.nombre,
       telefonosRaw: item.telefonosRaw,
       direccionRaw: item.direccionRaw,
-      provincia: item.provincia,
-      zona: item.zona,
+      provincia: location.provincia,
+      zona: location.zona,
     });
 
     const sla = await getSlaDaysForRow(item.cedula, item.requestNumber);
@@ -560,8 +580,8 @@ export async function persistDebitConsolidadoImport(input: {
               ? item.comment || "Actualización por importación de consolidado débito"
               : undefined,
           data: {
-            provincia: item.provincia,
-            zona: item.zona,
+            provincia: location.provincia,
+            zona: location.zona,
             isRemote: item.isRemote,
             dispatchDate: item.dispatchDate ?? existing.dispatchDate,
             metadata: {
@@ -584,8 +604,8 @@ export async function persistDebitConsolidadoImport(input: {
           productType: CardProductType.DEBITO,
           dispatchOrigin: DispatchOrigin.BPD_DEBITO,
           customerId: customer.id,
-          zona: item.zona,
-          provincia: item.provincia,
+          zona: location.zona,
+          provincia: location.provincia,
           dispatchDate: item.dispatchDate,
           status: item.status,
           isRemote: item.isRemote,
@@ -625,7 +645,7 @@ export async function persistDebitConsolidadoImport(input: {
     },
   }).catch(() => undefined);
 
-  const inactive = countInactiveProvinceRows(input.rows.map((row) => row.provincia), await loadInactiveProvinceNames(prisma));
+  const inactive = countInactiveProvinceRows(storedProvinces, [], provinceResolver);
   return { created, updated, count: input.rows.length, inactiveProvinceRows: inactive.count, inactiveProvinceNames: inactive.names };
 }
 
@@ -638,8 +658,12 @@ export async function persistDebitDespachoImport(input: {
   let created = 0;
   let skipped = 0;
   const createdCards = [];
+  const provinceResolver = await loadProvinceResolver(prisma);
+  const storedProvinces: string[] = [];
 
   for (const item of input.rows) {
+    const location = debitLocation(provinceResolver, item);
+    storedProvinces.push(location.provincia);
     // The consolidado identifies a debit card by requestNumber and dictates its
     // dispatch date, so the despacho date may differ from the stored one. If the
     // consolidado or a re-uploaded despacho file already created the card, creating
@@ -661,8 +685,8 @@ export async function persistDebitDespachoImport(input: {
       nombre: item.nombre,
       telefonosRaw: item.telefonosRaw,
       direccionRaw: item.direccionRaw,
-      provincia: item.provincia,
-      zona: item.zona,
+      provincia: location.provincia,
+      zona: location.zona,
     });
 
     const sla = await getSlaDaysForRow(item.cedula, item.requestNumber);
@@ -676,8 +700,8 @@ export async function persistDebitDespachoImport(input: {
         productType: CardProductType.DEBITO,
         dispatchOrigin: DispatchOrigin.BPD_DEBITO,
         customerId: customer.id,
-        zona: item.zona,
-        provincia: item.provincia,
+        zona: location.zona,
+        provincia: location.provincia,
         dispatchDate: item.dispatchDate,
         status: CardStatus.DESPACHADA,
         isRemote: item.isRemote,
@@ -712,7 +736,7 @@ export async function persistDebitDespachoImport(input: {
     },
   }).catch(() => undefined);
 
-  const inactive = countInactiveProvinceRows(input.rows.map((row) => row.provincia), await loadInactiveProvinceNames(prisma));
+  const inactive = countInactiveProvinceRows(storedProvinces, [], provinceResolver);
   return { created, updated: 0, skipped, count: input.rows.length, cards: createdCards, inactiveProvinceRows: inactive.count, inactiveProvinceNames: inactive.names };
 }
 

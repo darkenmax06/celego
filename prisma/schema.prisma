@@ -1046,6 +1046,8 @@ model ProvinceConfig {
   nombre    String   @unique
   zona      String
   active    Boolean  @default(true)
+  /// Spellings that resolve to this province on import (case/accent-insensitive).
+  aliases   String[] @default([])
   createdAt DateTime @default(now())
 }
 
