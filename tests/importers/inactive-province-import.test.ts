@@ -111,6 +111,26 @@ describe("inactive province warning on card imports", () => {
     expect(result.inactiveProvinceNames).toEqual(["Distrito Nacional"]);
   });
 
+  it("Despacho Débito skips rows whose (requestNumber, dispatchDate) card already exists", async () => {
+    fn(prisma.card.findFirst).mockImplementation(async ({ where }: { where: { requestNumber: string } }) =>
+      where.requestNumber === "REQ-1" ? { id: "existing-card" } : null,
+    );
+
+    const result = await persistDebitDespachoImport({
+      batchId: "batch-1",
+      rows: [debitRow("REQ-1", "00100000001", "Santiago"), debitRow("REQ-2", "00100000002", "Santiago")],
+    });
+
+    expect(result.created).toBe(1);
+    expect(result.skipped).toBe(1);
+    expect(prisma.__rows("card")).toHaveLength(1);
+    expect(prisma.card.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ requestNumber: "REQ-1", productType: CardProductType.DEBITO, dispatchDate: expect.any(Date) }),
+      }),
+    );
+  });
+
   it("Consolidado Débito reports the inactive-province rows it imported", async () => {
     const result = await persistDebitConsolidadoImport({
       batchId: "batch-2",

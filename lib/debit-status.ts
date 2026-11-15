@@ -87,7 +87,7 @@ export function normalizeDebitConsolidadoStatus(raw: string | null | undefined):
 export function mapPinitExportStatus(pinitStatus: string | null | undefined): CardStatus | null {
   if (!pinitStatus?.trim()) return null;
 
-  // Only Pinit 213, 420 and 335 count as returns; every other catalog code is
+  // Only Pinit 123, 213, 420 and 335 count as returns; every other catalog code is
   // a delivery or an in-transit state (see lib/pinit-status-catalog.ts).
   const code = resolvePinitCode(pinitStatus);
   if (code != null) return mapPinitCodeToCardStatus(code);

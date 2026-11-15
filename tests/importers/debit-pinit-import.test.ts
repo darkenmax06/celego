@@ -16,11 +16,12 @@ describe("debit pinit export parser", () => {
     expect(mapPinitExportStatus("101 - Envio Creado")).toBe(CardStatus.DESPACHADA);
   });
 
-  it("only treats Pinit 213, 420 and 335 as returns", () => {
+  it("only treats Pinit 123, 213, 420 and 335 as returns", () => {
+    expect(mapPinitExportStatus("123 - Retornado / Devuelto a origen")).toBe(CardStatus.TD_DEVUELTO_NO_LOCALIZADO);
+    expect(mapPinitExportStatus("RETORNADO / DEVUELTO A ORIGEN")).toBe(CardStatus.TD_DEVUELTO_NO_LOCALIZADO);
     expect(mapPinitExportStatus("213 - Datos incorrectos")).toBe(CardStatus.TD_DEVUELTO_NO_LOCALIZADO);
     expect(mapPinitExportStatus("420 - Cancelado / Orden anulada")).toBe(CardStatus.TD_DEVUELTO_NO_LOCALIZADO);
     expect(mapPinitExportStatus("335 - Zona de NO cobertura")).toBe(CardStatus.TD_ZONA_FUERA_COBERTURA);
-    expect(mapPinitExportStatus("123 - Retornado / Devuelto a origen")).toBe(CardStatus.DESPACHADA);
     expect(mapPinitExportStatus("319 - Fuera de cobertura")).toBe(CardStatus.NO_LOCALIZADO);
     expect(mapPinitExportStatus("220 - Cancelado")).toBe(CardStatus.DESPACHADA);
   });
