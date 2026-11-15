@@ -151,9 +151,27 @@ describe("inactive province warning on card imports", () => {
     });
 
     expect(result.created).toBe(2);
-    expect(prisma.__rows("card").map((card) => card.provincia)).toEqual(["DN", "Santiago"]);
+    // Stored with the configured spelling and zone.
+    expect(prisma.__rows("card").map((card) => card.provincia)).toEqual(["Distrito Nacional", "Santiago"]);
     expect(result.inactiveProvinceRows).toBe(1);
     expect(result.inactiveProvinceNames).toEqual(["Distrito Nacional"]);
+  });
+
+  it("stores the canonical province and its configured zone on every import path", async () => {
+    prisma.__seed("provinceConfig", { id: "p3", nombre: "Higuey", zona: "Este", active: true, aliases: ["Salvaleon"] } as never);
+
+    await persistDebitDespachoImport({ batchId: "batch-5", rows: [debitRow("REQ-7", "00100000007", "DISTRITO NACIONAL"), debitRow("REQ-8", "00100000008", "SALVALEÓN")] });
+    await persistNormalizedCardImport({ batchId: "batch-3", rows: [creditRow("4333333333333333", "00100000013", "HIGÜEY", 2)], rejectedRows: [] });
+
+    const cards = prisma.__rows("card").map((card) => [card.provincia, card.zona]);
+    expect(cards).toEqual([["Distrito Nacional", "Metro"], ["Higuey", "Este"], ["Higuey", "Este"]]);
+    const customers = prisma.__rows("customer").map((customer) => customer.provincia);
+    expect(customers).toEqual(["Distrito Nacional", "Higuey", "Higuey"]);
+  });
+
+  it("keeps the raw province and parser zone when no configured province matches", async () => {
+    await persistDebitDespachoImport({ batchId: "batch-6", rows: [debitRow("REQ-11", "00100000021", "ATLANTIS")] });
+    expect(prisma.__rows("card").map((card) => [card.provincia, card.zona])).toEqual([["ATLANTIS", "Metro"]]);
   });
 
   it("reports zero when no row has an inactive province", async () => {

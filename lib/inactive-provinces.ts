@@ -1,5 +1,6 @@
 import { normalizeText } from "@/lib/utils";
 import { resolveProvinceAlias } from "@/lib/zone-map";
+import type { ProvinceResolver } from "@/lib/province-resolver";
 
 export type InactiveProvinceSummary = { count: number; names: string[] };
 
@@ -19,19 +20,24 @@ export async function loadInactiveProvinceNames(db: ProvinceConfigReader) {
  * Counts the imported provinces that match an inactive ProvinceConfig, either
  * directly or through the importers' aliases (e.g. "DN" -> "Distrito Nacional").
  * Names come back with the configured spelling, once each, in first-seen order.
+ * With a resolver, configured variants (ProvinceConfig.aliases) match too.
  */
 export function countInactiveProvinceRows(
   provinces: Array<string | null | undefined>,
   inactive: string[],
+  resolver?: ProvinceResolver | null,
 ): InactiveProvinceSummary {
   const byKey = new Map(inactive.map((name) => [normalizeText(name), name]));
   const names = new Set<string>();
   let count = 0;
-  if (!byKey.size) return { count, names: [] };
+  if (!byKey.size && !resolver) return { count, names: [] };
 
   for (const province of provinces) {
     if (!province?.trim()) continue;
-    const match = byKey.get(normalizeText(province)) ?? byKey.get(normalizeText(resolveProvinceAlias(province)));
+    const configured = resolver?.resolve(province);
+    const match = configured
+      ? (configured.active ? undefined : configured.nombre)
+      : byKey.get(normalizeText(province)) ?? byKey.get(normalizeText(resolveProvinceAlias(province)));
     if (!match) continue;
     count += 1;
     names.add(match);

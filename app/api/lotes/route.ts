@@ -11,7 +11,7 @@ import {
   resolveOperationalIdentifier,
   type OperationalCard,
 } from "@/lib/operational-card-service";
-import { resolveZone } from "@/lib/zone-map";
+import { loadProvinceResolver, resolveProvinceAndZone } from "@/lib/province-resolver";
 import { mapLotStatus } from "@/lib/lot-status";
 import { RETURN_REASON_REQUIRED } from "@/lib/item-outcome";
 import {
@@ -71,13 +71,6 @@ function toTruthyValue(value: string | null | undefined) {
   return normalized === "SI" || normalized === "YES" || normalized === "TRUE" || normalized === "1";
 }
 
-function normalizeKey(value: string) {
-  return value
-    .normalize("NFD")
-    .replace(/\p{Diacritic}/gu, "")
-    .trim()
-    .toUpperCase();
-}
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -212,16 +205,18 @@ export async function POST(request: Request) {
   if ("error" in guard) return guard.error;
   const { messenger } = guard;
 
-  const [cards, provinceConfigs, lotNumber] = await Promise.all([
+  const [cards, provinceResolver, lotNumber] = await Promise.all([
     findOperationalCardCandidates(uniqueIdentifiers),
-    prisma.provinceConfig.findMany({ where: { active: true }, select: { nombre: true, zona: true } }),
+    loadProvinceResolver(prisma),
     generateLotNumber(fechaEnvio),
   ]);
 
-  const provinceToZone = new Map(provinceConfigs.map((row) => [normalizeKey(row.nombre), row.zona]));
-  const sentTo = parsed.data.sentTo.trim();
-  const zoneForDestination =
-    provinceToZone.get(normalizeKey(sentTo)) ?? resolveZone(sentTo, "Metro");
+  // A configured province (name or variant) is stored with its canonical spelling and zone.
+  const { provincia: sentTo, zona: zoneForDestination } = resolveProvinceAndZone(
+    provinceResolver,
+    parsed.data.sentTo,
+    "Metro",
+  );
 
   const usedCardIds = new Set<string>();
   const cardByIdentifier = new Map<string, OperationalCard | null>();
