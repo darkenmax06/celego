@@ -10,7 +10,42 @@ import {
   buildStatusSegments,
   sumStatuses,
 } from "@/lib/dashboard/status-segments";
-import { buildZoneBreakdown, parseDashboardProductType, productTypeWhere } from "@/lib/dashboard/filters";
+import {
+  buildTarjetasDrillDownParams,
+  buildZoneBreakdown,
+  parseDashboardProductType,
+  productTypeWhere,
+} from "@/lib/dashboard/filters";
+import { compileCardDateRangeWhere } from "@/lib/list-query/card-date-range";
+
+describe("buildTarjetasDrillDownParams", () => {
+  it("links with the inclusive dispatch-date filter instead of legacy from/to", () => {
+    const params = buildTarjetasDrillDownParams({
+      from: "2026-10-01",
+      to: "2026-10-31",
+      productType: "DEBITO",
+      extra: { status: "DESPACHADA,ENVIADA_INTERIOR" },
+    });
+    expect(params.get("date.dispatchDate.from")).toBe("2026-10-01");
+    expect(params.get("date.dispatchDate.to")).toBe("2026-10-31");
+    expect(params.get("productType")).toBe("DEBITO");
+    expect(params.get("status")).toBe("DESPACHADA,ENVIADA_INTERIOR");
+    expect(params.has("from")).toBe(false);
+    expect(params.has("to")).toBe(false);
+  });
+
+  it("keeps cards dispatched on the last day of the range", () => {
+    const params = buildTarjetasDrillDownParams({ from: "2026-10-01", to: "2026-10-31", productType: "ALL" });
+    const { clauses } = compileCardDateRangeWhere(params);
+    const range = (clauses[0] as { dispatchDate: { lte: Date } }).dispatchDate;
+    expect(range.lte.getTime()).toBeGreaterThan(new Date("2026-10-31T12:00:00Z").getTime());
+  });
+
+  it("omits productType for ALL", () => {
+    const params = buildTarjetasDrillDownParams({ from: "2026-10-01", to: "2026-10-31", productType: "ALL" });
+    expect(params.has("productType")).toBe(false);
+  });
+});
 
 describe("fillDailyFlow", () => {
   it("returns one zero-filled point per day in order", () => {
