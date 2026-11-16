@@ -10,6 +10,7 @@ import { Panel } from "@/components/ui/panel";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { notificationFailureMessage, notifyInBrowser } from "@/lib/browser-notifications";
 import { usePersistentState } from "@/lib/use-persistent-state";
+import { SESSION_EXPIRED_PATH } from "@/lib/session-expired";
 import type { DailyFlowPoint } from "@/lib/dashboard/daily-flow";
 import { buildTarjetasDrillDownParams, parseDashboardProductType, type DashboardProductType } from "@/lib/dashboard/filters";
 import {
@@ -191,6 +192,16 @@ export default function DashboardClient() {
     const params = new URLSearchParams({ from: fromDate, to: toDate });
     if (product !== "ALL") params.set("productType", product);
     const res = await fetch(`/api/dashboard/summary?${params.toString()}`, { cache: "no-store" });
+    if (res.status === 401) {
+      // Stale session (user deleted/inactive): clear it and go to login.
+      window.location.href = SESSION_EXPIRED_PATH;
+      return;
+    }
+    if (!res.ok) {
+      // Keep the previous data instead of crashing on an error payload.
+      setLoading(false);
+      return;
+    }
     const json = (await res.json()) as DashboardPayload;
     setData(json);
     setLoading(false);
