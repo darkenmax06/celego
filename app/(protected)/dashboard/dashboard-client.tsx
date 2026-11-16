@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { createLatestOnly } from "@/lib/latest-only";
 import { useRouter } from "next/navigation";
 import { CardDetailModal } from "@/components/cards/card-detail-modal";
 import { DailyFlowChart } from "@/components/dashboard/daily-flow-chart";
@@ -190,12 +191,18 @@ export default function DashboardClient() {
   const [urgentNotifications, setUrgentNotifications] = useState<UrgentNotification[]>([]);
   const [notificationIssue, setNotificationIssue] = useState("");
   const seenNotificationKeys = useRef(new Set<string>());
+  const latestSummaryRequest = useRef(createLatestOnly());
 
   async function loadSummary(fromDate = from, toDate = to, product: DashboardProductType = productType) {
+    // Filters hydrate from saved preferences right after mount (e.g. ALL -> DEBITO),
+    // firing overlapping requests. Only the latest one may update the dashboard,
+    // or a slower stale response shows another product's numbers.
+    const requestId = latestSummaryRequest.current.start();
     const params = new URLSearchParams({ from: fromDate, to: toDate });
     if (product !== "ALL") params.set("productType", product);
     const res = await fetch(`/api/dashboard/summary?${params.toString()}`, { cache: "no-store" });
     const json = (await res.json()) as DashboardPayload;
+    if (!latestSummaryRequest.current.isLatest(requestId)) return;
     setData(json);
     setLoading(false);
   }

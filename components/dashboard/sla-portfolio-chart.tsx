@@ -1,6 +1,6 @@
 "use client";
 
-import { Label, Pie, PieChart, Sector, type PieSectorShapeProps } from "recharts";
+import { Pie, PieChart, Sector, type PieSectorShapeProps } from "recharts";
 import type { SlaAgingBucket, SlaPortfolio } from "@/lib/dashboard/sla-portfolio";
 
 export type SlaPortfolioSelection = { kind: "alDia" } | { kind: "vencidas" } | { kind: "bucket"; bucket: SlaAgingBucket };
@@ -53,6 +53,7 @@ export function SlaPortfolioChart({
   return (
     <div className="grid items-center gap-5 md:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]">
       <div className="flex flex-col gap-3">
+        <div className="relative">
         <PieChart style={{ width: "100%", height: 220 }} responsive margin={{ top: 8, right: 8, bottom: 8, left: 8 }}>
           <Pie
             data={segments}
@@ -68,25 +69,14 @@ export function SlaPortfolioChart({
             shape={(props: PieSectorShapeProps) => (
               <Sector {...props} className={(props.payload as { key?: string })?.key === "sinSla" ? "" : "cursor-pointer"} />
             )}
-          >
-            <Label
-              position="center"
-              content={({ viewBox }) => {
-                const { cx = 0, cy = 0 } = (viewBox ?? {}) as { cx?: number; cy?: number };
-                return (
-                  <g>
-                    <text x={cx} y={cy} dy={-2} textAnchor="middle" fill="#ef4444" className="text-xl font-bold">
-                      {`${overduePct.toFixed(1)}%`}
-                    </text>
-                    <text x={cx} y={cy} dy={18} textAnchor="middle" fill="#64748b" className="text-xs">
-                      vencidas
-                    </text>
-                  </g>
-                );
-              }}
-            />
-          </Pie>
+          />
         </PieChart>
+        {/* HTML overlay: an SVG <Label> gets a (0,0) viewBox on the first responsive render and lands in the corner. */}
+        <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
+          <span className="text-xl font-bold text-red-500">{`${overduePct.toFixed(1)}%`}</span>
+          <span className="text-xs text-slate-500">vencidas</span>
+        </div>
+        </div>
         <div className="flex flex-wrap justify-center gap-x-4 gap-y-1.5">
           {segments.map((segment) => (
             <button
