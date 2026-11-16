@@ -1,22 +1,12 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import {
-  PhoneCall,
-  MessageSquare,
-  Phone,
-  MapPin,
-  Calendar,
-  AlertTriangle,
-  Send,
-  CheckCircle2,
-  Clock,
-  Sparkles,
-} from "lucide-react";
 import { CardStatus } from "@prisma/client";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { notificationFailureMessage, notifyInBrowser } from "@/lib/browser-notifications";
-import { displayText } from "@/lib/display";
+import { SLA_CLOSED_STATUSES } from "@/lib/list-query/descriptors/sla-vencidas";
+import { CardInfoTab, cardTypeLabel } from "@/components/cards/card-detail/card-info-tab";
+import type { OperativoMetadata } from "@/components/cards/card-detail/contact-management";
 import {
   OperativeContactWizard,
   type PhoneState,
@@ -30,24 +20,6 @@ type Messenger = {
   nombre: string;
   provinciaTrabajo: string | null;
   activo: boolean;
-};
-
-type OperativoMetadata = {
-  contactado?: boolean;
-  canalContacto?: "WHATSAPP" | "LLAMADA_DIRECTA" | null;
-  comentarioContacto?: string;
-  telefonos?: Array<{ num: string; principal: boolean; funciona: boolean; comentario?: string }>;
-  nuevaDireccion?: string | null;
-  fechaPreferenciaEntrega?: string | null;
-  solicitudRetorno?: boolean;
-  motivoRetorno?: string | null;
-  traslado?: {
-    provinciaDestino?: string;
-    motivo?: string;
-    solicitadoAt?: string;
-    solicitadoPor?: string;
-  } | null;
-  updatedAt?: string;
 };
 
 type CardDetail = {
@@ -200,14 +172,6 @@ function splitPhones(raw: string | null | undefined) {
 function requiresReturnReason(status: CardStatus, isDebit = false) {
   if (isDebit) return false;
   return status === CardStatus.RETORNADA || status === CardStatus.DEVUELTA_TIENDA;
-}
-
-function urgencyLabel(level: number) {
-  if (level === 5) return "Nivel 5 (Extremadamente urgente)";
-  if (level === 4) return "Nivel 4 (Muy urgente)";
-  if (level === 3) return "Nivel 3 (Alta)";
-  if (level === 2) return "Nivel 2 (Moderada)";
-  return "Nivel 1 (Leve)";
 }
 
 function formatUrgentClock(value: string | null | undefined) {
@@ -474,6 +438,7 @@ export function CardDetailModal({ cardId, onClose, onUpdated }: Props) {
   }, [card]);
 
   const isDebit = card?.productType === "DEBITO" || card?.dispatchOrigin === "BPD_DEBITO";
+  const isSlaClosed = card ? (SLA_CLOSED_STATUSES as readonly string[]).includes(card.status) : false;
   const availableStatusOptions = isDebit ? DEBIT_STATUS_OPTIONS : CREDIT_STATUS_OPTIONS;
 
   const canReassign =
@@ -669,7 +634,7 @@ export function CardDetailModal({ cardId, onClose, onUpdated }: Props) {
               <p className="text-xs font-semibold tracking-wide text-blue-700">
                 {isDebit
                   ? `Solicitud Débito: ${card.requestNumber || card.tc}`
-                  : `TC: ${card.tc}`}
+                  : `TC ${card.tc}`}
               </p>
               <span
                 className={`rounded px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider ${
@@ -680,6 +645,9 @@ export function CardDetailModal({ cardId, onClose, onUpdated }: Props) {
               >
                 {isDebit ? "Débito" : "Crédito"}
               </span>
+              {card.isAdditional ? (
+                <span className="text-xs font-medium text-slate-500">· {cardTypeLabel(card)}</span>
+              ) : null}
             </div>
             <h3 className="font-display text-xl font-bold text-slate-900 mt-0.5">{card.customer.nombre}</h3>
           </div>
@@ -710,266 +678,15 @@ export function CardDetailModal({ cardId, onClose, onUpdated }: Props) {
 
         <div className="overflow-y-auto px-6 py-5">
           {tab === "info" ? (
-            <div>
-              <div className="grid gap-4 md:grid-cols-3">
-                <InfoItem label="Cedula" value={card.customer.cedula} />
-                <InfoItem label="Zona original" value={card.zona} />
-                <InfoItem label="Zona remota" value={card.isRemote ? "SI" : "NO"} />
-                <InfoItem
-                  label="Tipo tarjeta"
-                  value={card.isAdditional ? "ADICIONAL" : "PRINCIPAL"}
-                />
-                <InfoItem
-                  label="No. adicional"
-                  value={card.isAdditional ? String(card.additionalIndex) : "-"}
-                />
-                <InfoItem label="Provincia original" value={card.provincia} />
-                <InfoItem label="Zona facturable" value={card.reassignedZone || card.zona} />
-                <InfoItem
-                  label="Provincia de reasignacion"
-                  value={card.reassignedProvince || "-"}
-                />
-                <InfoItem
-                  label="F. Despacho"
-                  value={card.dispatchDate ? new Date(card.dispatchDate).toLocaleDateString("es-DO") : "-"}
-                />
-                <InfoItem
-                  label="Origen despacho"
-                  value={
-                    card.dispatchOrigin === "CENTRO_ACOPIO"
-                      ? "Centro de acopio"
-                      : card.dispatchOrigin === "TORRE_POPULAR"
-                        ? "Torre Popular"
-                        : card.dispatchOrigin === "BPD_DEBITO"
-                          ? "BPD Débito"
-                          : "Sin procedencia"
-                  }
-                />
-                <InfoItem label="Tipo Emision" value={displayText(card.emissionType)} />
-                <InfoItem label="Tipo Entrega" value={displayText(card.deliveryType)} />
-                <InfoItem label="Contrato" value={displayText(card.contractType)} />
-                <InfoItem label="Suplidor" value={displayText(card.supplier)} />
-                <InfoItem label="Mensajero" value={card.currentMessenger?.nombre || "-"} />
-                <InfoItem
-                  label="Mensajero reasignado"
-                  value={card.reassignedMessenger?.nombre || "-"}
-                />
-                <InfoItem
-                  label="SLA"
-                  value={card.slaDueDate ? new Date(card.slaDueDate).toLocaleDateString("es-DO") : "-"}
-                />
-                <InfoItem label="Urgente" value={card.urgent ? "SI" : "NO"} />
-                <InfoItem
-                  label="Nivel urgencia"
-                  value={card.activeUrgentCase ? urgencyLabel(card.activeUrgentCase.level) : "-"}
-                />
-                <InfoItem label="Referencia" value={displayText(card.externalReference)} />
-              </div>
-
-              {addressLines.length ? (
-                <section className="mt-5">
-                  <p className="text-xs uppercase tracking-wide text-slate-500">Direccion completa</p>
-                  <div className="mt-2 space-y-1 rounded-xl bg-slate-50 p-3 text-sm text-slate-700">
-                    {addressLines.map((line) => (
-                      <p key={line}>{line}</p>
-                    ))}
-                  </div>
-                </section>
-              ) : null}
-
-              {referenceList.length ? (
-                <section className="mt-4">
-                  <p className="text-xs uppercase tracking-wide text-slate-500">Referencias</p>
-                  <div className="mt-2 flex flex-wrap gap-2">
-                    {referenceList.map((ref) => (
-                      <span key={ref} className="rounded-md bg-slate-100 px-2 py-1 text-xs text-slate-700">
-                        {ref}
-                      </span>
-                    ))}
-                  </div>
-                </section>
-              ) : null}
-
-              {/* SECCIÓN DESTACADA: GESTIÓN OPERATIVA Y CONTACTO */}
-              <section className="mt-5 rounded-2xl border border-slate-200/90 bg-slate-50/70 p-4 space-y-3.5 shadow-2xs">
-                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200/80 pb-3">
-                  <div className="flex items-center gap-2">
-                    <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-emerald-100 text-emerald-700">
-                      <PhoneCall className="h-4 w-4" />
-                    </div>
-                    <div>
-                      <h4 className="font-bold text-slate-800 text-sm">Gestión Operativa y Contacto</h4>
-                      <p className="text-[11px] text-slate-500">Historial y datos acordados con el cliente</p>
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setShowContactWizard(true)}
-                    className="inline-flex items-center gap-1.5 rounded-xl bg-slate-900 px-3.5 py-1.5 text-xs font-semibold text-white hover:bg-slate-800 transition shadow-2xs active:scale-95"
-                  >
-                    <Sparkles className="h-3.5 w-3.5 text-amber-300" />
-                    Abrir Asistente de Contacto
-                  </button>
-                </div>
-
-                {/* Grid de Estado, Canal, Fecha y Última Gestión */}
-                <div className="grid gap-3 sm:grid-cols-2 md:grid-cols-4">
-                  <div className="rounded-xl border border-slate-200 bg-white p-3 shadow-2xs">
-                    <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block mb-1">
-                      Estado de Contacto
-                    </span>
-                    <div>
-                      {operativoData?.solicitudRetorno ? (
-                        <span className="inline-flex items-center gap-1 rounded-md bg-rose-50 border border-rose-200 px-2 py-0.5 text-xs font-bold text-rose-700">
-                          <AlertTriangle className="h-3.5 w-3.5" /> Retorno Solicitado
-                        </span>
-                      ) : operativoData?.traslado && Object.keys(operativoData.traslado).length > 0 ? (
-                        <span className="inline-flex items-center gap-1 rounded-md bg-indigo-50 border border-indigo-200 px-2 py-0.5 text-xs font-bold text-indigo-700">
-                          <Send className="h-3.5 w-3.5" /> Traslado Solicitado
-                        </span>
-                      ) : operativoData?.contactado ? (
-                        <span className="inline-flex items-center gap-1 rounded-md bg-emerald-50 border border-emerald-200 px-2 py-0.5 text-xs font-bold text-emerald-700">
-                          <CheckCircle2 className="h-3.5 w-3.5" /> Contactada
-                        </span>
-                      ) : (
-                        <span className="inline-flex items-center gap-1 rounded-md bg-slate-100 border border-slate-200 px-2 py-0.5 text-xs font-medium text-slate-600">
-                          <Clock className="h-3.5 w-3.5" /> Pendiente de Contacto
-                        </span>
-                      )}
-                    </div>
-                  </div>
-
-                  <div className="rounded-xl border border-slate-200 bg-white p-3 shadow-2xs">
-                    <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block mb-1">
-                      Canal Efectivo
-                    </span>
-                    <p className="text-xs font-semibold text-slate-800 flex items-center gap-1.5">
-                      {operativoData?.canalContacto === "WHATSAPP" ? (
-                        <>
-                          <MessageSquare className="h-4 w-4 text-emerald-600" /> WhatsApp
-                        </>
-                      ) : operativoData?.canalContacto === "LLAMADA_DIRECTA" ? (
-                        <>
-                          <Phone className="h-4 w-4 text-blue-600" /> Llamada Directa
-                        </>
-                      ) : (
-                        <span className="text-slate-400 font-normal">No especificado</span>
-                      )}
-                    </p>
-                  </div>
-
-                  <div className="rounded-xl border border-slate-200 bg-white p-3 shadow-2xs">
-                    <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block mb-1">
-                      Fecha Preferencia
-                    </span>
-                    <p className="text-xs font-semibold text-slate-800 flex items-center gap-1.5">
-                      <Calendar className="h-4 w-4 text-slate-400" />
-                      {operativoData?.fechaPreferenciaEntrega
-                        ? new Date(operativoData.fechaPreferenciaEntrega).toLocaleDateString("es-DO")
-                        : <span className="text-slate-400 font-normal">Sin fecha fijada</span>}
-                    </p>
-                  </div>
-
-                  <div className="rounded-xl border border-slate-200 bg-white p-3 shadow-2xs">
-                    <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block mb-1">
-                      Última Gestión
-                    </span>
-                    <p className="text-xs font-semibold text-slate-800">
-                      {operativoData?.updatedAt
-                        ? new Date(operativoData.updatedAt).toLocaleString("es-DO")
-                        : <span className="text-slate-400 font-normal">Sin registro previo</span>}
-                    </p>
-                  </div>
-                </div>
-
-                {/* Nueva Dirección confirmada */}
-                {operativoData?.nuevaDireccion ? (
-                  <div className="rounded-xl border border-emerald-200 bg-emerald-50/50 p-3 text-xs">
-                    <div className="flex items-center gap-1.5 font-bold text-emerald-800 uppercase tracking-wide">
-                      <MapPin className="h-3.5 w-3.5 text-emerald-600" />
-                      Nueva Dirección de Entrega (Confirmada):
-                    </div>
-                    <p className="mt-1 text-slate-800 font-medium leading-relaxed">
-                      {operativoData.nuevaDireccion}
-                    </p>
-                  </div>
-                ) : null}
-
-                {/* Motivo de retorno si aplica */}
-                {operativoData?.solicitudRetorno && operativoData?.motivoRetorno ? (
-                  <div className="rounded-xl border border-rose-200 bg-rose-50/60 p-3 text-xs">
-                    <span className="font-bold text-rose-800 uppercase tracking-wide">Motivo de Solicitud de Retorno:</span>
-                    <p className="mt-1 text-rose-900 font-medium">{operativoData.motivoRetorno}</p>
-                  </div>
-                ) : null}
-
-                {/* Traslado si aplica */}
-                {operativoData?.traslado && typeof operativoData.traslado === "object" && operativoData.traslado.provinciaDestino ? (
-                  <div className="rounded-xl border border-indigo-200 bg-indigo-50/60 p-3 text-xs">
-                    <span className="font-bold text-indigo-800 uppercase tracking-wide">Traslado a Otra Provincia Solicitado:</span>
-                    <p className="mt-1 text-indigo-900">
-                      Destino: <strong>{operativoData.traslado.provinciaDestino}</strong> · Motivo: {operativoData.traslado.motivo || "Traslado solicitado"}
-                    </p>
-                  </div>
-                ) : null}
-
-                {/* Observaciones generales de la llamada */}
-                {operativoData?.comentarioContacto ? (
-                  <div className="rounded-xl border border-slate-200 bg-white p-3 text-xs">
-                    <span className="font-bold text-slate-700 uppercase tracking-wide">Observaciones de la Llamada:</span>
-                    <p className="mt-1 text-slate-700 leading-relaxed">{operativoData.comentarioContacto}</p>
-                  </div>
-                ) : null}
-
-                {/* Teléfonos verificados */}
-                {operativoData?.telefonos && operativoData.telefonos.length > 0 ? (
-                  <div className="space-y-1.5 pt-1">
-                    <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Teléfonos Verificados / Actualizados</span>
-                    <div className="grid gap-2 sm:grid-cols-2">
-                      {operativoData.telefonos.map((t, i) => (
-                        <div
-                          key={i}
-                          className={`flex items-center justify-between rounded-xl border p-2.5 text-xs ${
-                            t.funciona ? "border-emerald-200 bg-emerald-50/40" : "border-slate-200 bg-white"
-                          }`}
-                        >
-                          <div className="flex items-center gap-2">
-                            <span className={t.principal ? "text-amber-500 font-bold" : "text-slate-300"}>★</span>
-                            <span className="font-mono font-bold text-slate-900">{t.num}</span>
-                            {t.funciona ? (
-                              <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-bold text-emerald-800">
-                                Funciona
-                              </span>
-                            ) : (
-                              <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-500">
-                                No funciona
-                              </span>
-                            )}
-                          </div>
-                          {t.comentario ? (
-                            <span className="text-[11px] text-slate-500 truncate max-w-[160px]" title={t.comentario}>
-                              {t.comentario}
-                            </span>
-                          ) : null}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                ) : null}
-              </section>
-
-              <section className="mt-5">
-                <p className="text-xs uppercase tracking-wide text-slate-500">Telefonos Registrados</p>
-                <div className="mt-2 space-y-2">
-                  {phoneList.map((phone) => (
-                    <div key={phone} className="rounded-lg bg-slate-50 px-3 py-2 text-sm text-slate-800">
-                      {phone}
-                    </div>
-                  ))}
-                  {!phoneList.length ? <p className="text-sm text-slate-500">Sin telefonos cargados.</p> : null}
-                </div>
-              </section>
-            </div>
+            <CardInfoTab
+              card={card}
+              operativo={operativoData}
+              addressLines={addressLines}
+              referenceList={referenceList}
+              phoneList={phoneList}
+              isClosed={isSlaClosed}
+              onOpenContactWizard={() => setShowContactWizard(true)}
+            />
           ) : null}
 
           {tab === "bitacora" ? (
