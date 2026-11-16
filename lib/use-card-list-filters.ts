@@ -15,8 +15,8 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 
 export type ListFilters = Record<string, string>;
 
-/** Query keys owned by other features (e.g. the call wizard), never treated as filters. */
-const RESERVED_KEYS = new Set(["llamar"]);
+/** Query keys owned by other features (call wizard, Tarjetas import modal), never treated as filters. */
+const RESERVED_KEYS = new Set(["llamar", "importar"]);
 
 export function readFiltersFromSearch(
   search: Pick<URLSearchParams, "forEach">,

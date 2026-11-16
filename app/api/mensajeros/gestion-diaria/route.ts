@@ -83,7 +83,7 @@ export async function GET(request: NextRequest) {
     }),
     prisma.messengerReport.findMany({
       where: reportWhere,
-      include: { messenger: true },
+      include: { messenger: true, payrollPeriod: { select: { id: true, label: true } } },
       orderBy: { generatedAt: "desc" },
       take: 100,
     }),

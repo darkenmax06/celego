@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { X } from "lucide-react";
 import type { CardGroupSummary } from "@/lib/use-card-groups";
+import { toCardFilterSelection, type CardFilterSelectionTarget } from "@/lib/cards/card-filter-selection-schema";
 
 /**
  * SDD card-groups — Work Unit F, Task 20.
@@ -43,6 +44,11 @@ export type OffFilterCountState = number | null | typeof OFF_FILTER_COUNT_UNAVAI
 
 type Props = {
   cardIds: string[];
+  /**
+   * "All matching" mode: the members are resolved server-side from the list
+   * query (`selection` / `addSelection`) instead of `cardIds`.
+   */
+  filterSelection?: CardFilterSelectionTarget;
   offFilterCount: OffFilterCountState;
   offFilterError?: string | null;
   groups: CardGroupSummary[];
@@ -53,6 +59,7 @@ type Props = {
 
 export function CardGroupAssignModal({
   cardIds,
+  filterSelection,
   offFilterCount,
   offFilterError,
   groups,
@@ -78,12 +85,18 @@ export function CardGroupAssignModal({
           ? await fetch(`/api/card-groups/${selectedGroupId}`, {
               method: "PATCH",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ addCardIds: cardIds }),
+              body: JSON.stringify(
+                filterSelection ? { addSelection: toCardFilterSelection(filterSelection) } : { addCardIds: cardIds },
+              ),
             })
           : await fetch("/api/card-groups", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ name: newName, cardIds }),
+              body: JSON.stringify(
+                filterSelection
+                  ? { name: newName, selection: toCardFilterSelection(filterSelection) }
+                  : { name: newName, cardIds },
+              ),
             });
 
       if (!response.ok) {
@@ -120,6 +133,12 @@ export function CardGroupAssignModal({
         </div>
 
         <div className="space-y-4 p-5">
+          {filterSelection && !result ? (
+            <p className="rounded-lg border border-blue-200 bg-blue-50 p-2.5 text-xs text-blue-900">
+              Se aplicará a las {filterSelection.count.toLocaleString("es-DO")} tarjetas que coinciden con los
+              filtros actuales.
+            </p>
+          ) : null}
           {offFilterError ? (
             <p className="rounded-lg border border-red-200 bg-red-50 p-2.5 text-xs font-semibold text-red-700">
               {offFilterError}

@@ -1,6 +1,7 @@
 import { Prisma } from "@prisma/client";
 import { compile, type CompiledListQuery, ListQueryValidationError } from "@/lib/list-query";
 import { tarjetasListQuery } from "@/lib/list-query/descriptors/tarjetas";
+import { cardPhoneSearchOr } from "@/lib/customer-phone-search";
 
 /**
  * SDD card-groups remediation — FIX 2.
@@ -47,6 +48,23 @@ export function applyContactoEstado(
   }
 
   return contactoConstraint ? { AND: [where, contactoConstraint] } : where;
+}
+
+/**
+ * The complete `GET /api/tarjetas` query: descriptor filters, phone search and
+ * `contactoEstado`, composed exactly as that route composes them (the route
+ * keeps its `compile(tarjetasListQuery, ...)` call inline because the frozen
+ * pagination contract test reads its source). Used to resolve "select all
+ * matching" bulk actions; `tests/api/card-filter-selection.test.ts` pins that
+ * both produce the same `where` for the same params.
+ */
+export async function compileTarjetasListQuery(
+  params: URLSearchParams,
+): Promise<{ query: CompiledListQuery<Prisma.CardWhereInput>; where: Prisma.CardWhereInput }> {
+  const query = compile(tarjetasListQuery, params, {
+    searchOr: await cardPhoneSearchOr(params.get("q")),
+  });
+  return { query, where: applyContactoEstado(query.where, params) };
 }
 
 export function compileTarjetasWhere(

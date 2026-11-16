@@ -2,6 +2,12 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { requireApiSession } from "@/lib/api-session";
 import { prisma } from "@/lib/prisma";
+import {
+  addCardsToGroupInBatches,
+  cardFilterSelectionErrorResponse,
+  cardFilterSelectionSchema,
+  resolveCardFilterSelectionIds,
+} from "@/lib/cards/card-filter-selection";
 
 /**
  * SDD card-groups — Work Unit D (relocated + hardened from
@@ -18,11 +24,17 @@ import { prisma } from "@/lib/prisma";
  *  - A duplicate name on rename now returns 409 instead of an unhandled 500.
  *  - Deleting a missing group now returns 404 instead of an unhandled throw.
  */
-const patchSchema = z.object({
-  name: z.string().min(1).optional(),
-  addCardIds: z.array(z.string().min(1)).max(500).optional(),
-  removeCardIds: z.array(z.string().min(1)).max(500).optional(),
-});
+const patchSchema = z
+  .object({
+    name: z.string().min(1).optional(),
+    addCardIds: z.array(z.string().min(1)).max(500).optional(),
+    /** "Select all matching": the `/tarjetas` list query, resolved server-side. */
+    addSelection: cardFilterSelectionSchema.optional(),
+    removeCardIds: z.array(z.string().min(1)).max(500).optional(),
+  })
+  .refine((value) => !(value.addSelection && value.addCardIds?.length), {
+    message: "Usa addCardIds o addSelection, no ambos",
+  });
 
 function isUniqueConstraintError(error: unknown): boolean {
   return Boolean(error && typeof error === "object" && "code" in error && error.code === "P2002");
@@ -47,6 +59,18 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     return NextResponse.json({ error: "Grupo no encontrado" }, { status: 404 });
   }
 
+  // Resolved before any write so an invalid or oversized selection changes nothing.
+  let filterCardIds: string[] | null = null;
+  if (parsed.data.addSelection) {
+    try {
+      filterCardIds = await resolveCardFilterSelectionIds(parsed.data.addSelection);
+    } catch (error) {
+      const response = cardFilterSelectionErrorResponse(error);
+      if (response) return response;
+      throw error;
+    }
+  }
+
   if (parsed.data.name) {
     try {
       await prisma.cardGroup.update({ where: { id }, data: { name: parsed.data.name } });
@@ -68,6 +92,10 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     });
     added = result.count;
     alreadyMember = addCardIds.length - added;
+  }
+  if (filterCardIds) {
+    added = await addCardsToGroupInBatches(id, filterCardIds, auth.session.user.id);
+    alreadyMember = filterCardIds.length - added;
   }
 
   let removed = 0;

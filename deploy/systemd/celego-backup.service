@@ -1,0 +1,15 @@
+[Unit]
+Description=Celego PostgreSQL backup
+Wants=snap.docker.dockerd.service network-online.target
+After=snap.docker.dockerd.service celego-compose.service network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/server/home/apps/celego
+Environment=DOCKER_BIN=/snap/bin/docker
+Environment=PROJECT_DIR=/home/server/home/apps/celego
+Environment=BACKUP_HOOK=/home/server/home/apps/celego/scripts/backup-hooks/gdrive.sh
+Environment=BACKUP_RETENTION_DAYS=15
+Environment=GDRIVE_REMOTE=gdrive
+Environment=GDRIVE_FOLDER=celego-backups
+ExecStart=/home/server/home/apps/celego/scripts/backup-postgres.sh

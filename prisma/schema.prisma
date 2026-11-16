@@ -213,6 +213,7 @@ model User {
   reportedMobileIncidents   MobileIncident[]           @relation("MobileIncidentCreatedBy")
   updatedCardTransitionPolicies CardTransitionPolicy[]  @relation("CardTransitionPolicyUpdatedBy")
   viewPreferences            UserViewPreference[]
+  tablePreferences           UserTablePreference[]
   savedFilters               UserSavedFilter[]
   updatedDebitConsolidadoExportConfigs DebitConsolidadoExportConfig[] @relation("DebitConsolidadoExportConfigUpdatedBy")
   updatedScriptConfigs       OperativeScriptConfig[]    @relation("ScriptConfigUpdatedBy")
@@ -559,8 +560,14 @@ model MessengerReport {
   generatedById String?
   generatedBy   User?     @relation("MessengerReportGeneratedBy", fields: [generatedById], references: [id], onDelete: SetNull)
   totalCents    Int       @default(0)
+  /// Stored JPEG, relative to the app storage dir (messenger-reports/<messengerId>/<periodId>.jpg).
   imagePath     String?
   anulada       Boolean   @default(false)
+  /// Set when the report comes from locking a payroll period: one report per messenger and period.
+  payrollPeriodId String?
+  payrollPeriod   PayrollPeriod? @relation(fields: [payrollPeriodId], references: [id], onDelete: SetNull)
+
+  @@unique([messengerId, payrollPeriodId])
 }
 
 model Route {
@@ -1119,6 +1126,20 @@ model UserViewPreference {
   @@index([userId, sectionKey])
 }
 
+/// Per-user table layout (column order + visibility). `columns` is an ordered
+/// list of `{ key, visible }`, always sanitized against the table's column
+/// catalog (`lib/table-columns/catalogs.ts`) before it is stored or served.
+model UserTablePreference {
+  id        String   @id @default(cuid())
+  userId    String
+  tableKey  String
+  columns   Json
+  updatedAt DateTime @updatedAt
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, tableKey])
+}
+
 model UserSavedFilter {
   id         String   @id @default(cuid())
   userId     String
@@ -1206,6 +1227,7 @@ model PayrollPeriod {
   createdAt   DateTime             @default(now())
   locks       PayrollPeriodLock[]
   payments    MessengerPayment[]
+  reports     MessengerReport[]
 
   @@index([messengerId, fromDate])
   @@index([fromDate, toDate])

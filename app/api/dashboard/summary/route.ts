@@ -4,6 +4,7 @@ import { requireApiSession } from "@/lib/api-session";
 import { prisma } from "@/lib/prisma";
 import { remainingBusinessDays } from "@/lib/sla";
 import { loadDailyFlow } from "@/lib/dashboard/daily-flow";
+import { buildSlaPortfolio } from "@/lib/dashboard/sla-portfolio";
 import { buildZoneBreakdown, parseDashboardProductType, productTypeWhere } from "@/lib/dashboard/filters";
 import {
   DELIVERED_STATUSES,
@@ -115,7 +116,7 @@ export async function GET(request: Request) {
         status: {
           notIn: [...SLA_CLOSED_STATUSES],
         },
-        slaDueDate: { not: null },
+        // Cards without an SLA stay in: the portfolio chart counts them as "Sin SLA".
         ...rangeWhere,
       },
       select: {
@@ -199,6 +200,12 @@ export async function GET(request: Request) {
     .sort((a, b) => (a.remaining ?? 99) - (b.remaining ?? 99))
     .slice(0, 10);
 
+  const slaPortfolio = {
+    ...buildSlaPortfolio(cardsWithSla, new Date()),
+    // Lets the "al día" drill-down list the same open cards in /tarjetas.
+    openStatuses: Object.values(CardStatus).filter((status) => !SLA_CLOSED_STATUSES.includes(status)),
+  };
+
   const zoneBreakdown = buildZoneBreakdown(
     zoneGroups.map((entry) => ({ zona: entry.zona, count: entry._count._all })),
   );
@@ -228,6 +235,7 @@ export async function GET(request: Request) {
     },
     urgentes: activeUrgentCases,
     slaAlerts,
+    slaPortfolio,
     zoneBreakdown,
     recentActivity: recentLogs.map((log) => ({
       ...log,

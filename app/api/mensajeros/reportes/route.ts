@@ -1,18 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import JSZip from "jszip";
-import sharp from "sharp";
 import { requireApiSession } from "@/lib/api-session";
 import { prisma } from "@/lib/prisma";
-import { formatCurrencyDOP } from "@/lib/money";
-import { buildMessengerReportSvg, dateLabel } from "@/lib/payroll/report-image";
-import { countedBetween } from "@/lib/payroll/counting";
-import { openPayment } from "@/lib/payroll/payments";
-
-async function svgToJpeg(svg: string) {
-  return sharp(Buffer.from(svg))
-    .jpeg({ quality: 90, mozjpeg: true })
-    .toBuffer();
-}
+import { buildMessengerReportSvg } from "@/lib/payroll/report-image";
+import { PayrollError } from "@/lib/payroll/payments";
+import { renderPeriodReport, svgToJpeg } from "@/lib/payroll/period-report";
 
 export async function GET(request: NextRequest) {
   const auth = await requireApiSession(["ADMIN", "OPERADOR", "FACTURACION"]);
@@ -127,58 +119,18 @@ export async function GET(request: NextRequest) {
   });
 }
 
-/**
- * Payment image of one period: the days that count for it (including what was
- * delivered after the previous cut), the loan installments taken off and the net.
- */
+/** Preview of a period payment image (provisional while the period is open); nothing is stored. */
 async function periodPaymentImage(messengerId: string, periodId: string) {
-  const [messenger, period] = await Promise.all([
-    prisma.messenger.findUnique({ where: { id: messengerId } }),
-    prisma.payrollPeriod.findUnique({ where: { id: periodId } }),
-  ]);
-  if (!messenger) return NextResponse.json({ error: "Mensajero no encontrado" }, { status: 404 });
-  if (!period || (period.messengerId && period.messengerId !== messengerId)) {
-    return NextResponse.json({ error: "Periodo no encontrado para este mensajero" }, { status: 404 });
+  try {
+    const report = await renderPeriodReport(messengerId, periodId);
+    return new NextResponse(Uint8Array.from(report.jpeg), {
+      headers: {
+        "Content-Type": "image/jpeg",
+        "Content-Disposition": `attachment; filename="${report.fileName}"`,
+      },
+    });
+  } catch (error) {
+    if (error instanceof PayrollError) return NextResponse.json({ error: error.message }, { status: error.status });
+    throw error;
   }
-
-  const [payment, rows] = await Promise.all([
-    prisma.$transaction((tx) => openPayment(tx, messengerId, periodId)),
-    prisma.messengerDailyRecord.findMany({
-      where: { messengerId, ...countedBetween(period.fromDate, period.toDate) },
-      orderBy: [{ fecha: "asc" }, { siguienteCorte: "asc" }],
-    }),
-  ]);
-
-  const svg = buildMessengerReportSvg({
-    messengerName: messenger.nombre,
-    title: `Pago ${period.label}`,
-    from: dateLabel(period.fromDate),
-    to: dateLabel(period.toDate),
-    payment: {
-      netCents: payment.netCents,
-      deductions: payment.installments
-        .filter((item) => item.status !== "OMITIDA")
-        .map((item) => ({
-          label: `Prestamo ${formatCurrencyDOP(item.loan.principalCents)} - cuota ${item.number}/${item.loan.installmentCount}${item.loan.note ? ` (${item.loan.note})` : ""}`,
-          cents: item.appliedCents ?? item.plannedCents,
-        })),
-    },
-    rows: rows.map((row) => ({
-      fecha: row.fecha.toISOString(),
-      note: row.siguienteCorte ? "restantes tras el corte" : undefined,
-      entregasNormales: row.entregasNormales,
-      entregasRemotas: row.entregasRemotas,
-      recogidasBanco: row.recogidasBanco,
-      mandados: row.mandados,
-      totalCents: row.totalCents,
-    })),
-  });
-  const jpg = Uint8Array.from(await svgToJpeg(svg));
-  const name = `${messenger.nombre}-${period.label}`.replace(/[^\w.-]+/g, "_");
-  return new NextResponse(jpg, {
-    headers: {
-      "Content-Type": "image/jpeg",
-      "Content-Disposition": `attachment; filename="pago-${name}.jpg"`,
-    },
-  });
 }
