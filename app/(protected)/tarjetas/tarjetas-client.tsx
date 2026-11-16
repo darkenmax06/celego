@@ -45,6 +45,7 @@ import {
 import { useCardGroupBucketTotals } from "@/lib/use-card-group-bucket-totals";
 import { useCardGroups } from "@/lib/use-card-groups";
 import { useCardSelection } from "@/lib/use-card-selection";
+import type { CardFilterSelectionTarget } from "@/lib/cards/card-filter-selection-schema";
 import { usePersistentState } from "@/lib/use-persistent-state";
 import { useCardListFilters } from "@/lib/use-card-list-filters";
 import { deriveContactoEstado, type CardTileData } from "@/lib/cards/card-tile-data";
@@ -268,6 +269,26 @@ const TARJETA_DATE_FILTER_FIELDS = cardDateFilterOptions([
 
 const DEFAULT_FILTERS: Record<string, string> = { page: "1", pageSize: "50" };
 
+/** Query params sent to `GET /api/tarjetas` (and, verbatim, to "all matching" bulk actions). */
+function toListQueryParams(filters: Record<string, string>): Record<string, string> {
+  const params: Record<string, string> = {};
+  for (const [key, value] of Object.entries(filters)) {
+    if (value && value !== "ALL") params[key] = value;
+  }
+  return params;
+}
+
+/** Pagination does not change which cards match, so it does not end an "all matching" selection. */
+const SELECTION_SCOPE_IGNORED_PARAMS = new Set(["page", "pageSize"]);
+
+function selectionScopeKey(query: Record<string, string>): string {
+  return JSON.stringify(
+    Object.entries(query)
+      .filter(([key]) => !SELECTION_SCOPE_IGNORED_PARAMS.has(key))
+      .sort(([a], [b]) => a.localeCompare(b)),
+  );
+}
+
 /** Maps a tarjetas row into the shared tile view model. */
 function toTileData(card: CardRow): CardTileData {
   const estado = deriveContactoEstado({
@@ -369,11 +390,40 @@ export default function TarjetasClient({ role }: TarjetasClientProps) {
   // SDD card-groups — Work Unit G, Task 22.
   const cardSelection = useCardSelection();
   const cardGroups = useCardGroups();
+
+  // Odoo-style "select all matching": once the whole page is selected the bar
+  // offers every card matching the current filters. The bulk actions then send
+  // the list query (resolved server-side), never an id list. Bound to the
+  // filter scope it was made in, so any filter/search change ends it.
+  const listQuery = useMemo(() => toListQueryParams(filters), [filters]);
+  const currentScopeKey = useMemo(() => selectionScopeKey(listQuery), [listQuery]);
+  const [allMatchingSelection, setAllMatchingSelection] = useState<{
+    scopeKey: string;
+    query: Record<string, string>;
+  } | null>(null);
+  const allMatching = allMatchingSelection?.scopeKey === currentScopeKey ? allMatchingSelection : null;
+  const exitAllMatching = () => setAllMatchingSelection(null);
+  const filterSelection: CardFilterSelectionTarget | undefined = allMatching
+    ? { query: allMatching.query, count: pagination.total }
+    : undefined;
+  const isRowSelected = (cardId: string) => Boolean(allMatching) || cardSelection.isSelected(cardId);
+  // Touching any checkbox while "all matching" is active falls back to the page selection.
+  const toggleCard = (cardId: string) => {
+    exitAllMatching();
+    cardSelection.toggle(cardId);
+  };
+  const pageFullySelected = cards.length > 0 && cards.every((card) => cardSelection.isSelected(card.id));
+  const canSelectAllMatching = !allMatching && pageFullySelected && pagination.total > cards.length;
+
   const groupSelection: GroupSelection<CardRow> | undefined = canManageGroups
     ? {
         getRowId: (card) => card.id,
-        isSelected: cardSelection.isSelected,
-        onChange: (ids, checked) => (checked ? cardSelection.selectMany(ids) : cardSelection.deselectMany(ids)),
+        isSelected: isRowSelected,
+        onChange: (ids, checked) => {
+          exitAllMatching();
+          if (checked) cardSelection.selectMany(ids);
+          else cardSelection.deselectMany(ids);
+        },
       }
     : undefined;
   const [assignModalMode, setAssignModalMode] = useState<"existing" | "new" | null>(null);
@@ -406,8 +456,13 @@ export default function TarjetasClient({ role }: TarjetasClientProps) {
   useEffect(() => {
     if (!assignModalMode) return;
     let cancelled = false;
-    setOffFilterCount(null);
     setOffFilterError(null);
+    // An "all matching" selection is the filter itself: nothing is outside it.
+    if (allMatching) {
+      setOffFilterCount(0);
+      return;
+    }
+    setOffFilterCount(null);
     (async () => {
       try {
         const response = await fetch("/api/tarjetas/off-filter-count", {
@@ -434,6 +489,7 @@ export default function TarjetasClient({ role }: TarjetasClientProps) {
 
   async function afterGroupAction() {
     setAssignModalMode(null);
+    exitAllMatching();
     cardSelection.clear();
     await cardGroups.reload();
     await fetchCards(filters);
@@ -458,10 +514,7 @@ export default function TarjetasClient({ role }: TarjetasClientProps) {
 
   async function fetchCards(currentFilters = filters) {
     setLoading(true);
-    const params = new URLSearchParams();
-    Object.entries(currentFilters).forEach(([k, v]) => {
-      if (v && v !== "ALL") params.set(k, v);
-    });
+    const params = new URLSearchParams(toListQueryParams(currentFilters));
 
     const res = await fetch(`/api/tarjetas?${params.toString()}`, { cache: "no-store" });
     const json = (await res.json()) as CardsResponse;
@@ -677,8 +730,8 @@ export default function TarjetasClient({ role }: TarjetasClientProps) {
       {canManageGroups ? (
         <td className="px-3 py-2.5">
           <CardSelectCheckbox
-            checked={cardSelection.isSelected(card.id)}
-            onChange={() => cardSelection.toggle(card.id)}
+            checked={isRowSelected(card.id)}
+            onChange={() => toggleCard(card.id)}
             label={`Seleccionar tarjeta ${card.tc}`}
           />
         </td>
@@ -697,7 +750,7 @@ export default function TarjetasClient({ role }: TarjetasClientProps) {
       data={toTileData(card)}
       selection={
         canManageGroups
-          ? { checked: cardSelection.isSelected(card.id), onToggle: () => cardSelection.toggle(card.id) }
+          ? { checked: isRowSelected(card.id), onToggle: () => toggleCard(card.id) }
           : undefined
       }
       footerLeft={card.isAdditional ? `Adic. ${card.additionalIndex}` : "Principal"}
@@ -853,8 +906,9 @@ export default function TarjetasClient({ role }: TarjetasClientProps) {
                   {canManageGroups ? (
                     <th className="w-10 px-3">
                       <CardSelectCheckbox
-                        checked={cards.length > 0 && cards.every((c) => cardSelection.isSelected(c.id))}
+                        checked={cards.length > 0 && cards.every((c) => isRowSelected(c.id))}
                         onChange={(checked) => {
+                          exitAllMatching();
                           if (checked) {
                             cardSelection.selectMany(cards.map((c) => c.id));
                           } else {
@@ -959,12 +1013,25 @@ export default function TarjetasClient({ role }: TarjetasClientProps) {
           selectedIds={cardSelection.ids}
           cardsById={cardsById}
           activeGroupFilterIds={activeGroupFilterIds}
-          onClear={cardSelection.clear}
+          onClear={() => {
+            exitAllMatching();
+            cardSelection.clear();
+          }}
           onDeselect={cardSelection.toggle}
           onCreateGroup={() => setAssignModalMode("new")}
           onAssignExisting={() => setAssignModalMode("existing")}
-          onRemoveFromGroup={() => void handleRemoveFromGroup()}
+          // Removal targets explicit ids only; it is not offered for "all matching".
+          onRemoveFromGroup={allMatching ? undefined : () => void handleRemoveFromGroup()}
           onExport={() => setExportOpen(true)}
+          selectAllMatching={
+            canSelectAllMatching
+              ? {
+                  total: pagination.total,
+                  onSelect: () => setAllMatchingSelection({ scopeKey: currentScopeKey, query: listQuery }),
+                }
+              : undefined
+          }
+          allMatching={allMatching ? { total: pagination.total, onExit: exitAllMatching } : undefined}
         />
       ) : null}
       {exportMessage ? (
@@ -973,6 +1040,7 @@ export default function TarjetasClient({ role }: TarjetasClientProps) {
       {canManageGroups && exportOpen ? (
         <CardExportWizardModal
           cardIds={cardSelection.ids}
+          filterSelection={filterSelection}
           onClose={() => setExportOpen(false)}
           onExported={setExportMessage}
         />
@@ -984,6 +1052,7 @@ export default function TarjetasClient({ role }: TarjetasClientProps) {
       {canManageGroups && assignModalMode ? (
         <CardGroupAssignModal
           cardIds={cardSelection.ids}
+          filterSelection={filterSelection}
           offFilterCount={offFilterCount}
           offFilterError={offFilterError}
           groups={cardGroups.groups}

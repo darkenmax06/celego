@@ -8,12 +8,19 @@ import {
   MAX_CARD_EXPORT_SELECTION,
   type CardExportFieldKey,
 } from "@/lib/card-selection-export";
+import {
+  MAX_FILTER_SELECTION,
+  toCardFilterSelection,
+  type CardFilterSelectionTarget,
+} from "@/lib/cards/card-filter-selection-schema";
 import { cn } from "@/lib/utils";
 
 type ExportFormat = "xlsx" | "csv";
 
 type Props = {
   cardIds: string[];
+  /** "All matching" mode: export the list query server-side instead of `cardIds`. */
+  filterSelection?: CardFilterSelectionTarget;
   onClose: () => void;
   onExported?: (message: string) => void;
 };
@@ -21,7 +28,7 @@ type Props = {
 const STEPS = ["Campos", "Formato"] as const;
 
 /** Two-step wizard: pick the fields, then the file format, then download. */
-export function CardExportWizardModal({ cardIds, onClose, onExported }: Props) {
+export function CardExportWizardModal({ cardIds, filterSelection, onClose, onExported }: Props) {
   const titleId = useId();
   const dialogRef = useRef<HTMLDivElement>(null);
   const [step, setStep] = useState(0);
@@ -30,7 +37,9 @@ export function CardExportWizardModal({ cardIds, onClose, onExported }: Props) {
   const [exporting, setExporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const tooMany = cardIds.length > MAX_CARD_EXPORT_SELECTION;
+  const cardCount = filterSelection ? filterSelection.count : cardIds.length;
+  const maxSelection = filterSelection ? MAX_FILTER_SELECTION : MAX_CARD_EXPORT_SELECTION;
+  const tooMany = cardCount > maxSelection;
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -55,7 +64,11 @@ export function CardExportWizardModal({ cardIds, onClose, onExported }: Props) {
       const response = await fetch("/api/tarjetas/exportar-seleccion", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ cardIds, fields, format }),
+        body: JSON.stringify(
+          filterSelection
+            ? { selection: toCardFilterSelection(filterSelection), fields, format }
+            : { cardIds, fields, format },
+        ),
       });
       if (!response.ok) {
         const body = (await response.json().catch(() => ({}))) as { error?: string };
@@ -71,7 +84,7 @@ export function CardExportWizardModal({ cardIds, onClose, onExported }: Props) {
       anchor.click();
       anchor.remove();
       URL.revokeObjectURL(url);
-      onExported?.(`Archivo ${format.toUpperCase()} generado con ${cardIds.length} tarjeta(s).`);
+      onExported?.(`Archivo ${format.toUpperCase()} generado con ${cardCount.toLocaleString("es-DO")} tarjeta(s).`);
       onClose();
     } catch {
       setError("Ocurrió un error inesperado al generar el archivo");
@@ -102,7 +115,7 @@ export function CardExportWizardModal({ cardIds, onClose, onExported }: Props) {
               Exportar selección · Paso {step + 1} de {STEPS.length}
             </span>
             <h2 id={titleId} className="font-display text-base font-bold leading-tight">
-              {step === 0 ? "Elige los campos" : "Elige el formato"} ({cardIds.length} tarjetas)
+              {step === 0 ? "Elige los campos" : "Elige el formato"} ({cardCount.toLocaleString("es-DO")} tarjetas)
             </h2>
           </div>
           <button
@@ -119,7 +132,7 @@ export function CardExportWizardModal({ cardIds, onClose, onExported }: Props) {
         <div className="flex-1 space-y-3 overflow-y-auto p-4 sm:p-5">
           {tooMany ? (
             <p className="rounded-lg border border-rose-200 bg-rose-50 p-3 text-xs text-rose-800">
-              Solo se pueden exportar hasta {MAX_CARD_EXPORT_SELECTION} tarjetas a la vez. Reduce la selección.
+              Solo se pueden exportar hasta {maxSelection.toLocaleString("es-DO")} tarjetas a la vez. Reduce la selección.
             </p>
           ) : null}
 
