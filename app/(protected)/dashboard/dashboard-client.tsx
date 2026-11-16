@@ -1,9 +1,11 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { createLatestOnly } from "@/lib/latest-only";
 import { useRouter } from "next/navigation";
 import { CardDetailModal } from "@/components/cards/card-detail-modal";
 import { DailyFlowChart } from "@/components/dashboard/daily-flow-chart";
+import { SlaPortfolioChart, type SlaPortfolioSelection } from "@/components/dashboard/sla-portfolio-chart";
 import { StatusDonutChart } from "@/components/dashboard/status-donut-chart";
 import { PageHeader } from "@/components/ui/page-header";
 import { Panel } from "@/components/ui/panel";
@@ -11,6 +13,8 @@ import { StatusBadge } from "@/components/ui/status-badge";
 import { notificationFailureMessage, notifyInBrowser } from "@/lib/browser-notifications";
 import { usePersistentState } from "@/lib/use-persistent-state";
 import type { DailyFlowPoint } from "@/lib/dashboard/daily-flow";
+import type { SlaPortfolio } from "@/lib/dashboard/sla-portfolio";
+import { dateRangeParamKey } from "@/lib/date-range-params";
 import { buildTarjetasDrillDownParams, parseDashboardProductType, type DashboardProductType } from "@/lib/dashboard/filters";
 import {
   buildStatusSegments,
@@ -69,6 +73,7 @@ type DashboardPayload = {
     customer: { nombre: string; cedula: string };
   }>;
   dailyFlow: DailyFlowPoint[];
+  slaPortfolio?: SlaPortfolio & { openStatuses: string[] };
 };
 
 type UrgentNotification = {
@@ -186,12 +191,18 @@ export default function DashboardClient() {
   const [urgentNotifications, setUrgentNotifications] = useState<UrgentNotification[]>([]);
   const [notificationIssue, setNotificationIssue] = useState("");
   const seenNotificationKeys = useRef(new Set<string>());
+  const latestSummaryRequest = useRef(createLatestOnly());
 
   async function loadSummary(fromDate = from, toDate = to, product: DashboardProductType = productType) {
+    // Filters hydrate from saved preferences right after mount (e.g. ALL -> DEBITO),
+    // firing overlapping requests. Only the latest one may update the dashboard,
+    // or a slower stale response shows another product's numbers.
+    const requestId = latestSummaryRequest.current.start();
     const params = new URLSearchParams({ from: fromDate, to: toDate });
     if (product !== "ALL") params.set("productType", product);
     const res = await fetch(`/api/dashboard/summary?${params.toString()}`, { cache: "no-store" });
     const json = (await res.json()) as DashboardPayload;
+    if (!latestSummaryRequest.current.isLatest(requestId)) return;
     setData(json);
     setLoading(false);
   }
@@ -246,6 +257,25 @@ export default function DashboardClient() {
   function goToTarjetas(extra: Record<string, string>) {
     const params = buildTarjetasDrillDownParams({ from, to, productType, extra });
     router.push(`/tarjetas?${params.toString()}`);
+  }
+
+  function goToSlaPortfolio(selection: SlaPortfolioSelection) {
+    const portfolio = data.slaPortfolio;
+    if (!portfolio) return;
+    if (selection.kind === "alDia") {
+      goToTarjetas({
+        status: portfolio.openStatuses.join(","),
+        [dateRangeParamKey("slaDueDate", "from")]: portfolio.today,
+      });
+      return;
+    }
+    const extra: Record<string, string> = {};
+    if (selection.kind === "bucket") {
+      if (selection.bucket.slaDueFrom) extra[dateRangeParamKey("slaDueDate", "from")] = selection.bucket.slaDueFrom;
+      extra[dateRangeParamKey("slaDueDate", "to")] = selection.bucket.slaDueTo;
+    }
+    const params = buildTarjetasDrillDownParams({ from, to, productType, extra });
+    router.push(`/sla-vencidas?${params.toString()}`);
   }
 
   return (
@@ -352,6 +382,14 @@ export default function DashboardClient() {
           onClick={() => goToTarjetas(METRIC_STYLES.retornadas.query)}
         />
       </div>
+
+      <Panel
+        className="mb-5"
+        title="Cartera al día vs vencidas"
+        subtitle="Tarjetas abiertas del rango según su fecha de vencimiento SLA"
+      >
+        <SlaPortfolioChart portfolio={data.slaPortfolio} loading={loading} onSelect={goToSlaPortfolio} />
+      </Panel>
 
       <Panel
         className="mb-5"
