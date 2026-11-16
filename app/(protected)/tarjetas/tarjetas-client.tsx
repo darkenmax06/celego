@@ -1,6 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { Upload } from "lucide-react";
+import type { UserRole } from "@prisma/client";
 import { CardDetailModal } from "@/components/cards/card-detail-modal";
 import { CardExportWizardModal } from "@/components/cards/card-export-wizard-modal";
 import { CardGroupAssignModal } from "@/components/cards/card-group-assign-modal";
@@ -15,6 +18,8 @@ import { groupByLevelLabel, type ViewType } from "@/components/filters/filter-ba
 import { NestedGroupList, useCollapsedGroups, type GroupSelection } from "@/components/grouping/nested-group-list";
 import { PageHeader } from "@/components/ui/page-header";
 import { ManualCardModal } from "@/components/cards/manual-card-modal";
+import { CardImportModal } from "@/components/importacion/card-import-modal";
+import { canAccessModule } from "@/lib/acl";
 import { Panel } from "@/components/ui/panel";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { notificationFailureMessage, notifyInBrowser } from "@/lib/browser-notifications";
@@ -316,6 +321,22 @@ export default function TarjetasClient({ role }: TarjetasClientProps) {
   const canManageGroups = role === "ADMIN" || role === "OPERADOR";
   const [manualCardOpen, setManualCardOpen] = useState(false);
   const [manualCardNotice, setManualCardNotice] = useState("");
+  const canImport = canAccessModule(role as UserRole, "importacion");
+  const [importOpen, setImportOpen] = useState(false);
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
+  // `/importacion` (old links/bookmarks) redirects here with `?importar=1`:
+  // open the import modal once and drop the param from the URL.
+  const importRequested = searchParams?.get("importar") === "1";
+  useEffect(() => {
+    if (!importRequested) return;
+    if (canImport) setImportOpen(true);
+    const rest = new URLSearchParams(window.location.search);
+    rest.delete("importar");
+    const query = rest.toString();
+    router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
+  }, [importRequested, canImport, pathname, router]);
   const [cards, setCards] = useState<CardRow[]>([]);
   // Filters live in the URL (read on mount, written back on change).
   const { filters, setFilters, resetFilters } = useCardListFilters({ defaults: DEFAULT_FILTERS });
@@ -719,14 +740,28 @@ export default function TarjetasClient({ role }: TarjetasClientProps) {
         title="Tarjetas"
         subtitle="Consulta y clasificacion de tarjetas"
         actions={
-          canManageGroups ? (
-            <button
-              type="button"
-              onClick={() => setManualCardOpen(true)}
-              className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700"
-            >
-              Nueva tarjeta
-            </button>
+          canManageGroups || canImport ? (
+            <div className="flex items-center gap-2">
+              {canImport ? (
+                <button
+                  type="button"
+                  onClick={() => setImportOpen(true)}
+                  className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                >
+                  <Upload className="h-4 w-4" />
+                  Importar
+                </button>
+              ) : null}
+              {canManageGroups ? (
+                <button
+                  type="button"
+                  onClick={() => setManualCardOpen(true)}
+                  className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700"
+                >
+                  Nueva tarjeta
+                </button>
+              ) : null}
+            </div>
           ) : undefined
         }
       />
@@ -1110,6 +1145,14 @@ export default function TarjetasClient({ role }: TarjetasClientProps) {
           onCreated={(message) => {
             setManualCardOpen(false);
             setManualCardNotice(message);
+            void fetchCards(filters);
+          }}
+        />
+      ) : null}
+      {canImport && importOpen ? (
+        <CardImportModal
+          onClose={() => setImportOpen(false)}
+          onImported={() => {
             void fetchCards(filters);
           }}
         />

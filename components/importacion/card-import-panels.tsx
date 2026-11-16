@@ -1,6 +1,6 @@
 "use client";
 
-import { ChangeEvent, useState } from "react";
+import { ChangeEvent, useEffect, useRef, useState } from "react";
 import { AlertCircle, AlertTriangle, CheckCircle2, Download, Loader2 } from "lucide-react";
 import { Panel } from "@/components/ui/panel";
 import { notificationFailureMessage, notifyInBrowser } from "@/lib/browser-notifications";
@@ -41,14 +41,27 @@ function summarizeRowErrors(errors: RowError[] | undefined, title = "Rechazadas"
   return [`${title} (${errors.length}):`, ...lines].join("\n");
 }
 
+type CardImportPanelsProps = {
+  /** Fires whenever an upload starts or finishes, so a host can block closing mid-upload. */
+  onBusyChange?: (busy: boolean) => void;
+  /** Fires after the server accepted a file, so a host can reload its card list. */
+  onImported?: (endpoint: string) => void;
+};
+
 /**
  * Credit (Torre / Acopio) and debit (BPD / Pinit) file importers.
- * Moved out of the Tarjetas page so that page only lists and filters cards.
+ * Rendered inside the Tarjetas import modal.
  */
-export function CardImportPanels() {
+export function CardImportPanels({ onBusyChange, onImported }: CardImportPanelsProps = {}) {
   const [activeUploader, setActiveUploader] = useState<string | null>(null);
   const [uploadStatus, setUploadStatus] = useState<UploadStatus | null>(null);
   const [notificationIssue, setNotificationIssue] = useState("");
+  const onBusyChangeRef = useRef(onBusyChange);
+  onBusyChangeRef.current = onBusyChange;
+  const busy = activeUploader !== null;
+  useEffect(() => {
+    onBusyChangeRef.current?.(busy);
+  }, [busy]);
 
   async function pullImmediateUrgentNotifications() {
     const res = await fetch("/api/operativo/urgencias", { cache: "no-store" });
@@ -94,6 +107,8 @@ export function CardImportPanels() {
         });
         return;
       }
+
+      onImported?.(endpoint);
 
       const warning = formatInactiveProvinceWarning(data.inactiveProvinceRows, data.inactiveProvinceNames) ?? undefined;
 

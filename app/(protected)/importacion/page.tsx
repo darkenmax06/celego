@@ -1,7 +1,8 @@
+import { redirect } from "next/navigation";
 import { requireRole } from "@/lib/server-auth";
-import ImportacionClient from "./importacion-client";
 
+/** The importers now live in a modal on the Tarjetas page; keep old links working. */
 export default async function ImportacionPage() {
   await requireRole(["ADMIN", "OPERADOR"]);
-  return <ImportacionClient />;
+  redirect("/tarjetas?importar=1");
 }
