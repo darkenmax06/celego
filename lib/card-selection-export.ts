@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { formatCardDate, type CardDateSource } from "@/lib/card-date-fields";
+import { cardFilterSelectionSchema } from "@/lib/cards/card-filter-selection-schema";
 
 /**
  * Whitelisted fields for exporting a card selection. The order here is the
@@ -54,11 +55,26 @@ const fieldKeys = CARD_EXPORT_FIELDS.map((field) => field.key) as [
   ...CardExportFieldKey[],
 ];
 
-export const cardSelectionExportSchema = z.object({
-  cardIds: z.array(z.string().min(1)).min(1).max(MAX_CARD_EXPORT_SELECTION),
+const exportOptionsShape = {
   fields: z.array(z.enum(fieldKeys)).min(1),
   format: z.enum(["xlsx", "csv"]),
-});
+};
+
+/**
+ * Either explicit `cardIds` (capped at `MAX_CARD_EXPORT_SELECTION`) or a
+ * "select all matching" `selection`, resolved server-side with the list query
+ * and capped at `MAX_FILTER_SELECTION`.
+ */
+export const cardSelectionExportSchema = z.union([
+  z.object({
+    cardIds: z.array(z.string().min(1)).min(1).max(MAX_CARD_EXPORT_SELECTION),
+    ...exportOptionsShape,
+  }),
+  z.object({
+    selection: cardFilterSelectionSchema,
+    ...exportOptionsShape,
+  }),
+]);
 
 export type CardSelectionExportRequest = z.infer<typeof cardSelectionExportSchema>;
 
