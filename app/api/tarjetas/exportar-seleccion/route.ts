@@ -2,6 +2,12 @@ import { NextResponse } from "next/server";
 import { requireApiSession } from "@/lib/api-session";
 import { writeAuditEvent } from "@/lib/audit";
 import { buildCardExportRows, cardSelectionExportSchema } from "@/lib/card-selection-export";
+import {
+  assertWithinFilterSelectionCap,
+  cardFilterSelectionErrorResponse,
+  compileCardFilterSelection,
+  MAX_FILTER_SELECTION,
+} from "@/lib/cards/card-filter-selection";
 import { prisma } from "@/lib/prisma";
 import { exportRowsToCsv, exportRowsToXlsx } from "@/lib/reports/export";
 
@@ -15,22 +21,36 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Payload invalido" }, { status: 400 });
   }
 
-  const cardIds = [...new Set(parsed.data.cardIds)];
-  const cards = await prisma.card.findMany({
-    where: { id: { in: cardIds } },
-    include: {
-      customer: { select: { nombre: true, cedula: true, telefonosRaw: true, direccionRaw: true } },
-      currentMessenger: { select: { nombre: true } },
-    },
-  });
+  const include = {
+    customer: { select: { nombre: true, cedula: true, telefonosRaw: true, direccionRaw: true } },
+    currentMessenger: { select: { nombre: true } },
+  } as const;
+
+  let cards;
+  const selectionMode = "selection" in parsed.data ? "filter" : "ids";
+  if ("selection" in parsed.data) {
+    // "Select all matching": the list's own query, in list order, capped.
+    try {
+      const { where, orderBy } = await compileCardFilterSelection(parsed.data.selection);
+      cards = await prisma.card.findMany({ where, orderBy, include, take: MAX_FILTER_SELECTION + 1 });
+      assertWithinFilterSelectionCap(cards.length);
+    } catch (error) {
+      const response = cardFilterSelectionErrorResponse(error);
+      if (response) return response;
+      throw error;
+    }
+  } else {
+    const cardIds = [...new Set(parsed.data.cardIds)];
+    cards = await prisma.card.findMany({ where: { id: { in: cardIds } }, include });
+
+    // Keep the order the user selected the cards in.
+    const position = new Map(cardIds.map((id, index) => [id, index]));
+    cards.sort((a, b) => (position.get(a.id) ?? 0) - (position.get(b.id) ?? 0));
+  }
 
   if (!cards.length) {
     return NextResponse.json({ error: "No hay tarjetas para exportar" }, { status: 404 });
   }
-
-  // Keep the order the user selected the cards in.
-  const position = new Map(cardIds.map((id, index) => [id, index]));
-  cards.sort((a, b) => (position.get(a.id) ?? 0) - (position.get(b.id) ?? 0));
 
   const rows = buildCardExportRows(cards, parsed.data.fields);
   const today = new Date().toISOString().slice(0, 10);
@@ -41,7 +61,7 @@ export async function POST(request: Request) {
     entityId: today,
     action: "EXPORT",
     userId: auth.session.user.id,
-    details: { format, rowCount: rows.length, fields: parsed.data.fields },
+    details: { format, rowCount: rows.length, fields: parsed.data.fields, selectionMode },
     request,
   });
 

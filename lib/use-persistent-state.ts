@@ -60,3 +60,24 @@ export function usePersistentState<T>(
 
   return [value, setValue, hydratedStorageKey === storageKey];
 }
+
+/** Reads a value stored by `usePersistentState(key)` outside of React. `undefined` when absent or unreadable. */
+export function readPersistentValue<T>(key: string): T | undefined {
+  try {
+    const raw = window.localStorage.getItem(`${PREFIX}${key}`);
+    if (!raw) return undefined;
+    const parsed = JSON.parse(raw) as StoredValue<T>;
+    return parsed.version === 1 ? parsed.value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Removes a value stored by `usePersistentState(key)`. */
+export function removePersistentValue(key: string): void {
+  try {
+    window.localStorage.removeItem(`${PREFIX}${key}`);
+  } catch {
+    return;
+  }
+}

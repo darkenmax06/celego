@@ -50,7 +50,19 @@ type Props = {
   onExport?: () => void;
   /** Extra view-specific actions rendered before the built-in ones. */
   actions?: ReactNode;
+  /**
+   * Odoo-style "select all matching": offered (by the caller) when the whole
+   * page is selected and more cards match the current filters.
+   */
+  selectAllMatching?: { total: number; onSelect: () => void };
+  /**
+   * Active "all matching" mode: the bar shows the filter total, the per-id
+   * review panel is not available, and × goes back to the page selection.
+   */
+  allMatching?: { total: number; onExit: () => void };
 };
+
+const formatCount = (value: number) => value.toLocaleString("es-DO");
 
 export function CardSelectionBar({
   count,
@@ -64,67 +76,95 @@ export function CardSelectionBar({
   onRemoveFromGroup,
   onExport,
   actions,
+  selectAllMatching,
+  allMatching,
 }: Props) {
   const [reviewOpen, setReviewOpen] = useState(false);
 
-  if (count === 0) return null;
+  if (count === 0 && !allMatching) return null;
 
   const realGroupIds = activeGroupFilterIds.filter((id) => id !== "SIN_GRUPO");
   const canRemoveFromGroup = Boolean(onRemoveFromGroup) && realGroupIds.length === 1;
-  const label = `${count} seleccionadas`;
+  const label = `${formatCount(allMatching ? allMatching.total : count)} seleccionadas`;
 
   return (
     <div className="sticky bottom-0 z-30 flex flex-wrap items-center gap-3 border-t border-slate-200 bg-white/95 px-4 py-3 shadow-[0_-4px_12px_rgba(0,0,0,0.06)] backdrop-blur">
-      <div className="relative">
+      {allMatching ? (
+        <div className="flex items-center gap-1.5">
+          <span className="rounded-lg px-2 py-1 text-sm font-semibold text-slate-800">{label}</span>
+          <span className="text-xs text-slate-500">(todas las que coinciden con los filtros)</span>
+          <button
+            type="button"
+            onClick={allMatching.onExit}
+            aria-label="Volver a la selección de la página"
+            title="Volver a la selección de la página"
+            className="rounded-md p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      ) : (
+        <div className="relative">
+          <button
+            type="button"
+            onClick={() => setReviewOpen((open) => !open)}
+            aria-expanded={reviewOpen}
+            className="rounded-lg px-2 py-1 text-sm font-semibold text-slate-800 hover:bg-slate-100"
+          >
+            {label}
+          </button>
+
+          {reviewOpen ? (
+            <div className="absolute bottom-full left-0 mb-2 max-h-80 w-80 overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-xl">
+              <div className="sticky top-0 border-b border-slate-100 bg-white px-3 py-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                Tarjetas seleccionadas
+              </div>
+              <ul>
+                {selectedIds.map((id) => {
+                  const entry = cardsById[id];
+                  return (
+                    <li
+                      key={id}
+                      className="flex items-center justify-between gap-2 border-b border-slate-50 px-3 py-2 last:border-b-0"
+                    >
+                      {entry ? (
+                        <div className="min-w-0">
+                          <p className="truncate font-mono text-xs font-bold text-blue-700">{entry.tc}</p>
+                          <p className="truncate text-xs text-slate-700">{entry.customerName}</p>
+                          <p className="truncate text-[11px] text-slate-400">{entry.cedula}</p>
+                        </div>
+                      ) : (
+                        <div className="min-w-0">
+                          <p className="truncate font-mono text-xs text-slate-600">{id}</p>
+                          <p className="text-[11px] italic text-amber-700">Fuera de esta vista</p>
+                        </div>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => onDeselect(id)}
+                        aria-label={`Quitar tarjeta ${entry?.tc ?? id} de la selección`}
+                        className="shrink-0 rounded-md p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          ) : null}
+        </div>
+      )}
+
+      {selectAllMatching && !allMatching ? (
         <button
           type="button"
-          onClick={() => setReviewOpen((open) => !open)}
-          aria-expanded={reviewOpen}
-          className="rounded-lg px-2 py-1 text-sm font-semibold text-slate-800 hover:bg-slate-100"
+          onClick={selectAllMatching.onSelect}
+          className="rounded-lg px-2 py-1 text-sm font-semibold text-blue-700 hover:bg-blue-50 hover:underline"
         >
-          {label}
+          Seleccionar todas las {formatCount(selectAllMatching.total)}
         </button>
-
-        {reviewOpen ? (
-          <div className="absolute bottom-full left-0 mb-2 max-h-80 w-80 overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-xl">
-            <div className="sticky top-0 border-b border-slate-100 bg-white px-3 py-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
-              Tarjetas seleccionadas
-            </div>
-            <ul>
-              {selectedIds.map((id) => {
-                const entry = cardsById[id];
-                return (
-                  <li
-                    key={id}
-                    className="flex items-center justify-between gap-2 border-b border-slate-50 px-3 py-2 last:border-b-0"
-                  >
-                    {entry ? (
-                      <div className="min-w-0">
-                        <p className="truncate font-mono text-xs font-bold text-blue-700">{entry.tc}</p>
-                        <p className="truncate text-xs text-slate-700">{entry.customerName}</p>
-                        <p className="truncate text-[11px] text-slate-400">{entry.cedula}</p>
-                      </div>
-                    ) : (
-                      <div className="min-w-0">
-                        <p className="truncate font-mono text-xs text-slate-600">{id}</p>
-                        <p className="text-[11px] italic text-amber-700">Fuera de esta vista</p>
-                      </div>
-                    )}
-                    <button
-                      type="button"
-                      onClick={() => onDeselect(id)}
-                      aria-label={`Quitar tarjeta ${entry?.tc ?? id} de la selección`}
-                      className="shrink-0 rounded-md p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
-                    >
-                      <X className="h-3.5 w-3.5" />
-                    </button>
-                  </li>
-                );
-              })}
-            </ul>
-          </div>
-        ) : null}
-      </div>
+      ) : null}
 
       <div className="ml-auto flex flex-wrap items-center gap-2">
         {actions}
