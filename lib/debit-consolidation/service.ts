@@ -1,4 +1,5 @@
 import { syncCardsAfterChange } from "@/lib/payroll/counting";
+import { recalculateAdditionalCardsForGroups, type AdditionalGroupInput } from "@/lib/card-additional";
 import { Prisma, type CardStatus, type UserRole } from "@prisma/client";
 import { writeAuditEvent } from "@/lib/audit";
 import { prisma } from "@/lib/prisma";
@@ -194,6 +195,7 @@ async function syncDebitCards(
   const cards = new Map<string, string>();
   let created = 0;
   let updated = 0;
+  const additionalGroups: AdditionalGroupInput[] = [];
 
   for (const row of plan.effectiveRows) {
     // Configured provinces (name or variant) dictate the stored spelling and zone.
@@ -236,6 +238,7 @@ async function syncDebitCards(
         dispatchDate: row.dispatchDate,
       },
     });
+    additionalGroups.push({ customerCedula: customer.cedula, dispatchDate: row.dispatchDate });
     if (existing) {
       await tx.card.update({
         where: { id: existing.id },
@@ -298,6 +301,8 @@ async function syncDebitCards(
       created += 1;
     }
   }
+  // Same customer + same dispatch day = additional card.
+  await recalculateAdditionalCardsForGroups(additionalGroups, tx);
   return { cards, created, updated };
 }
 
