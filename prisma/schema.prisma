@@ -213,6 +213,7 @@ model User {
   reportedMobileIncidents   MobileIncident[]           @relation("MobileIncidentCreatedBy")
   updatedCardTransitionPolicies CardTransitionPolicy[]  @relation("CardTransitionPolicyUpdatedBy")
   viewPreferences            UserViewPreference[]
+  tablePreferences           UserTablePreference[]
   savedFilters               UserSavedFilter[]
   updatedDebitConsolidadoExportConfigs DebitConsolidadoExportConfig[] @relation("DebitConsolidadoExportConfigUpdatedBy")
   updatedScriptConfigs       OperativeScriptConfig[]    @relation("ScriptConfigUpdatedBy")
@@ -1117,6 +1118,20 @@ model UserViewPreference {
 
   @@unique([userId, sectionKey])
   @@index([userId, sectionKey])
+}
+
+/// Per-user table layout (column order + visibility). `columns` is an ordered
+/// list of `{ key, visible }`, always sanitized against the table's column
+/// catalog (`lib/table-columns/catalogs.ts`) before it is stored or served.
+model UserTablePreference {
+  id        String   @id @default(cuid())
+  userId    String
+  tableKey  String
+  columns   Json
+  updatedAt DateTime @updatedAt
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, tableKey])
 }
 
 model UserSavedFilter {
