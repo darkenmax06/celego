@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
 import { type UserRole } from "@prisma/client";
 import { getAuthSession } from "@/lib/auth";
-import { prisma } from "@/lib/prisma";
 import { tryWriteAuditEvent } from "@/lib/audit";
+import { resolveSessionUser } from "@/lib/session-user";
 
 export async function requireApiSession(roles?: UserRole[]) {
   const session = await getAuthSession();
@@ -10,27 +10,13 @@ export async function requireApiSession(roles?: UserRole[]) {
     return { error: NextResponse.json({ error: "No autenticado" }, { status: 401 }) } as const;
   }
 
-  const sessionUserId = typeof session.user.id === "string" ? session.user.id : "";
   const sessionUserEmail =
     typeof session.user.email === "string" ? session.user.email.trim().toLowerCase() : "";
 
-  let user = sessionUserId
-    ? await prisma.user.findUnique({
-        where: { id: sessionUserId },
-        select: { id: true, role: true, active: true },
-      })
-    : null;
+  // Recovers sessions after a DB reset/migration where the id changed but the email did not.
+  const user = await resolveSessionUser(session);
 
-  // Permite recuperar sesion tras reset/migracion de DB donde el id cambia
-  // pero el email sigue siendo el mismo.
-  if ((!user || !user.active) && sessionUserEmail) {
-    user = await prisma.user.findUnique({
-      where: { email: sessionUserEmail },
-      select: { id: true, role: true, active: true },
-    });
-  }
-
-  if (!user || !user.active) {
+  if (!user) {
     return {
       error: NextResponse.json(
         { error: "Sesion invalida o expirada. Inicia sesion nuevamente." },
