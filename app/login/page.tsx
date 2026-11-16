@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import { signIn } from "next-auth/react";
 import { useRouter } from "next/navigation";
 
@@ -10,6 +10,12 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [expired, setExpired] = useState(false);
+
+  // Set by /logout when a stale session (deleted/inactive user) was cleared.
+  useEffect(() => {
+    setExpired(new URLSearchParams(window.location.search).get("expired") === "1");
+  }, []);
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -37,6 +43,12 @@ export default function LoginPage() {
       <section className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-8 shadow-sm">
         <h1 className="font-display text-3xl font-bold text-[#0f2544]">Celego</h1>
         <p className="mt-2 text-sm text-slate-500">Sistema de gestion de mensajeria de tarjetas</p>
+
+        {expired ? (
+          <p className="mt-6 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+            Tu sesion expiro o tu usuario ya no esta disponible. Inicia sesion nuevamente.
+          </p>
+        ) : null}
 
         <form className="mt-8 space-y-4" onSubmit={onSubmit}>
           <div>
