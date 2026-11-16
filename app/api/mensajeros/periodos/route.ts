@@ -5,6 +5,7 @@ import { prisma } from "@/lib/prisma";
 import { applyPendingChanges } from "@/lib/payroll/counting";
 import { PayrollError, closePayment, refreshPaymentTotals, reopenPayment } from "@/lib/payroll/payments";
 import { periodsOverlap, toPayrollDay } from "@/lib/payroll/period";
+import { storePeriodReport } from "@/lib/payroll/period-report";
 
 const createSchema = z.object({
   label: z.string().trim().min(1).max(80),
@@ -17,7 +18,10 @@ const patchSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("LOCK"), periodId: z.string().cuid(), messengerId: z.string().cuid() }),
   z.object({ action: z.literal("UNLOCK"), periodId: z.string().cuid(), messengerId: z.string().cuid() }),
   z.object({ action: z.literal("LOCK_ALL"), periodId: z.string().cuid() }),
+  z.object({ action: z.literal("REGENERATE_REPORT"), periodId: z.string().cuid(), messengerId: z.string().cuid() }),
 ]);
+
+const REPORT_WARNING = "El periodo quedo bloqueado, pero no se pudo generar el reporte. Use Regenerar reporte para intentarlo de nuevo.";
 
 const ROLES = ["ADMIN", "OPERADOR", "FACTURACION"] as const;
 
@@ -42,9 +46,15 @@ export async function GET(request: NextRequest) {
   const rows = await Promise.all(
     periods.map(async (period) => {
       const lock = messengerId ? period.locks.find((item) => item.messengerId === messengerId) : null;
-      const pending = messengerId
-        ? await prisma.payrollPendingChange.count({ where: { messengerId, day: { gte: period.fromDate, lte: period.toDate } } })
-        : 0;
+      const [pending, report] = messengerId
+        ? await Promise.all([
+            prisma.payrollPendingChange.count({ where: { messengerId, day: { gte: period.fromDate, lte: period.toDate } } }),
+            prisma.messengerReport.findUnique({
+              where: { messengerId_payrollPeriodId: { messengerId, payrollPeriodId: period.id } },
+              select: { id: true, generatedAt: true, imagePath: true },
+            }),
+          ])
+        : [0, null];
       return {
         id: period.id,
         label: period.label,
@@ -56,6 +66,7 @@ export async function GET(request: NextRequest) {
         unlockedAt: lock?.unlockedAt ?? null,
         lockedCount: period.locks.filter((item) => item.status === "BLOQUEADO").length,
         pendingChanges: pending,
+        report: report?.imagePath ? { id: report.id, generatedAt: report.generatedAt } : null,
       };
     }),
   );
@@ -109,9 +120,28 @@ export async function PATCH(request: Request) {
       if (period.messengerId) {
         return NextResponse.json({ error: "Un periodo propio de un mensajero se bloquea desde ese mensajero" }, { status: 422 });
       }
-      const messengers = await prisma.messenger.findMany({ where: { activo: true }, select: { id: true } });
-      for (const messenger of messengers) await lockOne(period.id, messenger.id, userId);
-      return NextResponse.json({ locked: messengers.length });
+      const messengers = await prisma.messenger.findMany({ where: { activo: true }, select: { id: true, nombre: true } });
+      const newlyLocked: typeof messengers = [];
+      for (const messenger of messengers) {
+        if (await lockOne(period.id, messenger.id, userId)) newlyLocked.push(messenger);
+      }
+      // Reports only after every lock is in: a failed image never blocks or undoes a lock.
+      const reportFailures: Array<{ messengerId: string; nombre: string }> = [];
+      let reports = 0;
+      for (const messenger of newlyLocked) {
+        if (await generateReport(period.id, messenger.id, userId)) reports += 1;
+        else reportFailures.push({ messengerId: messenger.id, nombre: messenger.nombre });
+      }
+      return NextResponse.json({
+        locked: messengers.length,
+        reports,
+        ...(reportFailures.length
+          ? {
+              reportFailures,
+              reportWarning: `Periodo bloqueado, pero no se pudo generar el reporte de: ${reportFailures.map((item) => item.nombre).join(", ")}. Regenerelo desde el perfil de cada mensajero.`,
+            }
+          : {}),
+      });
     }
 
     if (period.messengerId && period.messengerId !== body.messengerId) {
@@ -119,7 +149,23 @@ export async function PATCH(request: Request) {
     }
     if (body.action === "LOCK") {
       await lockOne(period.id, body.messengerId, userId);
-      return NextResponse.json({ status: "BLOQUEADO" });
+      const report = await generateReport(period.id, body.messengerId, userId);
+      return NextResponse.json({
+        status: "BLOQUEADO",
+        ...(report ? { report: { id: report.id, generatedAt: report.generatedAt } } : { reportWarning: REPORT_WARNING }),
+      });
+    }
+
+    if (body.action === "REGENERATE_REPORT") {
+      const lock = await prisma.payrollPeriodLock.findUnique({
+        where: { periodId_messengerId: { periodId: period.id, messengerId: body.messengerId } },
+      });
+      if (lock?.status !== "BLOQUEADO") {
+        return NextResponse.json({ error: "El reporte se genera al bloquear el periodo: bloquealo primero" }, { status: 409 });
+      }
+      const report = await generateReport(period.id, body.messengerId, userId);
+      if (!report) return NextResponse.json({ error: "No se pudo generar el reporte. Intente de nuevo." }, { status: 500 });
+      return NextResponse.json({ status: "BLOQUEADO", report: { id: report.id, generatedAt: report.generatedAt } });
     }
 
     const applied = await prisma.$transaction(async (tx) => {
@@ -140,10 +186,11 @@ export async function PATCH(request: Request) {
   }
 }
 
+/** Locks the period for one messenger and closes its payment. False when it was already locked. */
 async function lockOne(periodId: string, messengerId: string, userId: string) {
-  await prisma.$transaction(async (tx) => {
+  return prisma.$transaction(async (tx) => {
     const current = await tx.payrollPeriodLock.findUnique({ where: { periodId_messengerId: { periodId, messengerId } } });
-    if (current?.status === "BLOQUEADO") return;
+    if (current?.status === "BLOQUEADO") return false;
     const now = new Date();
     await tx.payrollPeriodLock.upsert({
       where: { periodId_messengerId: { periodId, messengerId } },
@@ -151,7 +198,18 @@ async function lockOne(periodId: string, messengerId: string, userId: string) {
       update: { status: "BLOQUEADO", lockedAt: now, lockedById: userId },
     });
     await closePayment(tx, messengerId, periodId);
+    return true;
   });
+}
+
+/** Stores the period report after the lock committed; a failure is logged and reported, never thrown. */
+async function generateReport(periodId: string, messengerId: string, userId: string) {
+  try {
+    return await storePeriodReport({ messengerId, periodId, userId });
+  } catch (error) {
+    console.error(`[periodos] period report failed (period ${periodId}, messenger ${messengerId})`, error);
+    return null;
+  }
 }
 
 export async function DELETE(request: NextRequest) {

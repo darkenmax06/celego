@@ -77,3 +77,37 @@ describe("PATCH /api/mensajeros no longer controls activo (R4.1)", () => {
     expect(prisma.__rows("auditLog")).toHaveLength(0);
   });
 });
+
+describe("PATCH /api/mensajeros profile data", () => {
+  it("persists a trimmed name and clears an emptied phone", async () => {
+    prisma.__seed("messenger", { id: ID, nombre: "Pedro", telefono: "809", activo: true });
+
+    const response = await PATCH(
+      json("PATCH", { id: ID, nombre: "  Pedro Martinez  ", telefono: "  ", zonaPrincipal: "Norte", provinciaTrabajo: "Santiago", rates: [] }),
+    );
+
+    expect(response?.status).toBe(200);
+    expect(prisma.__row("messenger", ID)).toMatchObject({
+      nombre: "Pedro Martinez",
+      telefono: null,
+      zonaPrincipal: "Norte",
+      provinciaTrabajo: "Santiago",
+    });
+  });
+
+  it("rejects a name shorter than 2 characters after trimming", async () => {
+    const response = await PATCH(json("PATCH", { id: ID, nombre: " P ", rates: [] }));
+
+    expect(response?.status).toBe(400);
+    expect(await readJson(response)).toEqual({ error: "El nombre debe tener al menos 2 caracteres" });
+    expect(prisma.messenger.update).not.toHaveBeenCalled();
+    expect(prisma.__row("messenger", ID)).toMatchObject({ nombre: "Pedro" });
+  });
+
+  it("leaves omitted profile fields untouched", async () => {
+    await PATCH(json("PATCH", { id: ID, nombre: "Pedro", rates: [] }));
+    const data = firstCallArg(prisma.messenger.update).data as Record<string, unknown>;
+    expect(data.telefono).toBeUndefined();
+    expect(data.provinciaTrabajo).toBeUndefined();
+  });
+});

@@ -12,6 +12,8 @@ export function ConfirmDialog({
   cancelLabel = "Cancelar",
   tone = "danger",
   busy = false,
+  alert,
+  hideConfirm = false,
   onConfirm,
   onCancel,
 }: {
@@ -22,6 +24,10 @@ export function ConfirmDialog({
   cancelLabel?: string;
   tone?: "danger" | "default";
   busy?: boolean;
+  /** Error shown in red under the message, e.g. why the action was refused. */
+  alert?: string;
+  /** Only the cancel button is offered (nothing left to confirm). */
+  hideConfirm?: boolean;
   onConfirm: () => void;
   onCancel: () => void;
 }) {
@@ -90,6 +96,11 @@ export function ConfirmDialog({
             <p id={messageId} className="mt-1 text-sm text-slate-600">
               {message}
             </p>
+            {alert ? (
+              <p role="alert" className="mt-3 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-medium text-rose-700">
+                {alert}
+              </p>
+            ) : null}
           </div>
         </div>
         <div className="mt-6 flex justify-end gap-2">
@@ -102,6 +113,7 @@ export function ConfirmDialog({
           >
             {cancelLabel}
           </button>
+          {hideConfirm ? null : (
           <button
             type="button"
             disabled={busy}
@@ -113,6 +125,7 @@ export function ConfirmDialog({
           >
             {confirmLabel}
           </button>
+          )}
         </div>
       </div>
     </div>
