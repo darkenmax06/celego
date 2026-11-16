@@ -15,7 +15,9 @@ const AUTH_COOKIE_PREFIXES = [
  * on the login page with an "expired" notice.
  */
 export function GET(request: NextRequest) {
-  const response = NextResponse.redirect(new URL("/login?expired=1", request.url));
+  // Relative Location: behind Docker request.url is the container address
+  // (http://0.0.0.0:3000), not the host the browser used.
+  const response = new NextResponse(null, { status: 307, headers: { Location: "/login?expired=1" } });
   for (const cookie of request.cookies.getAll()) {
     if (AUTH_COOKIE_PREFIXES.some((prefix) => cookie.name === prefix || cookie.name.startsWith(`${prefix}.`))) {
       response.cookies.set(cookie.name, "", { path: "/", maxAge: 0 });

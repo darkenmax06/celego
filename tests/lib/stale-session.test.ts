@@ -70,7 +70,8 @@ describe("GET /logout", () => {
     });
     const response = logout(request);
     expect(response.status).toBe(307);
-    expect(response.headers.get("location")).toBe("http://localhost:3800/login?expired=1");
+    // Relative, so it stays on whatever host the browser used (never the container address).
+    expect(response.headers.get("location")).toBe("/login?expired=1");
     const cleared = response.cookies.getAll().map((cookie) => cookie.name).sort();
     expect(cleared).toEqual(["next-auth.csrf-token", "next-auth.session-token", "next-auth.session-token.0"]);
     for (const cookie of response.cookies.getAll()) expect(cookie.value).toBe("");
