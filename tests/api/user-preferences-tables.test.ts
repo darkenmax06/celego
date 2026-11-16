@@ -13,9 +13,13 @@ const { prismaMock, requireApiSessionMock } = vi.hoisted(() => ({
 vi.mock("@/lib/prisma", () => ({ prisma: prismaMock }));
 vi.mock("@/lib/api-session", () => ({ requireApiSession: requireApiSessionMock }));
 
-import { GET, PUT } from "@/app/api/user-preferences/tables/[tableKey]/route";
+import { GET as rawGet, PUT as rawPut } from "@/app/api/user-preferences/tables/[tableKey]/route";
 import { TARJETAS_COLUMNS } from "@/lib/table-columns/catalogs";
 import { defaultColumnPreferences } from "@/lib/table-columns/column-preferences";
+
+// Route handlers are typed as possibly returning undefined; every path here returns a Response.
+const GET = async (...args: Parameters<typeof rawGet>) => (await rawGet(...args)) as Response;
+const PUT = async (...args: Parameters<typeof rawPut>) => (await rawPut(...args)) as Response;
 
 const ctx = (tableKey: string) => ({ params: Promise.resolve({ tableKey }) });
 
