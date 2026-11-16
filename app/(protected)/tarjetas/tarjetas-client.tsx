@@ -200,7 +200,6 @@ const DEFAULT_COLUMN_WIDTHS: Record<string, number> = {
   contractImageAt: 160,
   createdAt: 160,
   updatedAt: 160,
-  acciones: 130,
 };
 
 function getCardGroupKey(card: CardRow, groupBy: string): { key: string; label: string } {
@@ -678,24 +677,6 @@ export default function TarjetasClient({ role }: TarjetasClientProps) {
           </td>
         ) : null,
       )}
-      <td className="px-3 py-2.5 text-right whitespace-nowrap">
-        <div className="flex justify-end gap-1.5">
-          <button
-            type="button"
-            onClick={() => setUrgencyTarget(card)}
-            className="rounded-lg border border-rose-200 px-2 py-1 text-xs font-semibold text-rose-700 hover:bg-rose-50"
-          >
-            Urgencia
-          </button>
-          <button
-            type="button"
-            onClick={() => setSelectedCardId(card.id)}
-            className="rounded-lg border border-slate-300 px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50"
-          >
-            Ver
-          </button>
-        </div>
-      </td>
     </tr>
   );
 
@@ -1008,12 +989,6 @@ export default function TarjetasClient({ role }: TarjetasClientProps) {
                       />
                     ) : null,
                   )}
-                  <th
-                    style={{ width: `${columnWidths.acciones}px` }}
-                    className="px-3 pb-2.5 pt-1 text-right text-xs uppercase text-slate-500 font-semibold"
-                  >
-                    Acciones
-                  </th>
                 </tr>
               </thead>
               <tbody>
@@ -1022,7 +997,7 @@ export default function TarjetasClient({ role }: TarjetasClientProps) {
                   <NestedGroupList
                     groups={groupedCards}
                     variant="table"
-                    colSpan={visibleColumns.length + (canManageGroups ? 2 : 1)}
+                    colSpan={visibleColumns.length + (canManageGroups ? 1 : 0)}
                     isCollapsed={collapsedGroups.isCollapsed}
                     onToggle={collapsedGroups.toggle}
                     selection={groupSelection}
@@ -1035,7 +1010,7 @@ export default function TarjetasClient({ role }: TarjetasClientProps) {
                 )}
                 {!cards.length ? (
                   <tr>
-                    <td colSpan={visibleColumns.length + (canManageGroups ? 2 : 1)} className="py-8 text-center text-sm text-slate-500">
+                    <td colSpan={visibleColumns.length + (canManageGroups ? 1 : 0)} className="py-8 text-center text-sm text-slate-500">
                       {loading ? "Cargando..." : "No hay tarjetas que coincidan con estos filtros."}
                     </td>
                   </tr>

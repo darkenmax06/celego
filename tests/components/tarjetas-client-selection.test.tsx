@@ -32,7 +32,7 @@ vi.mock("@/components/filters/filter-bar", () => ({
 }));
 
 vi.mock("@/components/cards/card-detail-modal", () => ({
-  CardDetailModal: () => null,
+  CardDetailModal: ({ cardId }: { cardId: string }) => <div data-testid="card-detail">{cardId}</div>,
 }));
 
 import TarjetasClient from "@/app/(protected)/tarjetas/tarjetas-client";
@@ -124,7 +124,7 @@ describe("TarjetasClient — card-groups selection wiring (ADMIN)", () => {
     );
   });
 
-  it("sets colSpan to visibleColumns.length + 2 on the empty-state row", async () => {
+  it("sets colSpan to visibleColumns.length + 1 (checkbox column) on the empty-state row", async () => {
     fetchMock.mockImplementation(async (url: string) => {
       if (url.startsWith("/api/card-groups")) {
         return { ok: true, json: async () => ({ groups: [] }) };
@@ -139,7 +139,7 @@ describe("TarjetasClient — card-groups selection wiring (ADMIN)", () => {
 
     await waitFor(() => expect(screen.getByText(/No hay tarjetas/)).toBeInTheDocument());
     const cell = screen.getByText(/No hay tarjetas/).closest("td")!;
-    expect(cell.getAttribute("colspan")).toBe("16");
+    expect(cell.getAttribute("colspan")).toBe("15");
   });
 
   it("shows a checkbox on each card in the cards view", async () => {
@@ -151,6 +151,20 @@ describe("TarjetasClient — card-groups selection wiring (ADMIN)", () => {
     await waitFor(() =>
       expect(screen.getByRole("checkbox", { name: "Seleccionar tarjeta 4000000000000001" })).toBeInTheDocument(),
     );
+  });
+});
+
+describe("TarjetasClient — list columns", () => {
+  it("renders no Acciones column and opens the card detail from the TC cell", async () => {
+    render(<TarjetasClient role="ADMIN" />);
+    await waitFor(() => expect(screen.getByText("4000000000000001")).toBeInTheDocument());
+
+    expect(screen.queryByRole("columnheader", { name: /acciones/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Ver" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Urgencia" })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByText("4000000000000001"));
+    expect(await screen.findByTestId("card-detail")).toHaveTextContent("card-1");
   });
 });
 
