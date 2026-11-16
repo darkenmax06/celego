@@ -1,3 +1,4 @@
+import { invalidDebitRequestNumberMessage, normalizeDebitRequestNumber } from "@/lib/importers/debit-request-number";
 import { CardStatus, CardProductType, DispatchOrigin } from "@prisma/client";
 import { readWorkbook, getSheetRows, findHeaderRow, mapHeaderIndex, getCell } from "@/lib/importers/workbook";
 import { parseExcelSerialDate } from "@/lib/date";
@@ -131,7 +132,11 @@ export function parseDebitConsolidadoImport(buffer: Buffer, preferredSheet = "DA
       continue;
     }
 
-    const nss = cleanStr(rawNss);
+    const nss = normalizeDebitRequestNumber(rawNss);
+    if (!nss) {
+      errors.push({ row: i + 1, message: invalidDebitRequestNumberMessage("N-SS", rawNss) });
+      continue;
+    }
     const cedula = onlyDigits(cleanStr(rawCedula));
     const nombre = cleanStr(rawNombre) || "SIN NOMBRE";
     const rawProv = cleanStr(getCell(row, idx.provincia));
