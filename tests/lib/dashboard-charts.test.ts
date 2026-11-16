@@ -17,6 +17,7 @@ import {
   productTypeWhere,
 } from "@/lib/dashboard/filters";
 import { compileCardDateRangeWhere } from "@/lib/list-query/card-date-range";
+import { buildSlaPortfolio, businessDaysOverdue, slaDueWindow } from "@/lib/dashboard/sla-portfolio";
 
 describe("buildTarjetasDrillDownParams", () => {
   it("links with the inclusive dispatch-date filter instead of legacy from/to", () => {
@@ -170,5 +171,64 @@ describe("buildZoneBreakdown", () => {
 
   it("returns nothing for an empty range", () => {
     expect(buildZoneBreakdown([])).toEqual([]);
+  });
+});
+
+describe("buildSlaPortfolio", () => {
+  // Monday 2026-11-16, mid-morning local time.
+  const now = new Date(2026, 10, 16, 10, 30);
+  const day = (d: number, hour = 12) => new Date(2026, 10, d, hour);
+
+  it("splits open cards into al dia, vencidas and sin SLA", () => {
+    const portfolio = buildSlaPortfolio(
+      [
+        { slaDueDate: day(16, 0) }, // due today: still al dia
+        { slaDueDate: day(20) },
+        { slaDueDate: day(13) }, // Friday: 1 business day overdue
+        { slaDueDate: null },
+      ],
+      now,
+    );
+    expect(portfolio).toMatchObject({ alDia: 2, vencidas: 1, sinSla: 1, today: "2026-11-16" });
+  });
+
+  it("buckets overdue cards by business days and keeps the total", () => {
+    const cards = [
+      { slaDueDate: day(15) }, // Sunday -> 1
+      { slaDueDate: day(11) }, // Wednesday -> 3
+      { slaDueDate: day(10) }, // Tuesday -> 4
+      { slaDueDate: day(5) }, // Thursday -> 7
+      { slaDueDate: day(4) }, // Wednesday -> 8
+      { slaDueDate: new Date(2026, 8, 1) },
+    ];
+    const portfolio = buildSlaPortfolio(cards, now);
+    expect(portfolio.buckets.map((bucket) => [bucket.key, bucket.count])).toEqual([
+      ["d1to3", 2],
+      ["d4to7", 2],
+      ["d8plus", 2],
+    ]);
+    expect(portfolio.buckets.reduce((sum, bucket) => sum + bucket.count, 0)).toBe(portfolio.vencidas);
+  });
+
+  it("returns zeros for an empty portfolio", () => {
+    const portfolio = buildSlaPortfolio([], now);
+    expect([portfolio.alDia, portfolio.vencidas, portfolio.sinSla]).toEqual([0, 0, 0]);
+    expect(portfolio.buckets.every((bucket) => bucket.count === 0)).toBe(true);
+  });
+
+  it("counts a weekend due date right before today as one day overdue", () => {
+    expect(businessDaysOverdue(now, day(14))).toBe(1);
+  });
+
+  it("gives each bucket an slaDueDate window matching its counts", () => {
+    expect(slaDueWindow(now, 1, 3)).toEqual({ from: "2026-11-11", to: "2026-11-15" });
+    expect(slaDueWindow(now, 4, 7)).toEqual({ from: "2026-11-05", to: "2026-11-10" });
+    expect(slaDueWindow(now, 8, null)).toEqual({ from: null, to: "2026-11-04" });
+    for (let offset = 1; offset <= 30; offset += 1) {
+      const due = new Date(2026, 10, 16 - offset, 12);
+      const key = `${due.getFullYear()}-${String(due.getMonth() + 1).padStart(2, "0")}-${String(due.getDate()).padStart(2, "0")}`;
+      const bucket = buildSlaPortfolio([{ slaDueDate: due }], now).buckets.find((item) => item.count === 1)!;
+      expect(key <= bucket.slaDueTo && (bucket.slaDueFrom === null || key >= bucket.slaDueFrom)).toBe(true);
+    }
   });
 });

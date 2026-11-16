@@ -2,6 +2,12 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { requireApiSession } from "@/lib/api-session";
 import { prisma } from "@/lib/prisma";
+import {
+  addCardsToGroupInBatches,
+  cardFilterSelectionErrorResponse,
+  cardFilterSelectionSchema,
+  resolveCardFilterSelectionIds,
+} from "@/lib/cards/card-filter-selection";
 
 /**
  * SDD card-groups — Work Unit D (relocated + hardened from
@@ -29,10 +35,20 @@ export async function GET() {
   return NextResponse.json({ groups });
 }
 
-const createSchema = z.object({
-  name: z.string().min(1),
-  cardIds: z.array(z.string().min(1)).max(500).default([]),
-});
+/**
+ * Members come either from `cardIds` (explicit selection, capped at 500) or
+ * from `selection` ("select all matching": the `/tarjetas` list query,
+ * resolved server-side, capped at `MAX_FILTER_SELECTION`) — never both.
+ */
+const createSchema = z
+  .object({
+    name: z.string().min(1),
+    cardIds: z.array(z.string().min(1)).max(500).default([]),
+    selection: cardFilterSelectionSchema.optional(),
+  })
+  .refine((value) => !(value.selection && value.cardIds.length), {
+    message: "Usa cardIds o selection, no ambos",
+  });
 
 function isUniqueConstraintError(error: unknown): boolean {
   return Boolean(error && typeof error === "object" && "code" in error && error.code === "P2002");
@@ -47,6 +63,19 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Payload invalido" }, { status: 400 });
   }
 
+  // Resolve a filter selection before creating anything, so an invalid or
+  // oversized selection never leaves an empty group behind.
+  let filterCardIds: string[] | null = null;
+  if (parsed.data.selection) {
+    try {
+      filterCardIds = await resolveCardFilterSelectionIds(parsed.data.selection);
+    } catch (error) {
+      const response = cardFilterSelectionErrorResponse(error);
+      if (response) return response;
+      throw error;
+    }
+  }
+
   let group;
   try {
     group = await prisma.cardGroup.create({
@@ -57,6 +86,14 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Ya existe un grupo con ese nombre" }, { status: 409 });
     }
     throw error;
+  }
+
+  if (filterCardIds) {
+    const added = await addCardsToGroupInBatches(group.id, filterCardIds, auth.session.user.id);
+    return NextResponse.json(
+      { group, added, alreadyMember: filterCardIds.length - added },
+      { status: 201 },
+    );
   }
 
   let added = 0;

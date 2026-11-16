@@ -18,7 +18,6 @@ import {
   Images,
   Search,
   TimerOff,
-  Upload,
   Smartphone,
   ShieldCheck,
   FileWarning,
@@ -40,7 +39,6 @@ const NAV_ITEMS: Array<{
 }> = [
   { module: "dashboard", label: "Dashboard", href: "/dashboard", icon: ChartArea },
   { module: "tarjetas", label: "Tarjetas", href: "/tarjetas", icon: CreditCard },
-  { module: "importacion", label: "Importaci\u00f3n", href: "/importacion", icon: Upload },
   { module: "modificacion_masiva", label: "Actualizacion masiva", href: "/modificacion-masiva", icon: ScanLine },
   { module: "status_digitales", label: "Entrega digital (imagenes)", href: "/status-digitales", icon: Images },
   { module: "rastreo_masivo", label: "Rastreo masivo", href: "/rastreo-masivo", icon: Search },
@@ -121,7 +119,13 @@ export function Sidebar({
         <p className="mb-3 text-xs text-slate-300">{roleLabel}</p>
         <button
           type="button"
-          onClick={() => signOut({ callbackUrl: "/login" })}
+          onClick={async () => {
+            // next-auth builds its redirect from NEXTAUTH_URL, which may point at
+            // another host (e.g. localhost behind Docker). Clear the session
+            // without it and navigate with a relative path on the current host.
+            await signOut({ redirect: false });
+            window.location.assign("/login");
+          }}
           className="flex w-full items-center justify-center gap-2 rounded-lg border border-white/15 px-3 py-2 text-xs text-slate-100 transition hover:bg-white/10"
         >
           <LogOut className="h-3.5 w-3.5" />

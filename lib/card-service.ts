@@ -14,7 +14,7 @@ import { resolveZone } from "@/lib/zone-map";
 import { mergePhoneLists, planCustomerMerge, type CustomerData } from "@/lib/customer-merge";
 import { countInactiveProvinceRows } from "@/lib/inactive-provinces";
 import { loadProvinceResolver, resolveProvinceAndZone, type ProvinceResolver } from "@/lib/province-resolver";
-import { recalculateAdditionalCardsForGroups } from "@/lib/card-additional";
+import { recalculateAdditionalCardsForGroups, type AdditionalGroupInput } from "@/lib/card-additional";
 import { applyMessengerReassignment } from "@/lib/route-reassignment";
 import { applyCardTransition } from "@/lib/card-transition";
 import { assertMessengerActive } from "@/lib/messenger-lifecycle";
@@ -302,7 +302,8 @@ export async function persistNormalizedCardImport(input: {
   rejectedRows: ImportRowIssue[];
   byUserId?: string;
 }) {
-  return prisma.$transaction(async (tx) => {
+  const additionalGroups: AdditionalGroupInput[] = [];
+  const result = await prisma.$transaction(async (tx) => {
     let created = 0;
     const updated = 0;
     const skippedRows: ImportRowIssue[] = [];
@@ -404,6 +405,7 @@ export async function persistNormalizedCardImport(input: {
         },
       });
       createdProvinces.push(card.provincia);
+      additionalGroups.push({ customerCedula: customer.cedula, dispatchDate: card.dispatchDate });
       created += 1;
     }
 
@@ -414,6 +416,10 @@ export async function persistNormalizedCardImport(input: {
     const inactive = countInactiveProvinceRows(createdProvinces, [], provinceResolver);
     return { created, updated, skipped: skippedRows.length, rejected: rejectedRows.length, rejectedRows, skippedRows, inactiveProvinceRows: inactive.count, inactiveProvinceNames: inactive.names };
   }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+
+  // Same customer + same dispatch day = additional card; imports must flag them like manual creation does.
+  await recalculateAdditionalCardsForGroups(additionalGroups);
+  return result;
 }
 
 export class ManualCardError extends Error {
@@ -537,6 +543,7 @@ export async function persistDebitConsolidadoImport(input: {
   let updated = 0;
   const provinceResolver = await loadProvinceResolver(prisma);
   const storedProvinces: string[] = [];
+  const additionalGroups: AdditionalGroupInput[] = [];
 
   for (const item of input.rows) {
     const location = debitLocation(provinceResolver, item);
@@ -560,9 +567,16 @@ export async function persistDebitConsolidadoImport(input: {
         productType: CardProductType.DEBITO,
       },
       orderBy: { createdAt: "desc" },
+      include: { customer: { select: { cedula: true } } },
     });
 
     if (existing) {
+      // The consolidado may move the dispatch date: both the old and the new
+      // (customer, day) groups can gain or lose an additional card.
+      additionalGroups.push(
+        { customerCedula: existing.customer?.cedula ?? customer.cedula, dispatchDate: existing.dispatchDate },
+        { customerCedula: customer.cedula, dispatchDate: item.dispatchDate ?? existing.dispatchDate },
+      );
       await prisma.$transaction(async (tx) => {
         return applyCardTransition({
           tx,
@@ -630,9 +644,12 @@ export async function persistDebitConsolidadoImport(input: {
           byUserId: input.byUserId,
         },
       });
+      additionalGroups.push({ customerCedula: customer.cedula, dispatchDate: card.dispatchDate });
       created += 1;
     }
   }
+
+  await recalculateAdditionalCardsForGroups(additionalGroups);
 
   await prisma.cardImportBatch.update({
     where: { id: input.batchId },
@@ -660,6 +677,7 @@ export async function persistDebitDespachoImport(input: {
   const createdCards = [];
   const provinceResolver = await loadProvinceResolver(prisma);
   const storedProvinces: string[] = [];
+  const additionalGroups: AdditionalGroupInput[] = [];
 
   for (const item of input.rows) {
     const location = debitLocation(provinceResolver, item);
@@ -722,8 +740,12 @@ export async function persistDebitDespachoImport(input: {
     });
 
     createdCards.push(card);
+    additionalGroups.push({ customerCedula: customer.cedula, dispatchDate: card.dispatchDate });
     created += 1;
   }
+
+  // Same customer + same dispatch day = additional card; flag them like manual creation does.
+  await recalculateAdditionalCardsForGroups(additionalGroups);
 
   await prisma.cardImportBatch.update({
     where: { id: input.batchId },

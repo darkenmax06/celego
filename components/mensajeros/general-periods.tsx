@@ -21,6 +21,7 @@ export function GeneralPeriods() {
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
   const [message, setMessage] = useState("");
+  const [warning, setWarning] = useState("");
   const [busy, setBusy] = useState(false);
   const [pending, setPending] = useState<{ action: "lock" | "remove"; period: Period } | null>(null);
 
@@ -62,6 +63,8 @@ export function GeneralPeriods() {
     const json = await res.json();
     setBusy(false);
     setMessage(res.ok ? `Periodo bloqueado para ${json.locked} mensajeros` : (json.error ?? "No se pudo bloquear"));
+    // The lock stands even when some reports could not be generated.
+    setWarning(res.ok ? (json.reportWarning ?? "") : "");
     await load();
   }
 
@@ -96,6 +99,11 @@ export function GeneralPeriods() {
         </button>
       </div>
       {message ? <p className="mt-2 text-xs text-slate-600">{message}</p> : null}
+      {warning ? (
+        <p role="alert" className="mt-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800">
+          {warning}
+        </p>
+      ) : null}
 
       {periods.length ? (
         <ul className="mt-4 divide-y divide-slate-100 text-sm">

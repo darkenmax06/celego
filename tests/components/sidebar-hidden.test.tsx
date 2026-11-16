@@ -21,4 +21,12 @@ describe("Sidebar", () => {
     expect(screen.queryByText("Flota")).not.toBeInTheDocument();
     expect(screen.queryByText("Piloto movil")).not.toBeInTheDocument();
   });
+
+  it("no longer lists Importación (it lives in the Tarjetas import modal)", () => {
+    render(
+      <Sidebar allowedModules={["tarjetas", "importacion"] as never} userName="Admin" roleLabel="ADMIN" />,
+    );
+    expect(screen.getByText("Tarjetas")).toBeInTheDocument();
+    expect(screen.queryByText("Importación")).not.toBeInTheDocument();
+  });
 });

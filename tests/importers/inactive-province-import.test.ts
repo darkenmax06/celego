@@ -17,8 +17,13 @@ vi.mock("@/lib/urgent-alerts", () => ({
   clearUrgencyOnCardClosure: vi.fn(async () => undefined),
   parkUrgencyOnPendingReception: vi.fn(async () => undefined),
 }));
+// The shared prisma mock ignores select/include; additional-card ranking has its own tests.
+vi.mock("@/lib/card-additional", () => ({
+  recalculateAdditionalCardsForGroups: vi.fn(async () => ({ groups: 0, total: 0, additional: 0, updated: 0 })),
+}));
 
 import { prisma as prismaImport } from "@/lib/prisma";
+import { recalculateAdditionalCardsForGroups } from "@/lib/card-additional";
 import {
   persistDebitConsolidadoImport,
   persistDebitDespachoImport,
@@ -109,6 +114,23 @@ describe("inactive province warning on card imports", () => {
     expect(prisma.__rows("card")).toHaveLength(3);
     expect(result.inactiveProvinceRows).toBe(2);
     expect(result.inactiveProvinceNames).toEqual(["Distrito Nacional"]);
+  });
+
+  it("recalculates additional cards for every (customer, dispatch day) an import creates", async () => {
+    await persistDebitDespachoImport({
+      batchId: "batch-1",
+      rows: [debitRow("REQ-1", "00100000001", "Santiago"), debitRow("REQ-2", "00100000001", "Santiago")],
+    });
+    expect(recalculateAdditionalCardsForGroups).toHaveBeenCalledWith([
+      { customerCedula: "00100000001", dispatchDate: new Date("2026-01-01T00:00:00Z") },
+      { customerCedula: "00100000001", dispatchDate: new Date("2026-01-01T00:00:00Z") },
+    ]);
+
+    fn(recalculateAdditionalCardsForGroups).mockClear();
+    await persistDebitConsolidadoImport({ batchId: "batch-2", rows: [debitRow("REQ-9", "00100000009", "Santiago")] });
+    expect(recalculateAdditionalCardsForGroups).toHaveBeenCalledWith([
+      { customerCedula: "00100000009", dispatchDate: new Date("2026-01-01T00:00:00Z") },
+    ]);
   });
 
   it("Despacho Débito skips rows whose requestNumber already has a debit card", async () => {

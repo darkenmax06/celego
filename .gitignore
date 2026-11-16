@@ -54,3 +54,6 @@ next-env.d.ts
 # Production dumps (never commit real card data)
 tmp/dumps/
 output/historico-masivas/
+
+# generated messenger period reports (persistent volume)
+/storage/messenger-reports/

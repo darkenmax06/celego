@@ -12,11 +12,19 @@ const rateSchema = z.object({
   amountCents: z.number().int().min(0),
 });
 
+/** Optional profile text: trimmed, and an empty value clears the field (null). */
+const optionalText = z
+  .string()
+  .trim()
+  .max(120)
+  .nullish()
+  .transform((value) => (value === undefined ? undefined : value || null));
+
 const createSchema = z.object({
-  nombre: z.string().min(2),
-  telefono: z.string().optional(),
-  zonaPrincipal: z.string().optional(),
-  provinciaTrabajo: z.string().optional(),
+  nombre: z.string().trim().min(2).max(120),
+  telefono: optionalText,
+  zonaPrincipal: optionalText,
+  provinciaTrabajo: optionalText,
   rates: z.array(rateSchema).default([]),
 });
 
@@ -119,7 +127,11 @@ export async function PATCH(request: Request) {
 
   const parsed = updateSchema.safeParse(await request.json());
   if (!parsed.success) {
-    return NextResponse.json({ error: "Payload invalido" }, { status: 400 });
+    const nameIssue = parsed.error.issues.some((issue) => issue.path[0] === "nombre");
+    return NextResponse.json(
+      { error: nameIssue ? "El nombre debe tener al menos 2 caracteres" : "Payload invalido" },
+      { status: 400 },
+    );
   }
 
   const messenger = await prisma.messenger.update({

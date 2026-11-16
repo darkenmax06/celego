@@ -20,6 +20,10 @@ vi.mock("@/lib/urgent-alerts", () => ({
   clearUrgencyOnCardClosure: vi.fn(async () => undefined),
   parkUrgencyOnPendingReception: vi.fn(async () => undefined),
 }));
+// The shared prisma mock ignores select/include; additional-card ranking has its own tests.
+vi.mock("@/lib/card-additional", () => ({
+  recalculateAdditionalCardsForGroups: vi.fn(async () => ({ groups: 0, total: 0, additional: 0, updated: 0 })),
+}));
 
 import { prisma as prismaImport } from "@/lib/prisma";
 import { persistDebitConsolidadoImport, updateCardsFromPinitExport } from "@/lib/card-service";

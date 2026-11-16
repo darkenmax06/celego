@@ -2,13 +2,21 @@ import { type Session } from "next-auth";
 import { type UserRole } from "@prisma/client";
 import { redirect } from "next/navigation";
 import { getAuthSession } from "@/lib/auth";
+import { resolveSessionUser, SESSION_EXPIRED_PATH } from "@/lib/session-user";
 
-export async function requireSession() {
+export async function requireSession(): Promise<Session> {
   const session = await getAuthSession();
   if (!session?.user) {
     redirect("/login");
   }
-  return session;
+  // A valid JWT can outlive its user (DB restore, deleted or deactivated
+  // account). Clear it and send the user to log in instead of rendering pages
+  // whose API calls will all fail with 401.
+  const user = await resolveSessionUser(session);
+  if (!user) {
+    redirect(SESSION_EXPIRED_PATH);
+  }
+  return { ...session, user: { ...session.user, id: user.id, role: user.role } };
 }
 
 export function hasRole(session: Session, roles: UserRole[]) {
