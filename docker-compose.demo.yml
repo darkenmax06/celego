@@ -3,6 +3,7 @@ services:
     image: postgres:16
     container_name: celego-demo-db
     restart: unless-stopped
+    shm_size: 512mb
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-celego}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-celego}

@@ -3,6 +3,9 @@ services:
     image: postgres:16
     container_name: celego-db
     restart: unless-stopped
+    # Docker's default /dev/shm is 64MB; parallel query workers allocate 32MB
+    # segments and failed with "could not resize shared memory segment".
+    shm_size: 512mb
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-celego}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-celego}
