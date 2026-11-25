@@ -777,6 +777,7 @@ export async function updateCardsFromPinitExport(input: {
   let updated = 0;
   let notFound = 0;
   let skipped = 0;
+  let keptFinal = 0;
 
   for (const item of input.rows) {
     if (!item.mappedStatus) {
@@ -800,6 +801,26 @@ export async function updateCardsFromPinitExport(input: {
     const targetCard = cards.find((c) => !isDebitTerminalStatus(c.status)) || cards[0];
 
     const currentMeta = (targetCard.metadata as Record<string, unknown>) || {};
+
+    // A final status set in Celego wins: Pinit only refreshes its tracking fields.
+    if (isDebitTerminalStatus(targetCard.status)) {
+      await prisma.card.update({
+        where: { id: targetCard.id },
+        data: {
+          metadata: {
+            ...currentMeta,
+            pinitTrackingNumber: item.trackingNumber,
+            pinitRawStatus: item.rawStatus,
+            pinitRecipientName: item.recipientName,
+            pinitMessengerName: item.messengerName,
+            pinitAttemptsCount: item.attemptsCount,
+            pinitLastAttemptNotes: item.lastAttemptNotes,
+          } as Prisma.InputJsonValue,
+        },
+      });
+      keptFinal += 1;
+      continue;
+    }
     const updatedMeta = {
       ...currentMeta,
       pinitTrackingNumber: item.trackingNumber,
@@ -838,5 +859,5 @@ export async function updateCardsFromPinitExport(input: {
     updated += 1;
   }
 
-  return { updated, notFound, skipped, count: input.rows.length };
+  return { updated, notFound, skipped, keptFinal, count: input.rows.length };
 }

@@ -139,7 +139,9 @@ export function CardImportPanels({ onBusyChange, onImported }: CardImportPanelsP
         const msg = `Entregas Pinit procesadas: ${updated} tarjetas actualizadas con estatus final de entrega (${total} filas).`;
         let details = "";
         if (notFound > 0) details += `${notFound} solicitudes no estaban registradas en el sistema. `;
-        if (skipped > 0) details += `${skipped} registros omitidos sin estatus de entrega.`;
+        if (skipped > 0) details += `${skipped} registros omitidos sin estatus de entrega. `;
+        const keptFinal = data.keptFinal ?? 0;
+        if (keptFinal > 0) details += `${keptFinal} tarjetas conservaron su estatus final de Celego.`;
         setUploadStatus({
           type: notFound > 0 && updated === 0 ? "error" : "success",
           message: msg,

@@ -158,6 +158,49 @@ describe("persistDebitConsolidadoImport: no-op status must not write a bitácora
 });
 
 describe("updateCardsFromPinitExport: no-op status must not write a bitácora row", () => {
+  it("a final status set in Celego wins over Pinit; only Pinit tracking fields refresh", async () => {
+    prisma.__seed("card", {
+      id: "card-final",
+      tc: "REQ-F",
+      requestNumber: "REQ-F",
+      productType: "DEBITO",
+      status: "TD_ZONA_FUERA_COBERTURA",
+      isRemote: false,
+      returnReason: null,
+      digitalDeliveryCycle: 0,
+      dispatchDate: new Date("2026-01-01T00:00:00Z"),
+      createdAt: new Date("2026-01-01T00:00:00Z"),
+      metadata: { sector: "Centro" },
+    } as never);
+
+    const result = await updateCardsFromPinitExport({
+      rows: [
+        {
+          requestNumber: "REQ-F",
+          trackingNumber: "TRK-F",
+          customerName: "Cliente F",
+          customerPhone: null,
+          customerAddress: null,
+          rawStatus: "123 - Retornado / Devuelto a origen",
+          mappedStatus: CardStatus.TD_DEVUELTO_NO_LOCALIZADO,
+          deliveryDate: null,
+          recipientName: null,
+          messengerName: "MARIO",
+          messengerEmail: null,
+          attemptsCount: 1,
+          lastAttemptNotes: "No localizado",
+          sourceRowNumber: 2,
+        },
+      ],
+    });
+
+    expect(result.keptFinal).toBe(1);
+    const card = prisma.__row("card", "card-final") as { status: string; metadata: Record<string, unknown> };
+    expect(card.status).toBe("TD_ZONA_FUERA_COBERTURA");
+    expect(card.metadata).toMatchObject({ sector: "Centro", pinitRawStatus: "123 - Retornado / Devuelto a origen", pinitMessengerName: "MARIO" });
+    expect(prisma.__rows("cardStatusLog")).toHaveLength(0);
+  });
+
   it("re-downloading the same Pinit export with an unchanged status logs nothing", async () => {
     prisma.__seed("card", {
       id: "card-3",
