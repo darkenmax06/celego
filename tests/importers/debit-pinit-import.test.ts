@@ -83,6 +83,11 @@ describe("debit pinit export parser", () => {
       ["105", "Celeritas - BPD TD", "LUIS", "8090000002", "4-14617680952", "BSDO3", "", "No eliminada", "Devuelto", "123 - Retornado / Devuelto a origen",
         "2026-11-04", "08:00", "c@x.com", "JUAN", "", "No localizado", ...noAttempt],
       ["106", "Celeritas - BPD TD", "X", "", "c", "", "", "No eliminada", "", "101 - Envio Creado", ...noAttempt, ...noAttempt],
+      // a re-created order that never moved (101) or was cancelled (420) must not undo a delivery
+      ["107", "Celeritas - BPD TD", "EVA", "", "4-14512564772", "BSDO7", "", "No eliminada", "Entregado", "360 - Entregado al cliente",
+        "2026-11-05", "11:00", "d@x.com", "MARIO PEREZ", "EVA", "", ...noAttempt],
+      ["108", "Celeritas - BPD TD", "EVA", "", "4-14512564772", "BSDO8", "", "No eliminada", "Nunca salió a ruta", "101 - Envio Creado", ...noAttempt, ...noAttempt],
+      ["109", "Celeritas - BPD TD", "EVA", "", "4-14512564772", "BSDO9", "", "No eliminada", "Nunca salió a ruta", "420 - Cancelado / Orden anulada", ...noAttempt, ...noAttempt],
     ];
 
     const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
@@ -90,8 +95,10 @@ describe("debit pinit export parser", () => {
     XLSX.utils.book_append_sheet(wb, ws, "Sheet1");
     const result = parseDebitPinitImport(XLSX.write(wb, { type: "buffer", bookType: "xlsx" }));
 
-    expect(result.rows).toHaveLength(2);
-    const [delivered, returned] = result.rows;
+    expect(result.rows).toHaveLength(3);
+    const [delivered, returned, keptDelivery] = result.rows;
+    expect(keptDelivery.trackingNumber).toBe("BSDO7");
+    expect(keptDelivery.mappedStatus).toBe(CardStatus.TD_ENTREGADO);
     expect(delivered.requestNumber).toBe("4-14450572842");
     expect(delivered.mappedStatus).toBe(CardStatus.TD_ENTREGADO);
     expect(delivered.attemptsCount).toBe(2);
@@ -105,6 +112,6 @@ describe("debit pinit export parser", () => {
     expect(returned.lastAttemptNotes).toBe("No localizado");
     expect(returned.deliveryDate).toBeNull();
 
-    expect(result.errors.map((e) => e.row).sort()).toEqual([3, 5]);
+    expect(result.errors.map((e) => e.row).sort((a, b) => a - b)).toEqual([3, 5, 7, 8]);
   });
 });

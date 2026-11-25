@@ -158,14 +158,24 @@ export function parseDebitPinitImport(buffer: Buffer): DebitPinitImportResult {
       sourceRowNumber: i + 1,
     };
 
-    // Pinit can hold the same request number twice (order re-created): keep the newest order.
+    // Pinit can hold the same request number twice (order re-created). The order that
+    // actually moved wins over a cancelled (420) or never-dispatched (101) twin; ties go to the newest.
     const orderId = Number(getCell(row, idx.orderId)) || i;
     const existing = byRequest.get(requestNumber);
     if (existing) {
-      const [kept, dropped] = orderId > existing.orderId ? [parsedRow, existing.row] : [existing.row, parsedRow];
+      const rank = (r: ParsedDebitPinitRow) => {
+        const code = Number.parseInt(r.rawStatus, 10);
+        if (r.mappedStatus === CardStatus.TD_ENTREGADO) return 3;
+        if (code === 420) return 0;
+        if (code === 101) return 1;
+        return 2;
+      };
+      const newWins =
+        rank(parsedRow) !== rank(existing.row) ? rank(parsedRow) > rank(existing.row) : orderId > existing.orderId;
+      const [kept, dropped] = newWins ? [parsedRow, existing.row] : [existing.row, parsedRow];
       errors.push({
         row: dropped.sourceRowNumber,
-        message: `Solicitud ${requestNumber} duplicada; se usa la orden mas reciente (fila ${kept.sourceRowNumber})`,
+        message: `Solicitud ${requestNumber} duplicada; se usa la orden con movimiento mas reciente (fila ${kept.sourceRowNumber})`,
       });
       if (kept === existing.row) continue;
     }
