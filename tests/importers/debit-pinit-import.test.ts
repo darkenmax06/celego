@@ -61,4 +61,50 @@ describe("debit pinit export parser", () => {
     expect(result.rows[0].recipientName).toBe("CRYSTAL MARIE FAJARDO HERNANDEZ");
     expect(result.rows[0].messengerName).toBe("JORGE SANCHEZ DIAZ");
   });
+
+  it("parses the Pinit backup report, deduplicating and skipping invalid rows", () => {
+    const attemptHeaders = [1, 2].flatMap((n) => [
+      `Fecha de intento ${n}`, `Hora de intento ${n}`, `Email operador intento ${n}`,
+      `Nombre operador intento ${n}`, `Entregado a (Intento ${n})`, `Motivo de retorno (Intento ${n})`,
+    ]);
+    const headers = [
+      "Order Id", "Cliente primario", "Nombre(s) del cliente", "Celular", "No. de orden",
+      "Tracking number", "Tracking number alternativo", "Fecha de eliminación",
+      "Último estatus de ruta", "Estatus de la orden", ...attemptHeaders,
+    ];
+    const noAttempt = ["", "", "", "", "", ""];
+    const rows = [
+      // request number lives in "Tracking number alternativo" when "No. de orden" is the cedula
+      ["100", "Celeritas - BPD TD", "ANA", "8090000001", "00116754557", "BSDO1", "4-14450572842", "No eliminada", "Entregado", "360 - Entregado al cliente",
+        "2026-11-02", "09:00", "a@x.com", "PEDRO", "", "Número desconectado",
+        "2026-11-03", "10:05", "b@x.com", "MARIO PEREZ", "ANA", ""],
+      ["101", "Celeritas - BPD TD", "LUIS", "8090000002", "4-14617680952", "BSDO2", "", "No eliminada", "Nunca salió a ruta", "101 - Envio Creado", ...noAttempt, ...noAttempt],
+      // newer order for the same request number wins
+      ["105", "Celeritas - BPD TD", "LUIS", "8090000002", "4-14617680952", "BSDO3", "", "No eliminada", "Devuelto", "123 - Retornado / Devuelto a origen",
+        "2026-11-04", "08:00", "c@x.com", "JUAN", "", "No localizado", ...noAttempt],
+      ["106", "Celeritas - BPD TD", "X", "", "c", "", "", "No eliminada", "", "101 - Envio Creado", ...noAttempt, ...noAttempt],
+    ];
+
+    const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Sheet1");
+    const result = parseDebitPinitImport(XLSX.write(wb, { type: "buffer", bookType: "xlsx" }));
+
+    expect(result.rows).toHaveLength(2);
+    const [delivered, returned] = result.rows;
+    expect(delivered.requestNumber).toBe("4-14450572842");
+    expect(delivered.mappedStatus).toBe(CardStatus.TD_ENTREGADO);
+    expect(delivered.attemptsCount).toBe(2);
+    expect(delivered.messengerName).toBe("MARIO PEREZ");
+    expect(delivered.recipientName).toBe("ANA");
+    expect(delivered.deliveryDate?.getDate()).toBe(3);
+
+    expect(returned.requestNumber).toBe("4-14617680952");
+    expect(returned.trackingNumber).toBe("BSDO3");
+    expect(returned.mappedStatus).toBe(CardStatus.TD_DEVUELTO_NO_LOCALIZADO);
+    expect(returned.lastAttemptNotes).toBe("No localizado");
+    expect(returned.deliveryDate).toBeNull();
+
+    expect(result.errors.map((e) => e.row).sort()).toEqual([3, 5]);
+  });
 });

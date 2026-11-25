@@ -37,7 +37,14 @@ describe("debit export generators", () => {
     expect(rows[0][0]).toBe("Cliente Primario[*]");
     expect(rows[0][22]).toBe("No. de orden[*]");
 
-    expect(rows[1][0]).toBe("BPD DEBITO- Celeritas");
+    expect(rows[1][0]).toBe("Celeritas - BPD TD");
+    expect(rows[1][11]).toBe("Santo Domingo"); // Colonia = provincia
+    expect(rows[1][12]).toBe("Herrera Palmarito No. 11"); // Calle = direccionRaw
+    expect(rows[1][15]).toBe(1); // No. Exterior is numeric
+    expect(rows[1][16]).toBe("0");
+    const dateCell = wb.Sheets["Sheet1"]["D2"];
+    expect(dateCell.t).toBe("n"); // real Excel date, not text
+    expect(XLSX.SSF.format("yyyy-mm-dd", dateCell.v)).toBe("2026-08-21");
     expect(rows[1][22]).toBe("4-14066270092");
     expect(rows[1][10]).toBe("11111"); // Metro postal code
     expect(rows[1][18]).toBe("Ciudad"); // Metro estado

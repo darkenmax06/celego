@@ -1,5 +1,4 @@
 import * as XLSX from "xlsx";
-import { format } from "date-fns";
 
 export type DebitPinitExportCard = {
   requestNumber: string;
@@ -93,12 +92,12 @@ function parsePhones(phonesRaw: string): { tel: string; cel: string } {
 }
 
 export function generateDebitPinitExcel(cards: DebitPinitExportCard[], dispatchDate = new Date()): Buffer {
-  const formattedDate = format(dispatchDate, "dd/MM/yyyy");
+  // Pinit only accepts a real Excel date cell here, not text; local midnight keeps the calendar day.
+  const deliveryDate = new Date(dispatchDate.getFullYear(), dispatchDate.getMonth(), dispatchDate.getDate());
 
-  const rows: (string | number | null)[][] = [PINIT_HEADERS];
+  const rows: (string | number | Date | null)[][] = [PINIT_HEADERS];
 
   for (const card of cards) {
-    const meta = (card.metadata ?? {}) as Record<string, string>;
     const { firstNames, lastNames } = splitFullName(card.nombre);
     const { tel, cel } = parsePhones(card.telefonosRaw);
 
@@ -109,17 +108,15 @@ export function generateDebitPinitExcel(cards: DebitPinitExportCard[], dispatchD
 
     const postalCode = isMetro ? "11111" : "22222";
     const estado = isMetro ? "Ciudad" : "Interior";
-    const colonia = meta.sector || card.provincia || "DISTRITO NACIONAL";
-    const calle = [meta.calle, meta.numero ? `No. ${meta.numero}` : "", meta.sector].filter(Boolean).join(" ") || card.direccionRaw || "Direccion";
-    const noExterior = meta.numero || "0";
-    const noInterior = meta.depto || "0";
-    const referencia = meta.referencia || "0";
+    const colonia = card.provincia || "Santo Domingo";
+    // direccionRaw already holds "calle, No. x, sector, empresa, depto, Ref: y" from the dispatch import.
+    const calle = card.direccionRaw || card.provincia || "Direccion";
 
     const row = [
-      "BPD DEBITO- Celeritas", // Cliente Primario[*]
+      "Celeritas - BPD TD",    // Cliente Primario[*]
       "VAN",                   // Método de entrega[*]
       "cero a cinco dias",     // Opción de entrega[*]
-      formattedDate,           // Fecha inicial entrega[*]
+      deliveryDate,            // Fecha inicial entrega[*]
       "",                      // Fecha final entrega
       firstNames,              // Nombre(s) del cliente[*]
       lastNames,               // Apellidos del cliente[*]
@@ -131,9 +128,9 @@ export function generateDebitPinitExcel(cards: DebitPinitExportCard[], dispatchD
       calle,                   // Calle[*]
       "",                      // Entre Calle 1
       "",                      // Entre Calle 2
-      noExterior,              // No. Exterior[*]
-      noInterior,              // No. interior
-      referencia,              // Referencia
+      1,                       // No. Exterior[*]
+      "0",                     // No. interior
+      "0",                     // Referencia
       estado,                  // Estado[*]
       "República Dominicana",  // País[*]
       "",                      // Latitud
