@@ -3,6 +3,63 @@ import Papa from "papaparse";
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 import { getCeleritasLogoPngBuffer } from "@/lib/reports/logo";
 
+const DATE_FMT = "dd/mm/yyyy";
+const DATETIME_FMT = "dd/mm/yyyy hh:mm";
+// Dominican Republic has no DST, so a fixed offset turns UTC instants into local wall clock.
+const DR_OFFSET_MS = -4 * 60 * 60 * 1000;
+
+const ISO_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:?\d{2})$/;
+const YMD = /^(\d{4})-(\d{1,2})-(\d{1,2})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?$/;
+const DMY = /^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:,?\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?$/;
+
+export type ExcelDate = { value: Date; numFmt: string };
+
+function wallClock(y: number, m: number, d: number, h = 0, mi = 0, sec = 0): ExcelDate | null {
+  if (m < 1 || m > 12 || d < 1 || d > 31 || h > 23 || mi > 59 || sec > 59) return null;
+  // ExcelJS writes dates from their UTC parts, so the wall clock is encoded as UTC.
+  const value = new Date(Date.UTC(y, m - 1, d, h, mi, sec));
+  if (value.getUTCDate() !== d) return null;
+  return { value, numFmt: h || mi || sec ? DATETIME_FMT : DATE_FMT };
+}
+
+function fromInstant(date: Date): ExcelDate | null {
+  if (Number.isNaN(date.getTime())) return null;
+  // Calendar-only fields (dispatch, SLA, route days) are stored as midnight UTC: keep their day.
+  const isDateOnly = date.getTime() % 86400000 === 0;
+  const local = isDateOnly ? date : new Date(date.getTime() + DR_OFFSET_MS);
+  return wallClock(local.getUTCFullYear(), local.getUTCMonth() + 1, local.getUTCDate(),
+    local.getUTCHours(), local.getUTCMinutes(), local.getUTCSeconds());
+}
+
+/**
+ * Turns a Date or a date-looking string (ISO, yyyy-mm-dd, or the day-first dd/mm/yyyy
+ * used across Celego) into a real Excel date so Excel's date filters work.
+ */
+export function toExcelDate(value: unknown): ExcelDate | null {
+  if (value instanceof Date) return fromInstant(value);
+  if (typeof value !== "string") return null;
+  const text = value.trim();
+  if (ISO_INSTANT.test(text)) return fromInstant(new Date(text));
+  const ymd = text.match(YMD);
+  if (ymd) return wallClock(+ymd[1], +ymd[2], +ymd[3], +(ymd[4] ?? 0), +(ymd[5] ?? 0), +(ymd[6] ?? 0));
+  const dmy = text.match(DMY);
+  if (dmy) return wallClock(+dmy[3], +dmy[2], +dmy[1], +(dmy[4] ?? 0), +(dmy[5] ?? 0), +(dmy[6] ?? 0));
+  return null;
+}
+
+/** Rewrites every date-looking cell of the given rows (from `fromRow` on) as a real Excel date. */
+export function applyExcelDates(sheet: ExcelJS.Worksheet, fromRow = 2) {
+  sheet.eachRow((row, rowNumber) => {
+    if (rowNumber < fromRow) return;
+    row.eachCell((cell) => {
+      const date = toExcelDate(cell.value);
+      if (!date) return;
+      cell.value = date.value;
+      cell.numFmt = date.numFmt;
+    });
+  });
+}
+
 function toXlsxCellValue(value: unknown) {
   if (value == null) return "";
   if (value instanceof Date) return value.toISOString();
@@ -32,6 +89,7 @@ export async function exportRowsToXlsx(
     sheet.addRow(headers.map((h) => toXlsxCellValue(row[h])));
   }
 
+  applyExcelDates(sheet);
   sheet.getRow(1).font = { bold: true };
   headers.forEach((header, index) => {
     let maxLen = String(header).length;

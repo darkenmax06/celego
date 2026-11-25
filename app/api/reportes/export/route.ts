@@ -23,7 +23,7 @@ import { displayText } from "@/lib/display";
 import { resolveBillableZone } from "@/lib/delivery-location";
 import { fromCents } from "@/lib/money";
 import { prisma } from "@/lib/prisma";
-import { exportRowsToCsv, exportRowsToPdf, exportRowsToXlsx } from "@/lib/reports/export";
+import { applyExcelDates, exportRowsToCsv, exportRowsToPdf, exportRowsToXlsx } from "@/lib/reports/export";
 import { getCeleritasLogoPngBuffer } from "@/lib/reports/logo";
 import { normalizeText } from "@/lib/utils";
 
@@ -443,6 +443,8 @@ async function exportRedactionToXlsx(rows: RedactionExportRows) {
   for (const row of rows.entregadas) {
     entregadas.addRow(row);
   }
+  applyExcelDates(retornadas);
+  applyExcelDates(entregadas);
 
   [retornadas, entregadas].forEach((sheet) => {
     sheet.getRow(1).font = { bold: true };

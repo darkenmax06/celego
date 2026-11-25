@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import ExcelJS from "exceljs";
+import { applyExcelDates } from "@/lib/reports/export";
 import { CardStatus, Prisma } from "@prisma/client";
 import { format } from "date-fns";
 import { prisma } from "@/lib/prisma";
@@ -169,6 +170,7 @@ export async function buildBizcochitoExcel(rows: BizcochitoSnapshot[]) {
 
   sheet.columns = excelColumns;
   sheet.addRows(rows);
+  applyExcelDates(sheet);
   sheet.autoFilter = {
     from: "A1",
     to: `${sheet.getColumn(excelColumns.length).letter}${Math.max(1, rows.length + 1)}`,
