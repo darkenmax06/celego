@@ -1,41 +1,30 @@
 import { NextResponse } from "next/server";
-import { CardProductType, CardStatus } from "@prisma/client";
 import { z } from "zod";
 import { requireApiSession } from "@/lib/api-session";
 import { prisma } from "@/lib/prisma";
-import { cardPhoneSearchClause } from "@/lib/customer-phone-search";
 import { writeAuditEvent } from "@/lib/audit";
 import { exportRowsToCsv, exportRowsToPdf, exportRowsToXlsx } from "@/lib/reports/export";
-import { dateRangesToParams } from "@/lib/date-range-params";
 import { ListQueryValidationError } from "@/lib/list-query";
-import { compileCardDateRangeWhere } from "@/lib/list-query/card-date-range";
-import { isUpcomingWithinWarning, serializeSlaCard, slaWhereWithDates, type SlaTab } from "../shared";
-import { buildAsignadoWhere } from "@/lib/call-assignment";
+import { compileSlaVencidasQuery, readSlaOperativo, serializeSlaCard } from "../shared";
 
 const COLUMN_LABELS = {
-  producto: "Producto", identificador: "Identificador", numeroTarjeta: "Numero tarjeta", numeroSolicitud: "Numero solicitud",
-  nombre: "Cliente", cedula: "Cedula", status: "Status", slaDueDate: "SLA vence", diasRestantes: "Dias restantes",
+  producto: "Producto", identificador: "Identificador", tc: "TC", numeroTarjeta: "Numero tarjeta", numeroSolicitud: "Numero solicitud",
+  nombre: "Cliente", cedula: "Cedula", contactoEstado: "Gestion contacto", status: "Status", slaDueDate: "SLA vence", diasRestantes: "Dias restantes",
   diasVencidos: "Dias vencidos", dispatchDate: "Fecha despacho", mensajero: "Mensajero", provincia: "Provincia", zona: "Zona",
-  tipoTarjeta: "Tipo tarjeta", urgente: "Urgente", direccion: "Direccion", telefonos: "Contactos",
+  tipoTarjeta: "Tipo tarjeta", adicional: "Adicional", urgente: "Urgente", direccion: "Direccion", telefonos: "Contactos",
 } as const;
 type ColumnKey = keyof typeof COLUMN_LABELS;
 
-const dayParamSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+const CONTACTO_LABELS: Record<string, string> = {
+  CONTACTADA: "Contactada", NO_CONTACTADA: "No contactada",
+  RETORNO_SOLICITADO: "Retorno solicitado", TRASLADO_SOLICITADO: "Traslado solicitado",
+};
 
 const payloadSchema = z.object({
-  tab: z.enum(["UPCOMING", "OVERDUE"]).default("OVERDUE"),
-  productType: z.nativeEnum(CardProductType).optional(),
-  messengerId: z.string().optional().default("ALL"),
-  provincia: z.string().optional(), zona: z.string().optional(), status: z.nativeEnum(CardStatus).optional(), q: z.string().optional(),
-  /** Active list date filters by field; fields are whitelisted by `CARD_DATE_RANGE_FIELDS`. */
-  dateRanges: z
-    .record(z.string(), z.object({ from: dayParamSchema.optional(), to: dayParamSchema.optional() }))
-    .optional()
-    .default({}),
-  columns: z.array(z.enum(Object.keys(COLUMN_LABELS) as [ColumnKey, ...ColumnKey[]])).min(1).max(24),
+  /** Same query string the list view sends to `GET /api/sla-vencidas` (pagination is ignored). */
+  params: z.string().max(8000).optional().default(""),
+  columns: z.array(z.enum(Object.keys(COLUMN_LABELS) as [ColumnKey, ...ColumnKey[]])).min(1).max(32),
   format: z.enum(["csv", "xlsx", "pdf"]),
-  /** Calls overhaul: ME | SIN_ASIGNAR | userId. */
-  asignado: z.string().max(64).optional(),
 });
 
 function formatDate(value: string | null) {
@@ -49,55 +38,47 @@ export async function POST(request: Request) {
   if (!parsed.success) return NextResponse.json({ error: "Payload invalido" }, { status: 400 });
 
   const input = parsed.data;
-  const filters = {
-    tab: input.tab as SlaTab,
-    productType: input.productType,
-    messengerId: input.messengerId !== "ALL" ? input.messengerId : undefined,
-    provincia: input.provincia || undefined, zona: input.zona || undefined, status: input.status, q: input.q || undefined,
-    phoneClause: await cardPhoneSearchClause(input.q),
-  };
-  let dateClauses;
+  const searchParams = new URLSearchParams(input.params);
+  // Export every matching card, not just the visible page.
+  searchParams.delete("page");
+  searchParams.delete("pageSize");
+  let compiled;
   try {
-    dateClauses = compileCardDateRangeWhere(new URLSearchParams(dateRangesToParams(input.dateRanges))).clauses;
+    compiled = await compileSlaVencidasQuery(searchParams, auth.session.user.id);
   } catch (error) {
     if (error instanceof ListQueryValidationError) {
       return NextResponse.json({ error: error.message }, { status: 400 });
     }
     throw error;
   }
-  const [config, cards] = await Promise.all([
-    prisma.sLAConfig.findUnique({ where: { id: "default" }, select: { warningBusinessDays: true } }),
-    prisma.card.findMany({
-      where: (() => {
-        const base = slaWhereWithDates(filters, dateClauses);
-        const asignadoWhere = buildAsignadoWhere(input.asignado, auth.session.user.id);
-        return asignadoWhere ? { AND: [base, asignadoWhere] } : base;
-      })(),
-      select: {
-        id: true, tc: true, requestNumber: true, productType: true, status: true, slaDueDate: true, dispatchDate: true,
-        provincia: true, zona: true, urgent: true, isAdditional: true, additionalIndex: true,
-        customer: { select: { nombre: true, cedula: true, direccionRaw: true, telefonosRaw: true } },
-        currentMessenger: { select: { id: true, nombre: true } }, lastAssignedMessenger: { select: { id: true, nombre: true } },
-      },
-      orderBy: [{ slaDueDate: "asc" }, { updatedAt: "desc" }],
-    }),
-  ]);
-  const warning = config?.warningBusinessDays ?? 3;
-  const rows = cards.map(serializeSlaCard).filter((card) =>
-    input.tab !== "UPCOMING" || isUpcomingWithinWarning(card.slaDueDate ? new Date(card.slaDueDate) : null, warning),
-  ).map((card) => ({
-    producto: card.productType, identificador: card.identifier, numeroTarjeta: card.tc, numeroSolicitud: card.requestNumber,
-    nombre: card.nombre, cedula: card.cedula, status: card.status, slaDueDate: formatDate(card.slaDueDate),
-    diasRestantes: card.diasRestantes ?? "", diasVencidos: card.diasVencidos, dispatchDate: formatDate(card.dispatchDate),
-    mensajero: card.mensajero, provincia: card.provincia, zona: card.zona, tipoTarjeta: card.tipoTarjeta,
-    urgente: card.urgent ? "SI" : "NO", direccion: card.direccion, telefonos: card.telefonos,
-  }));
+  const cards = await prisma.card.findMany({
+    where: compiled.where,
+    select: {
+      id: true, tc: true, requestNumber: true, productType: true, status: true, slaDueDate: true, dispatchDate: true,
+      provincia: true, zona: true, urgent: true, isAdditional: true, additionalIndex: true, metadata: true,
+      customer: { select: { nombre: true, cedula: true, direccionRaw: true, telefonosRaw: true } },
+      currentMessenger: { select: { id: true, nombre: true } }, lastAssignedMessenger: { select: { id: true, nombre: true } },
+    },
+    orderBy: compiled.orderBy,
+  });
+  const rows = cards.map((raw) => {
+    const card = serializeSlaCard(raw);
+    return {
+      producto: card.productType, identificador: card.identifier, tc: card.tc, numeroTarjeta: card.tc, numeroSolicitud: card.requestNumber,
+      nombre: card.nombre, cedula: card.cedula, contactoEstado: CONTACTO_LABELS[readSlaOperativo(raw.metadata).contactoEstado],
+      status: card.status, slaDueDate: formatDate(card.slaDueDate),
+      diasRestantes: card.diasRestantes ?? "", diasVencidos: card.diasVencidos, dispatchDate: formatDate(card.dispatchDate),
+      mensajero: card.mensajero, provincia: card.provincia, zona: card.zona, tipoTarjeta: card.tipoTarjeta,
+      adicional: card.adicional ? `ADIC. ${card.adicionalNumero}` : "PRINCIPAL",
+      urgente: card.urgent ? "SI" : "NO", direccion: card.direccion, telefonos: card.telefonos,
+    };
+  });
   if (!rows.length) return NextResponse.json({ error: "No hay tarjetas para exportar" }, { status: 404 });
   const selected = [...new Set(input.columns)];
   const exportRows = rows.map((row) => Object.fromEntries(selected.map((column) => [COLUMN_LABELS[column], row[column]])));
   const dateTag = new Date().toISOString().slice(0, 10);
-  const title = input.tab === "UPCOMING" ? "Vencimientos proximos" : "Vencimientos vencidos";
-  await writeAuditEvent({ entity: "SLA_EXPORT", entityId: dateTag, action: "EXPORT", userId: auth.session.user.id, details: { format: input.format, rowCount: exportRows.length, tab: input.tab, productType: input.productType ?? "ALL" }, request });
+  const title = "Vencimientos vencidos";
+  await writeAuditEvent({ entity: "SLA_EXPORT", entityId: dateTag, action: "EXPORT", userId: auth.session.user.id, details: { format: input.format, rowCount: exportRows.length, params: searchParams.toString() }, request });
   const extension = input.format;
   const content = input.format === "csv"
     ? exportRowsToCsv(exportRows)
@@ -108,7 +89,7 @@ export async function POST(request: Request) {
   return new NextResponse(body, {
     headers: {
       "Content-Type": input.format === "csv" ? "text/csv; charset=utf-8" : input.format === "pdf" ? "application/pdf" : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-      "Content-Disposition": `attachment; filename="vencimientos-${input.tab.toLowerCase()}-${dateTag}.${extension}"`,
+      "Content-Disposition": `attachment; filename="vencimientos-overdue-${dateTag}.${extension}"`,
     },
   });
 }

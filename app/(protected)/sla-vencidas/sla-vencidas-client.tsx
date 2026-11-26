@@ -26,7 +26,6 @@ import {
 import {
   normalizeDateRangeFilters,
   parseDateRangeParamKey,
-  readDateRanges,
 } from "@/lib/date-range-params";
 import {
   CARD_GROUP_BY_FIELD,
@@ -515,12 +514,16 @@ export default function SlaVencidasClient({ role }: SlaVencidasClientProps) {
       return;
     }
 
+    const params = new URLSearchParams();
+    Object.entries(filters).forEach(([k, v]) => {
+      if (v && v !== "ALL") params.set(k, v);
+    });
+
     const res = await fetch("/api/sla-vencidas/export-list", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        messengerId: filters.messengerId || "ALL",
-        dateRanges: readDateRanges(filters),
+        params: params.toString(),
         columns: exportColumns,
         format,
       }),
