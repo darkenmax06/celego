@@ -86,8 +86,9 @@ function parsePhones(phonesRaw: string): { tel: string; cel: string } {
     .map((p) => p.replace(/\D/g, "").trim())
     .filter((p) => p.length >= 7);
 
-  const tel = phones[0] || "8090000000";
-  const cel = phones[1] || phones[0] || "8290000000";
+  // Pinit calls the "Celular" column first, so the primary phone goes there.
+  const cel = phones[0] || "8290000000";
+  const tel = phones[1] || phones[0] || "8090000000";
   return { tel, cel };
 }
 

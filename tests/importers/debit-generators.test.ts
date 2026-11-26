@@ -40,6 +40,8 @@ describe("debit export generators", () => {
     expect(rows[1][0]).toBe("Celeritas - BPD TD");
     expect(rows[1][11]).toBe("Santo Domingo"); // Colonia = provincia
     expect(rows[1][12]).toBe("Herrera Palmarito No. 11"); // Calle = direccionRaw
+    expect(rows[1][7]).toBe("8294562652"); // Teléfono = secondary phone
+    expect(rows[1][8]).toBe("8099800483"); // Celular = primary phone
     expect(rows[1][15]).toBe(1); // No. Exterior is numeric
     expect(rows[1][16]).toBe("0");
     const dateCell = wb.Sheets["Sheet1"]["D2"];
