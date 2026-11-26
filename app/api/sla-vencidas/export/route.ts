@@ -6,10 +6,8 @@ import { requireApiSession } from "@/lib/api-session";
 import { prisma } from "@/lib/prisma";
 import { displayText } from "@/lib/display";
 import { remainingBusinessDays } from "@/lib/sla";
-import { compileCardDateRangeWhere } from "@/lib/list-query/card-date-range";
 import { ListQueryValidationError } from "@/lib/list-query";
-import { slaWhereWithDates } from "../shared";
-import { ASIGNADO_PARAM, buildAsignadoWhere } from "@/lib/call-assignment";
+import { compileSlaVencidasQuery } from "../shared";
 
 function escapeXml(value: string) {
   return value
@@ -107,41 +105,20 @@ export async function GET(request: NextRequest) {
   const auth = await requireApiSession(["ADMIN", "OPERADOR", "FACTURACION"]);
   if ("error" in auth) return auth.error;
 
-  const messengerId = request.nextUrl.searchParams.get("messengerId");
-  const rawProductType = request.nextUrl.searchParams.get("productType");
-  if (rawProductType && rawProductType !== "ALL" && !(rawProductType in CardProductType)) {
-    return NextResponse.json({ error: "Producto invalido" }, { status: 400 });
-  }
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-
-  let dateClauses;
+  // Same query as the list (GET /api/sla-vencidas), so the ZIP holds exactly the listed cards.
+  let compiled;
   try {
-    dateClauses = compileCardDateRangeWhere(request.nextUrl.searchParams).clauses;
+    compiled = await compileSlaVencidasQuery(request.nextUrl.searchParams, auth.session.user.id);
   } catch (error) {
     if (error instanceof ListQueryValidationError) {
       return NextResponse.json({ error: error.message }, { status: 400 });
     }
     throw error;
   }
+  const { today } = compiled;
 
   const cards = await prisma.card.findMany({
-    where: (() => {
-      const base = slaWhereWithDates(
-        {
-          tab: "OVERDUE",
-          productType: rawProductType && rawProductType !== "ALL" ? rawProductType as CardProductType : undefined,
-          messengerId: messengerId && messengerId !== "ALL" ? messengerId : undefined,
-        },
-        dateClauses,
-      );
-      // Calls overhaul: `asignado` (ME | SIN_ASIGNAR | userId).
-      const asignadoWhere = buildAsignadoWhere(
-        request.nextUrl.searchParams.get(ASIGNADO_PARAM),
-        auth.session.user.id,
-      );
-      return asignadoWhere ? { AND: [base, asignadoWhere] } : base;
-    })(),
+    where: compiled.where,
     select: {
       tc: true,
       requestNumber: true,
@@ -163,7 +140,7 @@ export async function GET(request: NextRequest) {
         },
       },
     },
-    orderBy: [{ slaDueDate: "asc" }, { updatedAt: "desc" }],
+    orderBy: compiled.orderBy,
     take: 5000,
   });
 
@@ -194,6 +171,7 @@ export async function GET(request: NextRequest) {
   }
 
   const zipContent = await zip.generateAsync({ type: "arraybuffer" });
+  const messengerId = request.nextUrl.searchParams.get("messengerId");
   const suffix = messengerId && messengerId !== "ALL" ? "mensajero" : "general";
   return new NextResponse(zipContent, {
     headers: {

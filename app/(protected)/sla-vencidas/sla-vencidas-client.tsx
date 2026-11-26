@@ -25,7 +25,6 @@ import {
 } from "@/lib/card-date-fields";
 import {
   normalizeDateRangeFilters,
-  parseDateRangeParamKey,
 } from "@/lib/date-range-params";
 import {
   CARD_GROUP_BY_FIELD,
@@ -189,8 +188,13 @@ function buildListParams(filters: Record<string, string>) {
 }
 
 /** Only the date range params, for the exports that must honour the list filters. */
-function dateParamsOf(filters: Record<string, string>) {
-  return Object.fromEntries(Object.entries(filters).filter(([key, value]) => value && parseDateRangeParamKey(key)));
+/** The list's query string; the list and both exports send it so they always match. */
+function filtersToParams(filters: Record<string, string>) {
+  const params = new URLSearchParams();
+  Object.entries(filters).forEach(([k, v]) => {
+    if (v && v !== "ALL") params.set(k, v);
+  });
+  return params;
 }
 
 function dateLabel(value: string | null) {
@@ -360,12 +364,7 @@ export default function SlaVencidasClient({ role }: SlaVencidasClientProps) {
 
   async function loadData(currentFilters = filters) {
     setLoading(true);
-    const params = new URLSearchParams();
-    Object.entries(currentFilters).forEach(([k, v]) => {
-      if (v && v !== "ALL") params.set(k, v);
-    });
-
-    const query = params.toString();
+    const query = filtersToParams(currentFilters).toString();
     const res = await fetch(`${SLA_ENDPOINT}${query ? `?${query}` : ""}`, { cache: "no-store" });
     const json = (await res.json().catch(() => ({ error: "No se pudo cargar SLA vencidas" }))) as
       | Payload
@@ -488,11 +487,7 @@ export default function SlaVencidasClient({ role }: SlaVencidasClientProps) {
   );
 
   async function exportJpgZip() {
-    const params = new URLSearchParams(dateParamsOf(filters));
-    if (filters.messengerId && filters.messengerId !== "ALL") {
-      params.set("messengerId", filters.messengerId);
-    }
-    const res = await fetch(`/api/sla-vencidas/export?${params.toString()}`);
+    const res = await fetch(`/api/sla-vencidas/export?${filtersToParams(filters).toString()}`);
     if (!res.ok) {
       const json = await res.json().catch(() => ({ error: "No se pudo exportar imagenes" }));
       setMessage(json.error ?? "No se pudo exportar imagenes");
@@ -514,16 +509,11 @@ export default function SlaVencidasClient({ role }: SlaVencidasClientProps) {
       return;
     }
 
-    const params = new URLSearchParams();
-    Object.entries(filters).forEach(([k, v]) => {
-      if (v && v !== "ALL") params.set(k, v);
-    });
-
     const res = await fetch("/api/sla-vencidas/export-list", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        params: params.toString(),
+        params: filtersToParams(filters).toString(),
         columns: exportColumns,
         format,
       }),

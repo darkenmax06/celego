@@ -68,67 +68,6 @@ export function readSlaOperativo(metadata: Prisma.JsonValue) {
   return { op, contactado, solicitudRetorno, traslado, contactoEstado };
 }
 
-export const CLOSED_SLA_STATUSES: CardStatus[] = [
-  CardStatus.ENTREGADA,
-  CardStatus.ENTREGA_DIGITAL,
-  CardStatus.RETORNADA,
-  CardStatus.ACUSE_RECIBIDO,
-  CardStatus.DEVUELTA_TIENDA,
-];
-
-export type SlaTab = "UPCOMING" | "OVERDUE";
-
-export type SlaFilters = {
-  tab: SlaTab;
-  productType?: CardProductType;
-  messengerId?: string;
-  provincia?: string;
-  zona?: string;
-  status?: CardStatus;
-  q?: string;
-  /** Customer phone match for `q`, from `cardPhoneSearchClause` (async, so callers resolve it). */
-  phoneClause?: Prisma.CardWhereInput | null;
-};
-
-/**
- * `slaWhere` plus the card date range constraints (`date.<field>.from|to`)
- * compiled by `compileCardDateRangeWhere`, AND-combined.
- */
-export function slaWhereWithDates(
-  filters: SlaFilters,
-  dateClauses: readonly Prisma.CardWhereInput[],
-): Prisma.CardWhereInput {
-  const base = slaWhere(filters);
-  return dateClauses.length ? { AND: [base, ...dateClauses] } : base;
-}
-
-export function slaWhere(filters: SlaFilters): Prisma.CardWhereInput {
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const q = filters.q?.trim();
-  return {
-    status: { notIn: CLOSED_SLA_STATUSES },
-    slaDueDate: filters.tab === "OVERDUE" ? { lt: today } : { gte: today },
-    ...(filters.productType ? { productType: filters.productType } : {}),
-    ...(filters.messengerId ? { currentMessengerId: filters.messengerId } : {}),
-    ...(filters.provincia ? { provincia: filters.provincia } : {}),
-    ...(filters.zona ? { zona: filters.zona } : {}),
-    ...(filters.status ? { status: filters.status } : {}),
-    ...(q
-      ? {
-          OR: [
-            { tc: { contains: q, mode: "insensitive" } },
-            { requestNumber: { contains: q, mode: "insensitive" } },
-            { externalReference: { contains: q, mode: "insensitive" } },
-            { customer: { cedula: { contains: q, mode: "insensitive" } } },
-            { customer: { nombre: { contains: q, mode: "insensitive" } } },
-            ...(filters.phoneClause ? [filters.phoneClause] : []),
-          ],
-        }
-      : {}),
-  };
-}
-
 export function serializeSlaCard(
   card: {
     id: string;
@@ -177,12 +116,4 @@ export function serializeSlaCard(
     diasRestantes: remainingDays,
     diasVencidos: Math.abs(Math.min(0, remainingDays ?? 0)),
   };
-}
-
-export function isUpcomingWithinWarning(slaDueDate: Date | null, warningBusinessDays: number) {
-  if (!slaDueDate) return false;
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const remaining = remainingBusinessDays(today, slaDueDate);
-  return remaining >= 0 && remaining <= warningBusinessDays;
 }
