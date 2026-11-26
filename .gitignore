@@ -57,3 +57,6 @@ output/historico-masivas/
 
 # generated messenger period reports (persistent volume)
 /storage/messenger-reports/
+
+# graphify knowledge graph (local, regenerate with: python -m graphify update .)
+graphify-out/

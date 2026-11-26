@@ -1,0 +1,23 @@
+# Data dumps, customer exports and generated artifacts: not part of the code map.
+output/
+storage/
+graphify-out/
+tmp/
+.superpowers/
+ui-references/
+public/
+docs/
+specs/
+infra/
+.agents/
+*.md
+*.pdf
+*.xlsx
+*.dump
+*.txt
+*.excalidraw
+*.png
+*.jpg
+*.jpeg
+*.svg
+*.webp
